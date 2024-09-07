@@ -1,0 +1,61 @@
+{
+    "name": "n8n-nodes-myzep",
+    "version": "1.0.2",
+    "description": "n8n node to interact with MyZep",
+    "keywords": [
+        "n8n-community-node-package"
+    ],
+    "license": "MIT",
+    "homepage": "",
+    "author": {
+        "name": "casistack",
+        "email": "contact@casistack.com"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/casistack/n8n-nodes-myzep.git"
+    },
+    "engines": {
+        "node": ">=18.10"
+    },
+    "scripts": {
+        "build": "tsc && gulp build:icons",
+        "clean": "find dist -mindepth 1 -maxdepth 1 ! -name credentials -exec rm -rf {} \\;",
+        "dev": "tsc --watch",
+        "format": "prettier nodes credentials --write",
+        "lint": "eslint nodes credentials package.json",
+        "lintfix": "eslint nodes credentials package.json --fix",
+        "prepublishOnly": "npm run build"
+    },
+    "files": [
+        "dist",
+        "dist/nodes/**/*.png"
+    ],
+    "n8n": {
+        "credentials": [
+            "dist/credentials/MyZepApi.credentials.js"
+        ],
+        "nodes": [
+            "dist/nodes/MemoryZep/MemoryZep.js"
+        ]
+    },
+    "dependencies": {
+        "@getzep/zep-js": "^0.9.0",
+        "@langchain/community": "^0.2.32",
+        "tmp-promise": "^3.0.3"
+    },
+    "devDependencies": {
+        "@types/jest": "^29.5.12",
+        "@types/lodash": "^4.17.7",
+        "@types/node": "^22.2.0",
+        "gulp": "^4.0.2",
+        "gulp-svg-icons": "^0.1.0",
+        "n8n-core": "^1.57.0",
+        "n8n-workflow": "*",
+        "typescript": "^5.5.4"
+    },
+    "peerDependencies": {
+        "n8n-core": ">=1.57.0",
+        "n8n-workflow": "*"
+    }
+}
