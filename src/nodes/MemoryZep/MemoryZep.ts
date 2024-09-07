@@ -119,7 +119,6 @@ export class MemoryZep implements INodeType {
     itemIndex: number
   ): Promise<SupplyData> {
     const credentials = await this.getCredentials("myZepApi");
-    console.log("credentials", credentials);
 
     if (!credentials.apiKey) {
       throw new NodeOperationError(this.getNode(), "API key is required");
@@ -195,9 +194,9 @@ export class MemoryZep implements INodeType {
         });
       }
 
-      // Use ZepClient only if it was initialized and there's metadata to add
+      // Use ZepClient only if it was initialized and there's metadata to add or update
       if (zepClient && Object.keys(sessionMetadata).length > 0) {
-        console.log("adding session metadata to ZepClient");
+        console.log("adding or updating session metadata in ZepClient");
         const sessionData: ISession = {
           session_id: sessionId,
           metadata: sessionMetadata,
@@ -205,12 +204,24 @@ export class MemoryZep implements INodeType {
         const session = new Session(sessionData);
         console.log("session", session);
         try {
-          await zepClient.memory.addSession(session);
-          console.log("session added");
+          // First, try to add the session
+          try {
+            await zepClient.memory.addSession(session);
+            console.log("New session added");
+          } catch (addError: any) {
+            // If adding fails due to session already existing, update the session instead
+            if (addError.code === 400 && addError.responseData?.includes("session already exists")) {
+              await zepClient.memory.updateSession(session);
+              console.log("Existing session updated");
+            } else {
+              // If it's a different error, throw it
+              throw addError;
+            }
+          }
         } catch (error) {
-          console.error("Error adding session:", error);
+          console.error("Error adding or updating session:", error);
           throw new Error(
-            `Failed to add session: ${(error as Error).message}`
+            `Failed to add or update session: ${(error as Error).message}`
           );
         }
       }
@@ -221,8 +232,8 @@ export class MemoryZep implements INodeType {
     } catch (error: unknown) {
       throw new NodeOperationError(
         this.getNode(),
-        `Failed to initialize MyZep memory: ${(error as Error).message}`,
-        { description: "Check your API key and URL (for non-cloud usage)" }
+        `Failed to initialize or update MyZep memory: ${(error as Error).message}`,
+        { description: "Check your API key, URL, and Zep server version (should be 0.17.0 or later)" }
       );
     }
   }
