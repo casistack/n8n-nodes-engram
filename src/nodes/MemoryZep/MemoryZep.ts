@@ -196,7 +196,7 @@ export class MemoryZep implements INodeType {
 
       // Use ZepClient only if it was initialized and there's metadata to add or update
       if (zepClient && Object.keys(sessionMetadata).length > 0) {
-        console.log("adding or updating session metadata in ZepClient");
+        console.log("updating session metadata in ZepClient");
         const sessionData: ISession = {
           session_id: sessionId,
           metadata: sessionMetadata,
@@ -204,24 +204,24 @@ export class MemoryZep implements INodeType {
         const session = new Session(sessionData);
         console.log("session", session);
         try {
-          // First, try to add the session
+          // First, try to update the session
           try {
-            await zepClient.memory.addSession(session);
-            console.log("New session added");
-          } catch (addError: any) {
-            // If adding fails due to session already existing, update the session instead
-            if (addError.code === 400 && addError.responseData?.includes("session already exists")) {
-              await zepClient.memory.updateSession(session);
-              console.log("Existing session updated");
+            await zepClient.memory.updateSession(session);
+            console.log("Session metadata updated");
+          } catch (updateError: any) {
+            // If updating fails due to session not existing, add the session
+            if (updateError.code === 404) {
+              await zepClient.memory.addSession(session);
+              console.log("New session added with metadata");
             } else {
               // If it's a different error, throw it
-              throw addError;
+              throw updateError;
             }
           }
         } catch (error) {
-          console.error("Error adding or updating session:", error);
+          console.error("Error updating or adding session:", error);
           throw new Error(
-            `Failed to add or update session: ${(error as Error).message}`
+            `Failed to update or add session: ${(error as Error).message}`
           );
         }
       }
