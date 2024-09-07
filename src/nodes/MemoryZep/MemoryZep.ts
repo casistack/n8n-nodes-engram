@@ -165,16 +165,59 @@ export class MemoryZep implements INodeType {
 
 		try {
 			const isCloud = credentials.cloud as boolean;
-			const apiUrl = isCloud ? "https://api.getzep.com" : credentials.apiUrl as string;
 			console.log('Is Cloud:', isCloud);
+
+			let apiUrl: string;
+			if (isCloud) {
+				apiUrl = "https://api.getzep.com";
+			} else {
+				if (!credentials.apiUrl) {
+					throw new NodeOperationError(this.getNode(), 'API URL is required for MyZep Open Source');
+				}
+				apiUrl = credentials.apiUrl as string;
+				// Ensure the API URL ends with a trailing slash
+				if (!apiUrl.endsWith('/')) {
+					apiUrl += '/';
+				}
+			}
 			console.log('API URL:', apiUrl);
 
-			if (!isCloud && !apiUrl) {
-				throw new NodeOperationError(this.getNode(), 'API URL is required for MyZep Open Source');
-			}
+			console.log('Initializing ZepClient');
+			try {
+				// Create ZepClient instance
+				zepClient = new ZepClient(apiUrl, credentials.apiKey as string);
 
-			console.log('Initializing ZepClient with API URL:', apiUrl);
-			zepClient = await ZepClient.init(credentials.apiKey as string, apiUrl);
+				if (isCloud) {
+					// For cloud version, perform health check
+					console.log('Performing health check for cloud version');
+					const healthResponse = await fetch(`${apiUrl}healthz`, {
+						headers: zepClient.headers,
+					});
+					if (!healthResponse.ok) {
+						throw new Error(`Server health check failed: ${healthResponse.statusText}`);
+					}
+				} else {
+					// For open-source version, try to fetch the server version
+					console.log('Fetching server version for open-source');
+					// const versionResponse = await fetch(`${apiUrl}version`, {
+					// 	headers: zepClient.headers,
+					// });
+					// if (!versionResponse.ok) {
+					// 	throw new Error(`Failed to fetch server version: ${versionResponse.statusText}`);
+					// }
+					// const versionInfo = await versionResponse.json();
+					// console.log('Zep Server Version:', versionInfo.version);
+				}
+
+				console.log('ZepClient initialized successfully');
+			} catch (error) {
+				console.error('Error initializing ZepClient:', error);
+				throw new NodeOperationError(
+					this.getNode(),
+					`Failed to initialize ZepClient: ${(error as Error).message}`,
+					{ description: 'Check your API key and URL, and ensure the Zep server is accessible' }
+				);
+			}
 
 			if (isCloud) {
 				console.log('Initializing WhiteSpaceTrimmedZepCloudMemory');
@@ -209,7 +252,7 @@ export class MemoryZep implements INodeType {
 
 			console.log('Adding session with metadata');
 			// Add or update session with metadata
-			await zepClient.addSession(session);
+			await zepClient.memory.addSession(session);
 
 			console.log('Zep memory initialized successfully');
 			return {
