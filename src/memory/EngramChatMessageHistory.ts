@@ -53,8 +53,13 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     await this.addMessage(new HumanMessage(message));
   }
 
-  async addAIChatMessage(message: string): Promise<void> {
+  async addAIMessage(message: string): Promise<void> {
     await this.addMessage(new AIMessage(message));
+  }
+
+  // Alias for backward compatibility with langchain 0.2.x
+  async addAIChatMessage(message: string): Promise<void> {
+    await this.addAIMessage(message);
   }
 
   async clear(): Promise<void> {

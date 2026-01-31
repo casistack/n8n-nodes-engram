@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-engram",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Knowledge graph memory for n8n AI agents. Persistent, per-user memory with entity extraction, temporal fact tracking, community detection, graph traversal, and hybrid search.",
   "keywords": [
     "n8n-community-node-package",
@@ -31,7 +31,7 @@
     "url": "https://www.buymeacoffee.com/cassistack"
   },
   "engines": {
-    "node": ">=18.10"
+    "node": ">=20"
   },
   "main": "dist/nodes/EngramMemory/EngramMemory.node.js",
   "scripts": {
@@ -81,6 +81,9 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@langchain/community": "^1.0.5",
+    "@langchain/core": "^1.1.8",
+    "@langchain/textsplitters": "^1.0.1",
     "@types/jest": "^29.5.12",
     "@types/lodash": "^4.17.23",
     "@types/node": "^22.2.0",
@@ -93,6 +96,7 @@
     "gulp-svg-icons": "^0.1.0",
     "husky": "^9.1.7",
     "jest": "^29.7.0",
+    "langchain": "^1.2.3",
     "lint-staged": "^16.2.7",
     "n8n-core": "^1.57.0",
     "n8n-workflow": "*",

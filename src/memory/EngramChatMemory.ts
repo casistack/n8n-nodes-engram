@@ -140,7 +140,7 @@ export class EngramChatMemory extends BaseChatMemory {
 
   async saveContext(inputValues: InputValues, outputValues: OutputValues): Promise<void> {
     // Use the default BaseChatMemory implementation to save messages
-    // This calls chatHistory.addUserMessage() and chatHistory.addAIChatMessage()
+    // This calls chatHistory.addUserMessage() and chatHistory.addAIMessage()
     await super.saveContext(inputValues, outputValues);
 
     // If extraction is enabled, extract entities and relationships

@@ -253,10 +253,10 @@ export function logWrapper(
 
       // ========== BaseRetriever ==========
       if (originalInstance instanceof BaseRetriever) {
-        if (prop === 'getRelevantDocuments' && 'getRelevantDocuments' in target) {
+        if (prop === 'invoke' && 'invoke' in target) {
           return async (
             query: string,
-            config?: Callbacks | BaseCallbackConfig,
+            config?: BaseCallbackConfig,
           ): Promise<Document[]> => {
             connectionType = NodeConnectionType.AiRetriever;
             const { index } = executeFunctions.addInputData(connectionType, [
