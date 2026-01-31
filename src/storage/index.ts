@@ -1,19 +1,19 @@
 export type {
-	IGraphStorage,
-	EntitySearchResult,
-	EdgeSearchResult,
-	ListOptions,
-	EntitySearchOptions,
-	EdgeSearchOptions,
-	VectorSearchOptions,
-	RetentionPolicy,
+  IGraphStorage,
+  EntitySearchResult,
+  EdgeSearchResult,
+  ListOptions,
+  EntitySearchOptions,
+  EdgeSearchOptions,
+  VectorSearchOptions,
+  RetentionPolicy,
 } from './IGraphStorage';
 
 export {
-	createStorage,
-	type StorageConfig,
-	type EmbeddedStorageConfig,
-	type Neo4jStorageConfig,
+  createStorage,
+  type StorageConfig,
+  type EmbeddedStorageConfig,
+  type Neo4jStorageConfig,
 } from './StorageFactory';
 
 export { GraphologyStorage } from './GraphologyStorage';

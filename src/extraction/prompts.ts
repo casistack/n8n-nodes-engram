@@ -4,121 +4,121 @@
  */
 
 export const ENTITY_EXTRACTION_SYSTEM = [
-	'You are an entity extraction system. Extract entities from the conversation.',
-	'',
-	'Rules:',
-	'- Extract real-world entities mentioned: people, organizations, locations, concepts, events, products, etc.',
-	'- Each entity needs: name (string), entity_type (string), summary (one sentence description)',
-	'- Use consistent naming: proper nouns as-is, concepts in lowercase',
-	'- entity_type should be one of the allowed types provided',
-	'- Return ONLY valid JSON, no extra text',
-	'',
-	'Output format:',
-	'{"entities": [{"name": "Alice", "entity_type": "person", "summary": "A software engineer"}]}',
+  'You are an entity extraction system. Extract entities from the conversation.',
+  '',
+  'Rules:',
+  '- Extract real-world entities mentioned: people, organizations, locations, concepts, events, products, etc.',
+  '- Each entity needs: name (string), entity_type (string), summary (one sentence description)',
+  '- Use consistent naming: proper nouns as-is, concepts in lowercase',
+  '- entity_type should be one of the allowed types provided',
+  '- Return ONLY valid JSON, no extra text',
+  '',
+  'Output format:',
+  '{"entities": [{"name": "Alice", "entity_type": "person", "summary": "A software engineer"}]}',
 ].join('\n');
 
 export function entityExtractionUser(
-	humanMessage: string,
-	aiMessage: string,
-	entityTypes: string[],
-	existingEntities: string[],
+  humanMessage: string,
+  aiMessage: string,
+  entityTypes: string[],
+  existingEntities: string[],
 ): string {
-	const typesStr = entityTypes.join(', ');
-	const parts = [
-		'Extract entities from this conversation turn.',
-		'',
-		'Allowed entity types: ' + typesStr,
-	];
+  const typesStr = entityTypes.join(', ');
+  const parts = [
+    'Extract entities from this conversation turn.',
+    '',
+    'Allowed entity types: ' + typesStr,
+  ];
 
-	if (existingEntities.length > 0) {
-		parts.push('Already known entities (avoid duplicates): ' + existingEntities.join(', '));
-	}
+  if (existingEntities.length > 0) {
+    parts.push('Already known entities (avoid duplicates): ' + existingEntities.join(', '));
+  }
 
-	parts.push('', 'Human: ' + humanMessage, 'AI: ' + aiMessage);
-	return parts.join('\n');
+  parts.push('', 'Human: ' + humanMessage, 'AI: ' + aiMessage);
+  return parts.join('\n');
 }
 
 export const RELATIONSHIP_EXTRACTION_SYSTEM = [
-	'You are a relationship extraction system. Extract facts and relationships between entities.',
-	'',
-	'Rules:',
-	'- Extract relationships as factual statements connecting two entities',
-	'- source_entity and target_entity must be exact entity names from the provided list',
-	'- name should be SCREAMING_SNAKE_CASE (e.g., WORKS_AT, LIVES_IN, KNOWS)',
-	'- fact should be a natural language statement of the relationship',
-	'- Only extract relationships where both entities exist in the provided list',
-	'- Return ONLY valid JSON, no extra text',
-	'',
-	'Output format:',
-	'{"relationships": [{"source_entity": "Alice", "target_entity": "Acme Corp", "name": "WORKS_AT", "fact": "Alice works at Acme Corp as a senior engineer"}]}',
+  'You are a relationship extraction system. Extract facts and relationships between entities.',
+  '',
+  'Rules:',
+  '- Extract relationships as factual statements connecting two entities',
+  '- source_entity and target_entity must be exact entity names from the provided list',
+  '- name should be SCREAMING_SNAKE_CASE (e.g., WORKS_AT, LIVES_IN, KNOWS)',
+  '- fact should be a natural language statement of the relationship',
+  '- Only extract relationships where both entities exist in the provided list',
+  '- Return ONLY valid JSON, no extra text',
+  '',
+  'Output format:',
+  '{"relationships": [{"source_entity": "Alice", "target_entity": "Acme Corp", "name": "WORKS_AT", "fact": "Alice works at Acme Corp as a senior engineer"}]}',
 ].join('\n');
 
 export function relationshipExtractionUser(
-	humanMessage: string,
-	aiMessage: string,
-	entities: string[],
+  humanMessage: string,
+  aiMessage: string,
+  entities: string[],
 ): string {
-	const parts = [
-		'Extract relationships from this conversation turn.',
-		'',
-		'Available entities: ' + entities.join(', '),
-		'',
-		'Human: ' + humanMessage,
-		'AI: ' + aiMessage,
-	];
-	return parts.join('\n');
+  const parts = [
+    'Extract relationships from this conversation turn.',
+    '',
+    'Available entities: ' + entities.join(', '),
+    '',
+    'Human: ' + humanMessage,
+    'AI: ' + aiMessage,
+  ];
+  return parts.join('\n');
 }
 
 export const DEDUPLICATION_SYSTEM = [
-	'You are an entity deduplication system. Determine if two entities refer to the same real-world thing.',
-	'',
-	'Rules:',
-	'- Consider name variations (Bob/Robert, NYC/New York City)',
-	'- Consider context clues from summaries',
-	'- Return ONLY valid JSON',
-	'',
-	'Output format:',
-	'{"is_duplicate": true, "merged_summary": "Combined summary of both entities"}',
+  'You are an entity deduplication system. Determine if two entities refer to the same real-world thing.',
+  '',
+  'Rules:',
+  '- Consider name variations (Bob/Robert, NYC/New York City)',
+  '- Consider context clues from summaries',
+  '- Return ONLY valid JSON',
+  '',
+  'Output format:',
+  '{"is_duplicate": true, "merged_summary": "Combined summary of both entities"}',
 ].join('\n');
 
 export function deduplicationUser(
-	entity1: { name: string; summary: string; entity_type: string },
-	entity2: { name: string; summary: string; entity_type: string },
+  entity1: { name: string; summary: string; entity_type: string },
+  entity2: { name: string; summary: string; entity_type: string },
 ): string {
-	const parts = [
-		'Are these the same entity?',
-		'',
-		'Entity 1: ' + entity1.name + ' (' + entity1.entity_type + ') - ' + entity1.summary,
-		'Entity 2: ' + entity2.name + ' (' + entity2.entity_type + ') - ' + entity2.summary,
-	];
-	return parts.join('\n');
+  const parts = [
+    'Are these the same entity?',
+    '',
+    'Entity 1: ' + entity1.name + ' (' + entity1.entity_type + ') - ' + entity1.summary,
+    'Entity 2: ' + entity2.name + ' (' + entity2.entity_type + ') - ' + entity2.summary,
+  ];
+  return parts.join('\n');
 }
 
 export const CONTRADICTION_SYSTEM = [
-	'You are a contradiction detection system. Determine if a new fact contradicts an existing fact.',
-	'',
-	'Rules:',
-	'- A contradiction means the new fact makes the old fact no longer true',
-	'- Example: "Alice lives in London" contradicts "Alice lives in Tokyo" (can only live in one place)',
-	'- Example: "Alice knows Python" does NOT contradict "Alice knows JavaScript" (can know both)',
-	'- Return ONLY valid JSON',
-	'',
-	'Output format:',
-	'{"is_contradiction": true, "explanation": "The new fact about living location replaces the old one"}',
+  'You are a contradiction detection system. Determine if a new fact contradicts an existing fact.',
+  '',
+  'Rules:',
+  '- A contradiction means the new fact makes the old fact no longer true',
+  '- Example: "Alice lives in London" contradicts "Alice lives in Tokyo" (can only live in one place)',
+  '- Example: "Alice knows Python" does NOT contradict "Alice knows JavaScript" (can know both)',
+  '- Return ONLY valid JSON',
+  '',
+  'Output format:',
+  '{"is_contradiction": true, "explanation": "The new fact about living location replaces the old one"}',
 ].join('\n');
 
 export function contradictionUser(
-	existingFact: string,
-	newFact: string,
-	sourceEntity: string,
-	targetEntity: string,
+  existingFact: string,
+  newFact: string,
+  sourceEntity: string,
+  targetEntity: string,
 ): string {
-	const parts = [
-		'Does the new fact contradict the existing fact?',
-		'',
-		'Entities: ' + sourceEntity + ' -> ' + targetEntity,
-		'Existing fact: ' + existingFact,
-		'New fact: ' + newFact,
-	];
-	return parts.join('\n');
+  const parts = [
+    'Does the new fact contradict the existing fact?',
+    '',
+    'Entities: ' + sourceEntity + ' -> ' + targetEntity,
+    'Existing fact: ' + existingFact,
+    'New fact: ' + newFact,
+  ];
+  return parts.join('\n');
 }

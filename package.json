@@ -85,6 +85,10 @@
     "@types/lodash": "^4.17.23",
     "@types/node": "^22.2.0",
     "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-n8n-nodes-base": "^1.16.6",
     "gulp": "^4.0.2",
     "gulp-svg-icons": "^0.1.0",
     "husky": "^9.1.7",
@@ -92,6 +96,7 @@
     "lint-staged": "^16.2.7",
     "n8n-core": "^1.57.0",
     "n8n-workflow": "*",
+    "prettier": "^3.8.1",
     "ts-jest": "^29.2.0",
     "typescript": "^5.5.4"
   },
