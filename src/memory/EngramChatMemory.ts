@@ -1,4 +1,5 @@
-import { BaseChatMemory, type BaseChatMemoryInput } from 'langchain/memory';
+import { BaseChatMemory } from '@langchain/community/memory/chat_memory';
+import type { BaseChatMemoryInput } from '@langchain/community/memory/chat_memory';
 import type { InputValues, MemoryVariables, OutputValues } from '@langchain/core/memory';
 import { SystemMessage } from '@langchain/core/messages';
 import type { IGraphStorage } from '../storage/IGraphStorage';

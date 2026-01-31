@@ -10,7 +10,7 @@ import type { BaseOutputParser } from '@langchain/core/output_parsers';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { Tool } from '@langchain/core/tools';
 import type { BaseLLM } from '@langchain/core/language_models/llms';
-import type { BaseChatMemory } from 'langchain/memory';
+import type { BaseChatMemory } from '@langchain/community/memory/chat_memory';
 import type { BaseChatMessageHistory } from '@langchain/core/chat_history';
 function hasMethods<T>(obj: unknown, ...methodNames: Array<string | symbol>): obj is T {
   return methodNames.every(
