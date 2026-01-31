@@ -15,9 +15,6 @@ import type { BaseChatMemory } from '@langchain/community/memory/chat_memory';
 import { BaseRetriever } from '@langchain/core/retrievers';
 import { BaseOutputParser, OutputParserException } from '@langchain/core/output_parsers';
 import { isObject } from 'lodash';
-import type { BaseDocumentLoader } from 'langchain/dist/document_loaders/base';
-import { N8nJsonLoader } from './N8nJsonLoader';
-import { N8nBinaryLoader } from './N8nBinaryLoader';
 import { logAiEvent, isToolsInstance, isBaseChatMemory, isBaseChatMessageHistory } from './helpers';
 
 const errorsMap: { [key: string]: { message: string; description: string } } = {
@@ -114,11 +111,8 @@ export function logWrapper(
 		| Embeddings
 		| Document[]
 		| Document
-		| BaseDocumentLoader
 		| TextSplitter
-		| VectorStore
-		| N8nBinaryLoader
-		| N8nJsonLoader,
+		| VectorStore,
 	executeFunctions: IExecuteFunctions,
 ) {
 	return new Proxy(originalInstance, {
@@ -324,53 +318,6 @@ export function logWrapper(
 						})) as number[];
 						void logAiEvent(executeFunctions, 'n8n.ai.embeddings.embedded.query');
 						executeFunctions.addOutputData(connectionType, index, [[{ json: { response } }]]);
-						return response;
-					};
-				}
-			}
-
-			// ========== N8n Loaders Process All ==========
-			if (
-				originalInstance instanceof N8nJsonLoader ||
-				originalInstance instanceof N8nBinaryLoader
-			) {
-				// Process All
-				if (prop === 'processAll' && 'processAll' in target) {
-					return async (items: INodeExecutionData[]): Promise<number[]> => {
-						connectionType = NodeConnectionType.AiDocument;
-						const { index } = executeFunctions.addInputData(connectionType, [items]);
-
-						const response = (await callMethodAsync.call(target, {
-							executeFunctions,
-							connectionType,
-							currentNodeRunIndex: index,
-							method: target[prop],
-							arguments: [items],
-						})) as number[];
-
-						executeFunctions.addOutputData(connectionType, index, [[{ json: { response } }]]);
-						return response;
-					};
-				}
-
-				// Process Each
-				if (prop === 'processItem' && 'processItem' in target) {
-					return async (item: INodeExecutionData, itemIndex: number): Promise<number[]> => {
-						connectionType = NodeConnectionType.AiDocument;
-						const { index } = executeFunctions.addInputData(connectionType, [[item]]);
-
-						const response = (await callMethodAsync.call(target, {
-							executeFunctions,
-							connectionType,
-							currentNodeRunIndex: index,
-							method: target[prop],
-							arguments: [item, itemIndex],
-						})) as number[];
-
-						void logAiEvent(executeFunctions, 'n8n.ai.document.processed');
-						executeFunctions.addOutputData(connectionType, index, [
-							[{ json: { response }, pairedItem: { item: itemIndex } }],
-						]);
 						return response;
 					};
 				}

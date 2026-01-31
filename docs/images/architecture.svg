@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <defs>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f8fafc;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f1f5f9;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="storageGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ecfdf5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d1fae5;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="108%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#00000015"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="520" rx="12" fill="#ffffff"/>
+
+  <!-- Title bar -->
+  <rect x="0" y="0" width="800" height="52" rx="12" fill="url(#headerGrad)"/>
+  <rect x="0" y="24" width="800" height="28" fill="url(#headerGrad)"/>
+  <text x="400" y="34" text-anchor="middle" fill="white" font-size="16" font-weight="600">Engram Architecture</text>
+
+  <!-- n8n Workflow Layer -->
+  <text x="30" y="82" fill="#475569" font-size="11" font-weight="600" letter-spacing="1">N8N WORKFLOW NODES</text>
+  <rect x="20" y="92" width="175" height="54" rx="8" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="107" y="115" text-anchor="middle" fill="#4338ca" font-size="12" font-weight="600">Engram Memory</text>
+  <text x="107" y="132" text-anchor="middle" fill="#6366f1" font-size="10">AI Agent Memory</text>
+
+  <rect x="210" y="92" width="175" height="54" rx="8" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="297" y="115" text-anchor="middle" fill="#4338ca" font-size="12" font-weight="600">Engram Explorer</text>
+  <text x="297" y="132" text-anchor="middle" fill="#6366f1" font-size="10">CRUD + Traversal</text>
+
+  <rect x="400" y="92" width="175" height="54" rx="8" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="487" y="115" text-anchor="middle" fill="#4338ca" font-size="12" font-weight="600">Engram Admin</text>
+  <text x="487" y="132" text-anchor="middle" fill="#6366f1" font-size="10">Manage + Analysis</text>
+
+  <rect x="590" y="92" width="175" height="54" rx="8" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="677" y="115" text-anchor="middle" fill="#4338ca" font-size="12" font-weight="600">Engram Trigger</text>
+  <text x="677" y="132" text-anchor="middle" fill="#6366f1" font-size="10">Polling Trigger</text>
+
+  <!-- Connector lines -->
+  <line x1="107" y1="146" x2="107" y2="180" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="297" y1="146" x2="297" y2="180" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="487" y1="146" x2="487" y2="180" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="677" y1="146" x2="677" y2="180" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Core Modules Layer -->
+  <text x="30" y="178" fill="#475569" font-size="11" font-weight="600" letter-spacing="1">CORE MODULES</text>
+  <rect x="20" y="188" width="760" height="140" rx="10" fill="url(#coreGrad)" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- Extraction Pipeline -->
+  <rect x="36" y="204" width="170" height="108" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="36" y="204" width="170" height="28" rx="6" fill="#fef3c7"/>
+  <rect x="36" y="222" width="170" height="10" fill="#fef3c7"/>
+  <text x="121" y="222" text-anchor="middle" fill="#92400e" font-size="11" font-weight="600">Extraction Pipeline</text>
+  <text x="46" y="250" fill="#64748b" font-size="10">Entity Extractor</text>
+  <text x="46" y="264" fill="#64748b" font-size="10">Relationship Extractor</text>
+  <text x="46" y="278" fill="#64748b" font-size="10">Deduplication</text>
+  <text x="46" y="292" fill="#64748b" font-size="10">Contradiction Detection</text>
+  <text x="46" y="306" fill="#64748b" font-size="10">Embedding Generator</text>
+
+  <!-- Search Engine -->
+  <rect x="220" y="204" width="170" height="108" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="220" y="204" width="170" height="28" rx="6" fill="#dbeafe"/>
+  <rect x="220" y="222" width="170" height="10" fill="#dbeafe"/>
+  <text x="305" y="222" text-anchor="middle" fill="#1e40af" font-size="11" font-weight="600">Search Engine</text>
+  <text x="230" y="250" fill="#64748b" font-size="10">Full-text (MiniSearch)</text>
+  <text x="230" y="264" fill="#64748b" font-size="10">Vector (Cosine Sim)</text>
+  <text x="230" y="278" fill="#64748b" font-size="10">Hybrid RRF Fusion</text>
+  <text x="230" y="292" fill="#64748b" font-size="10">Relevance Scoring</text>
+
+  <!-- Traversal -->
+  <rect x="404" y="204" width="170" height="108" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="404" y="204" width="170" height="28" rx="6" fill="#ede9fe"/>
+  <rect x="404" y="222" width="170" height="10" fill="#ede9fe"/>
+  <text x="489" y="222" text-anchor="middle" fill="#5b21b6" font-size="11" font-weight="600">Graph Traversal</text>
+  <text x="414" y="250" fill="#64748b" font-size="10">BFS from Entity</text>
+  <text x="414" y="264" fill="#64748b" font-size="10">BFS from Episodes</text>
+  <text x="414" y="278" fill="#64748b" font-size="10">Hop Depth Control</text>
+  <text x="414" y="292" fill="#64748b" font-size="10">Context Assembly</text>
+
+  <!-- Community -->
+  <rect x="588" y="204" width="178" height="108" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="588" y="204" width="178" height="28" rx="6" fill="#fce7f3"/>
+  <rect x="588" y="222" width="178" height="10" fill="#fce7f3"/>
+  <text x="677" y="222" text-anchor="middle" fill="#9d174d" font-size="11" font-weight="600">Community Detection</text>
+  <text x="598" y="250" fill="#64748b" font-size="10">Label Propagation</text>
+  <text x="598" y="264" fill="#64748b" font-size="10">Entity Clustering</text>
+  <text x="598" y="278" fill="#64748b" font-size="10">LLM Summaries</text>
+  <text x="598" y="292" fill="#64748b" font-size="10">Key Entity Ranking</text>
+
+  <!-- Connector to storage -->
+  <line x1="400" y1="328" x2="400" y2="368" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="394,362 406,362 400,372" fill="#94a3b8"/>
+
+  <!-- Storage Interface -->
+  <text x="30" y="360" fill="#475569" font-size="11" font-weight="600" letter-spacing="1">STORAGE LAYER</text>
+
+  <rect x="20" y="370" width="760" height="52" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <text x="400" y="400" text-anchor="middle" fill="#166534" font-size="13" font-weight="600">IGraphStorage Interface</text>
+
+  <!-- Storage backends -->
+  <line x1="250" y1="422" x2="250" y2="448" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="550" y1="422" x2="550" y2="448" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <rect x="120" y="450" width="260" height="52" rx="8" fill="url(#storageGrad)" stroke="#6ee7b7" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="250" y="474" text-anchor="middle" fill="#065f46" font-size="12" font-weight="600">Embedded (Graphology)</text>
+  <text x="250" y="490" text-anchor="middle" fill="#047857" font-size="10">In-memory + JSON persistence</text>
+
+  <rect x="420" y="450" width="260" height="52" rx="8" fill="url(#storageGrad)" stroke="#6ee7b7" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="550" y="474" text-anchor="middle" fill="#065f46" font-size="12" font-weight="600">Neo4j (Remote)</text>
+  <text x="550" y="490" text-anchor="middle" fill="#047857" font-size="10">Enterprise graph database</text>
+</svg>

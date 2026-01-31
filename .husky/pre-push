@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# Pre-push hook: build + test before pushing
+# DO NOT skip this hook. All pushes must pass these checks.
+
+echo "Running pre-push checks..."
+echo ""
+
+# Build check
+echo "Building project..."
+npm run build || {
+    echo ""
+    echo "Build failed! Push blocked. Fix the build errors before pushing."
+    exit 1
+}
+
+# Full test suite
+echo "Running tests..."
+npm test || {
+    echo ""
+    echo "Tests failed! Push blocked. Fix the failing tests before pushing."
+    exit 1
+}
+
+echo ""
+echo "All pre-push checks passed!"

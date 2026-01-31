@@ -1,3 +1,13 @@
 node_modules
-n8n-nodes-myzep-*.tgz
+n8n-nodes-engram-*.tgz
+*.tgz
 dist
+.env
+.env.local
+.env.*
+.mcp.json
+engram-data/*
+.claude/
+progress-docs/
+scaffold.log
+logo-vibrant-1.png

@@ -12,8 +12,6 @@ import type { Tool } from '@langchain/core/tools';
 import type { BaseLLM } from '@langchain/core/language_models/llms';
 import type { BaseChatMemory } from 'langchain/memory';
 import type { BaseChatMessageHistory } from '@langchain/core/chat_history';
-import { N8nTool } from './N8nTool';
-
 function hasMethods<T>(obj: unknown, ...methodNames: Array<string | symbol>): obj is T {
 	return methodNames.every(
 		(methodName) =>
@@ -203,11 +201,7 @@ export const getConnectedTools = async (
 		}
 		seenNames.add(name);
 
-		if (convertStructuredTool && tool instanceof N8nTool) {
-			finalTools.push(tool.asDynamicTool());
-		} else {
-			finalTools.push(tool);
-		}
+		finalTools.push(tool);
 	}
 
 	return finalTools;

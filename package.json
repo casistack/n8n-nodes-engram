@@ -1,61 +1,103 @@
 {
-    "name": "n8n-nodes-myzep",
-    "version": "1.0.2",
-    "description": "n8n node to interact with MyZep",
-    "keywords": [
-        "n8n-community-node-package"
+  "name": "n8n-nodes-engram",
+  "version": "0.2.0",
+  "description": "Knowledge graph memory for n8n AI agents. Persistent, per-user memory with entity extraction, temporal fact tracking, community detection, graph traversal, and hybrid search.",
+  "keywords": [
+    "n8n-community-node-package",
+    "knowledge-graph",
+    "ai-memory",
+    "langchain",
+    "neo4j",
+    "graph-database",
+    "entity-extraction",
+    "n8n"
+  ],
+  "license": "AGPL-3.0",
+  "homepage": "https://github.com/casistack/n8n-nodes-engram#readme",
+  "author": {
+    "name": "casistack",
+    "email": "contact@casistack.com",
+    "url": "https://github.com/casistack"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/casistack/n8n-nodes-engram.git"
+  },
+  "bugs": {
+    "url": "https://github.com/casistack/n8n-nodes-engram/issues"
+  },
+  "funding": {
+    "type": "buymeacoffee",
+    "url": "https://www.buymeacoffee.com/cassistack"
+  },
+  "engines": {
+    "node": ">=18.10"
+  },
+  "main": "dist/nodes/EngramMemory/EngramMemory.node.js",
+  "scripts": {
+    "build": "tsc && gulp build:icons",
+    "clean": "rm -rf dist",
+    "dev": "tsc --watch",
+    "format": "prettier src --write",
+    "format:check": "prettier src --check",
+    "lint": "eslint src --ext .ts",
+    "lintfix": "eslint src --ext .ts --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "deploy:local": "./scripts/deploy-local.sh",
+    "deploy:patch": "./scripts/deploy-local.sh patch",
+    "deploy:minor": "./scripts/deploy-local.sh minor",
+    "doit": "npm run clean && npm run build && npm pack",
+    "prepare": "husky"
+  },
+  "files": [
+    "dist",
+    "dist/nodes/**/*.png",
+    "LICENSE",
+    "README.md"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/EngramNeo4jApi.credentials.js",
+      "dist/credentials/EngramExtractionApi.credentials.js"
     ],
-    "license": "MIT",
-    "homepage": "",
-    "author": {
-        "name": "casistack",
-        "email": "contact@casistack.com"
-    },
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/casistack/n8n-nodes-myzep.git"
-    },
-    "engines": {
-        "node": ">=18.10"
-    },
-    "scripts": {
-        "build": "tsc && gulp build:icons",
-        "clean": "find dist -mindepth 1 -maxdepth 1 ! -name credentials -exec rm -rf {} \\;",
-        "dev": "tsc --watch",
-        "format": "prettier nodes credentials --write",
-        "lint": "eslint nodes credentials package.json",
-        "lintfix": "eslint nodes credentials package.json --fix",
-        "prepublishOnly": "npm run build"
-    },
-    "files": [
-        "dist",
-        "dist/nodes/**/*.png"
-    ],
-    "n8n": {
-        "credentials": [
-            "dist/credentials/MyZepApi.credentials.js"
-        ],
-        "nodes": [
-            "dist/nodes/MemoryZep/MemoryZep.js"
-        ]
-    },
-    "dependencies": {
-        "@getzep/zep-js": "^0.9.0",
-        "@langchain/community": "^0.2.32",
-        "tmp-promise": "^3.0.3"
-    },
-    "devDependencies": {
-        "@types/jest": "^29.5.12",
-        "@types/lodash": "^4.17.7",
-        "@types/node": "^22.2.0",
-        "gulp": "^4.0.2",
-        "gulp-svg-icons": "^0.1.0",
-        "n8n-core": "^1.57.0",
-        "n8n-workflow": "*",
-        "typescript": "^5.5.4"
-    },
-    "peerDependencies": {
-        "n8n-core": ">=1.57.0",
-        "n8n-workflow": "*"
-    }
+    "nodes": [
+      "dist/nodes/EngramMemory/EngramMemory.node.js",
+      "dist/nodes/EngramExplorer/EngramExplorer.node.js",
+      "dist/nodes/EngramAdmin/EngramAdmin.node.js",
+      "dist/nodes/EngramTrigger/EngramTrigger.node.js"
+    ]
+  },
+  "dependencies": {
+    "graphology": "^0.25.4",
+    "graphology-types": "^0.24.7",
+    "minisearch": "^7.1.0",
+    "neo4j-driver": "^5.24.0",
+    "uuid": "^10.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/lodash": "^4.17.23",
+    "@types/node": "^22.2.0",
+    "@types/uuid": "^10.0.0",
+    "gulp": "^4.0.2",
+    "gulp-svg-icons": "^0.1.0",
+    "husky": "^9.1.7",
+    "jest": "^29.7.0",
+    "lint-staged": "^16.2.7",
+    "n8n-core": "^1.57.0",
+    "n8n-workflow": "*",
+    "ts-jest": "^29.2.0",
+    "typescript": "^5.5.4"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.2.0",
+    "n8n-core": ">=1.57.0",
+    "n8n-workflow": "*"
+  }
 }

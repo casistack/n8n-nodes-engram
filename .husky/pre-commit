@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+# Pre-commit hook: lint, format, and type-check before commit
+
+echo "Running pre-commit checks..."
+echo ""
+
+# ESLint
+echo "Checking ESLint..."
+npm run lint || {
+    echo ""
+    echo "ESLint failed! Fix errors and try again."
+    exit 1
+}
+
+# Prettier format check
+echo "Checking formatting..."
+npm run format:check || {
+    echo ""
+    echo "Formatting issues found! Run 'npm run format' to fix."
+    exit 1
+}
+
+# TypeScript type check
+echo "Checking TypeScript types..."
+npm run type-check || {
+    echo ""
+    echo "Type check failed! Fix errors and try again."
+    exit 1
+}
+
+echo ""
+echo "All pre-commit checks passed!"
