@@ -19,7 +19,7 @@ export class EngramExplorer implements INodeType {
     name: 'engramExplorer',
     icon: 'file:engram-explorer.png',
     group: ['transform'],
-    version: [1, 2],
+    version: [1, 2, 3],
     description: 'Explore, create, update, and query the Engram knowledge graph',
     defaults: {
       name: 'Engram Explorer',
@@ -147,6 +147,12 @@ export class EngramExplorer implements INodeType {
             action: 'Get relationships between entities',
           },
           {
+            name: 'Get Changelog',
+            value: 'getChangelog',
+            description: 'Get recently created, expired, or invalidated relationships',
+            action: 'Get relationship changelog',
+          },
+          {
             name: 'Get for Entity',
             value: 'getForEntity',
             description: 'Get all relationships for an entity',
@@ -180,6 +186,12 @@ export class EngramExplorer implements INodeType {
             value: 'get',
             description: 'Get an episode by UUID',
             action: 'Get an episode',
+          },
+          {
+            name: 'Get by Date Range',
+            value: 'getByDateRange',
+            description: 'Get episodes within a date range',
+            action: 'Get episodes by date range',
           },
           {
             name: 'Get Count',
@@ -235,7 +247,9 @@ export class EngramExplorer implements INodeType {
               'getByName',
               'list',
               'getRecent',
+              'getByDateRange',
               'getCount',
+              'getChangelog',
               'create',
               'bfsFromEpisodes',
             ],
@@ -474,7 +488,7 @@ export class EngramExplorer implements INodeType {
           maxValue: 100,
         },
         displayOptions: {
-          show: { operation: ['search', 'list', 'getRecent'] },
+          show: { operation: ['search', 'list', 'getRecent', 'getByDateRange', 'getChangelog'] },
         },
         description: 'Maximum number of results to return',
       },
@@ -494,6 +508,93 @@ export class EngramExplorer implements INodeType {
         },
         description:
           'Minimum relevance score (0-1) for results. Higher values return only more relevant matches.',
+      },
+      // ===== Temporal Parameters =====
+      // From Date — for episode date range and relationship search
+      {
+        displayName: 'From Date',
+        name: 'fromDate',
+        type: 'dateTime',
+        default: '',
+        required: true,
+        displayOptions: {
+          show: {
+            resource: ['episode'],
+            operation: ['getByDateRange'],
+          },
+        },
+        description: 'Start of date range (ISO 8601)',
+      },
+      // To Date — for episode date range
+      {
+        displayName: 'To Date',
+        name: 'toDate',
+        type: 'dateTime',
+        default: '',
+        required: true,
+        displayOptions: {
+          show: {
+            resource: ['episode'],
+            operation: ['getByDateRange'],
+          },
+        },
+        description: 'End of date range (ISO 8601)',
+      },
+      // Since Date — for relationship changelog
+      {
+        displayName: 'Since Date',
+        name: 'sinceDate',
+        type: 'dateTime',
+        default: '',
+        required: true,
+        displayOptions: {
+          show: {
+            resource: ['relationship'],
+            operation: ['getChangelog'],
+          },
+        },
+        description: 'Show changes since this date (ISO 8601)',
+      },
+      // Optional date filters for relationship search
+      {
+        displayName: 'Valid After',
+        name: 'searchValidAfter',
+        type: 'dateTime',
+        default: '',
+        displayOptions: {
+          show: {
+            resource: ['relationship'],
+            operation: ['search'],
+          },
+        },
+        description: 'Only return facts that became valid after this date',
+      },
+      {
+        displayName: 'Valid Before',
+        name: 'searchValidBefore',
+        type: 'dateTime',
+        default: '',
+        displayOptions: {
+          show: {
+            resource: ['relationship'],
+            operation: ['search'],
+          },
+        },
+        description: 'Only return facts that became valid before this date',
+      },
+      // Optional created_after filter for entity search and list
+      {
+        displayName: 'Created After',
+        name: 'createdAfter',
+        type: 'dateTime',
+        default: '',
+        displayOptions: {
+          show: {
+            resource: ['entity'],
+            operation: ['search', 'list'],
+          },
+        },
+        description: 'Only return entities created after this date',
       },
       // ===== Traversal-specific Parameters =====
       {
@@ -690,6 +791,7 @@ async function executeEntityOperation(
     const query = ctx.getNodeParameter('query', i) as string;
     const limit = ctx.getNodeParameter('limit', i) as number;
     const minScore = ctx.getNodeParameter('minRelevanceScore', i, 0) as number;
+    const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
 
     if (!query) {
       throw new NodeOperationError(ctx.getNode(), 'Query is required', { itemIndex: i });
@@ -699,6 +801,7 @@ async function executeEntityOperation(
     const results = await searchEngine.searchEntities(query, groupId, {
       limit,
       min_score: minScore,
+      created_after: createdAfter || undefined,
     });
     for (const r of results) {
       returnData.push({ json: { ...r.entity, _score: r.score } });
@@ -721,7 +824,11 @@ async function executeEntityOperation(
   } else if (operation === 'list') {
     const groupId = ctx.getNodeParameter('groupId', i) as string;
     const limit = ctx.getNodeParameter('limit', i) as number;
-    const entities = await storage.listEntities(groupId, { limit });
+    const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
+    const entities = await storage.listEntities(groupId, {
+      limit,
+      created_after: createdAfter || undefined,
+    });
     for (const e of entities) {
       returnData.push({ json: e });
     }
@@ -807,6 +914,8 @@ async function executeRelationshipOperation(
     const query = ctx.getNodeParameter('query', i) as string;
     const limit = ctx.getNodeParameter('limit', i) as number;
     const minScore = ctx.getNodeParameter('minRelevanceScore', i, 0) as number;
+    const validAfter = ctx.getNodeParameter('searchValidAfter', i, '') as string;
+    const validBefore = ctx.getNodeParameter('searchValidBefore', i, '') as string;
 
     if (!query) {
       throw new NodeOperationError(ctx.getNode(), 'Query is required', { itemIndex: i });
@@ -816,6 +925,8 @@ async function executeRelationshipOperation(
     const results = await searchEngine.searchEdges(query, groupId, {
       limit,
       min_score: minScore,
+      valid_after: validAfter || undefined,
+      valid_before: validBefore || undefined,
     });
     for (const r of results) {
       returnData.push({
@@ -848,6 +959,27 @@ async function executeRelationshipOperation(
     for (const e of edges) {
       returnData.push({ json: e });
     }
+  } else if (operation === 'getChangelog') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const sinceDate = ctx.getNodeParameter('sinceDate', i) as string;
+    const limit = ctx.getNodeParameter('limit', i, 50) as number;
+
+    if (!sinceDate) {
+      throw new NodeOperationError(ctx.getNode(), 'Since Date is required', { itemIndex: i });
+    }
+
+    const entries = await storage.getEdgeChangelog(groupId, sinceDate, { limit });
+    for (const entry of entries) {
+      returnData.push({
+        json: {
+          ...entry.edge,
+          _change_type: entry.change_type,
+          _changed_at: entry.changed_at,
+          _source: entry.sourceEntity.name,
+          _target: entry.targetEntity.name,
+        },
+      });
+    }
   } else if (operation === 'delete') {
     const uuid = ctx.getNodeParameter('uuid', i) as string;
     if (!uuid) {
@@ -876,6 +1008,22 @@ async function executeEpisodeOperation(
     const groupId = ctx.getNodeParameter('groupId', i) as string;
     const limit = ctx.getNodeParameter('limit', i) as number;
     const episodes = await storage.getRecentEpisodes(groupId, limit);
+    for (const ep of episodes) {
+      returnData.push({ json: ep });
+    }
+  } else if (operation === 'getByDateRange') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const fromDate = ctx.getNodeParameter('fromDate', i) as string;
+    const toDate = ctx.getNodeParameter('toDate', i) as string;
+    const limit = ctx.getNodeParameter('limit', i, 50) as number;
+
+    if (!fromDate || !toDate) {
+      throw new NodeOperationError(ctx.getNode(), 'Both From Date and To Date are required', {
+        itemIndex: i,
+      });
+    }
+
+    const episodes = await storage.getEpisodesByDateRange(groupId, fromDate, toDate, limit);
     for (const ep of episodes) {
       returnData.push({ json: ep });
     }

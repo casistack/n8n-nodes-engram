@@ -2,6 +2,7 @@ export type {
   IGraphStorage,
   EntitySearchResult,
   EdgeSearchResult,
+  ChangelogEntry,
   ListOptions,
   EntitySearchOptions,
   EdgeSearchOptions,

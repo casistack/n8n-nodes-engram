@@ -1,4 +1,10 @@
-import type { IGraphStorage, EntitySearchResult, EdgeSearchResult } from '../storage/IGraphStorage';
+import type {
+  IGraphStorage,
+  EntitySearchResult,
+  EdgeSearchResult,
+  EntitySearchOptions,
+  EdgeSearchOptions,
+} from '../storage/IGraphStorage';
 import type { EmbeddingService } from '../embeddings';
 
 export interface HybridSearchOptions {
@@ -6,6 +12,10 @@ export interface HybridSearchOptions {
   minScore?: number;
   entityType?: string;
   includeExpired?: boolean;
+  validAfter?: string;
+  validBefore?: string;
+  createdAfter?: string;
+  createdBefore?: string;
 }
 
 export interface HybridSearchResults {
@@ -52,11 +62,17 @@ export class HybridSearchEngine {
         limit: limit * 2,
         min_score: minScore,
         entity_type: options?.entityType,
+        created_after: options?.createdAfter,
+        created_before: options?.createdBefore,
       }),
       this.storage.searchEdges(query, groupId, {
         limit: limit * 2,
         min_score: minScore,
         include_expired: options?.includeExpired ?? false,
+        valid_after: options?.validAfter,
+        valid_before: options?.validBefore,
+        created_after: options?.createdAfter,
+        created_before: options?.createdBefore,
       }),
     ]);
 
@@ -112,7 +128,7 @@ export class HybridSearchEngine {
   async searchEntities(
     query: string,
     groupId: string,
-    options?: { limit?: number; min_score?: number; entity_type?: string },
+    options?: EntitySearchOptions,
   ): Promise<EntitySearchResult[]> {
     return this.storage.searchEntities(query, groupId, options);
   }
@@ -123,7 +139,7 @@ export class HybridSearchEngine {
   async searchEdges(
     query: string,
     groupId: string,
-    options?: { limit?: number; min_score?: number; include_expired?: boolean },
+    options?: EdgeSearchOptions,
   ): Promise<EdgeSearchResult[]> {
     return this.storage.searchEdges(query, groupId, options);
   }

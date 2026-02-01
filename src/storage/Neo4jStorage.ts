@@ -6,6 +6,7 @@ import type {
   IGraphStorage,
   EntitySearchResult,
   EdgeSearchResult,
+  ChangelogEntry,
   ListOptions,
   EntitySearchOptions,
   EdgeSearchOptions,
@@ -226,10 +227,22 @@ export class Neo4jStorage implements IGraphStorage {
     try {
       let query = 'MATCH (e:Entity {group_id: $groupId})';
       const params: Record<string, unknown> = { groupId };
+      const whereClauses: string[] = [];
 
       if (options?.entity_type) {
-        query += ' WHERE e.entity_type = $entity_type';
+        whereClauses.push('e.entity_type = $entity_type');
         params.entity_type = options.entity_type;
+      }
+      if (options?.created_after) {
+        whereClauses.push('e.created_at >= $created_after');
+        params.created_after = options.created_after;
+      }
+      if (options?.created_before) {
+        whereClauses.push('e.created_at <= $created_before');
+        params.created_before = options.created_before;
+      }
+      if (whereClauses.length > 0) {
+        query += ' WHERE ' + whereClauses.join(' AND ');
       }
 
       query += ' RETURN e ORDER BY e.created_at DESC';
@@ -552,6 +565,107 @@ export class Neo4jStorage implements IGraphStorage {
     }
   }
 
+  async getEpisodesByDateRange(
+    groupId: string,
+    from: string,
+    to: string,
+    limit?: number,
+  ): Promise<EpisodicNode[]> {
+    const session = this.getSession();
+    try {
+      let cypher = `MATCH (ep:Episode {group_id: $groupId})
+				WHERE ep.reference_time >= $from AND ep.reference_time <= $to
+				RETURN ep
+				ORDER BY ep.reference_time ASC`;
+
+      const params: Record<string, unknown> = { groupId, from, to };
+
+      if (limit) {
+        cypher += ' LIMIT $limit';
+        params.limit = neo4j.int(limit);
+      }
+
+      const result = await session.executeRead(async (tx) => {
+        return tx.run(cypher, params);
+      });
+
+      return result.records.map((r) => this.recordToEpisode(r.get('ep').properties));
+    } finally {
+      await session.close();
+    }
+  }
+
+  // ===== Changelog =====
+
+  async getEdgeChangelog(
+    groupId: string,
+    since: string,
+    options?: { limit?: number },
+  ): Promise<ChangelogEntry[]> {
+    const session = this.getSession();
+    try {
+      const cypher = `MATCH (source:Entity)-[r:RELATES_TO]->(target:Entity)
+				WHERE r.group_id = $groupId AND (
+					r.created_at >= $since
+					OR (r.expired_at IS NOT NULL AND r.expired_at >= $since)
+					OR (r.invalid_at IS NOT NULL AND r.invalid_at >= $since)
+				)
+				RETURN r, source, target
+				ORDER BY r.updated_at DESC`;
+
+      const result = await session.executeRead(async (tx) => {
+        return tx.run(cypher, { groupId, since });
+      });
+
+      const entries: ChangelogEntry[] = [];
+      const sinceTs = new Date(since).getTime();
+
+      for (const rec of result.records) {
+        const edge = this.recordToEdge(rec.get('r').properties);
+        const sourceEntity = this.recordToEntity(rec.get('source').properties);
+        const targetEntity = this.recordToEntity(rec.get('target').properties);
+
+        if (new Date(edge.created_at).getTime() >= sinceTs) {
+          entries.push({
+            edge,
+            sourceEntity,
+            targetEntity,
+            change_type: 'created',
+            changed_at: edge.created_at,
+          });
+        }
+
+        if (edge.expired_at && new Date(edge.expired_at).getTime() >= sinceTs) {
+          entries.push({
+            edge,
+            sourceEntity,
+            targetEntity,
+            change_type: 'expired',
+            changed_at: edge.expired_at,
+          });
+        } else if (
+          edge.invalid_at &&
+          new Date(edge.invalid_at).getTime() >= sinceTs &&
+          !edge.expired_at
+        ) {
+          entries.push({
+            edge,
+            sourceEntity,
+            targetEntity,
+            change_type: 'invalidated',
+            changed_at: edge.invalid_at,
+          });
+        }
+      }
+
+      entries.sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
+      const limit = options?.limit ?? entries.length;
+      return entries.slice(0, limit);
+    } finally {
+      await session.close();
+    }
+  }
+
   // ===== Search =====
 
   /** Escape Lucene special characters so user input doesn't cause parse errors */
@@ -581,6 +695,14 @@ export class Neo4jStorage implements IGraphStorage {
       if (options?.entity_type) {
         cypher += ' AND node.entity_type = $entityType';
         params.entityType = options.entity_type;
+      }
+      if (options?.created_after) {
+        cypher += ' AND node.created_at >= $createdAfter';
+        params.createdAfter = options.created_after;
+      }
+      if (options?.created_before) {
+        cypher += ' AND node.created_at <= $createdBefore';
+        params.createdBefore = options.created_before;
       }
 
       cypher += ' RETURN node, score ORDER BY score DESC LIMIT $limit';
@@ -622,8 +744,30 @@ export class Neo4jStorage implements IGraphStorage {
 				YIELD relationship, score
 				WHERE relationship.group_id = $groupId`;
 
+      const params: Record<string, unknown> = {
+        query: safeQuery,
+        groupId,
+        limit: neo4j.int(limit),
+      };
+
       if (!includeExpired) {
         cypher += ' AND relationship.expired_at IS NULL';
+      }
+      if (options?.valid_after) {
+        cypher += ' AND relationship.valid_at >= $validAfter';
+        params.validAfter = options.valid_after;
+      }
+      if (options?.valid_before) {
+        cypher += ' AND relationship.valid_at <= $validBefore';
+        params.validBefore = options.valid_before;
+      }
+      if (options?.created_after) {
+        cypher += ' AND relationship.created_at >= $createdAfter';
+        params.createdAfter = options.created_after;
+      }
+      if (options?.created_before) {
+        cypher += ' AND relationship.created_at <= $createdBefore';
+        params.createdBefore = options.created_before;
       }
 
       cypher += ` WITH relationship, score
@@ -631,12 +775,6 @@ export class Neo4jStorage implements IGraphStorage {
 				MATCH (source:Entity {uuid: relationship.source_node_uuid})
 				MATCH (target:Entity {uuid: relationship.target_node_uuid})
 				RETURN relationship, source, target, score`;
-
-      const params: Record<string, unknown> = {
-        query: safeQuery,
-        groupId,
-        limit: neo4j.int(limit),
-      };
 
       const result = await session.executeRead(async (tx) => {
         return tx.run(cypher, params);

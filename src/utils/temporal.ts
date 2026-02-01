@@ -78,3 +78,17 @@ export function isOlderThanDays(createdAt: string, days: number): boolean {
   cutoff.setDate(cutoff.getDate() - days);
   return new Date(createdAt) < cutoff;
 }
+
+/**
+ * Check if a date string falls within a range [from, to].
+ * If from is undefined, matches everything before to.
+ * If to is undefined, matches everything after from.
+ * If both undefined, always returns true.
+ */
+export function isWithinDateRange(dateStr: string | null, from?: string, to?: string): boolean {
+  if (!dateStr) return false;
+  const ts = new Date(dateStr).getTime();
+  if (from && ts < new Date(from).getTime()) return false;
+  if (to && ts > new Date(to).getTime()) return false;
+  return true;
+}

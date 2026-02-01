@@ -25,23 +25,39 @@ export interface ListOptions {
   entity_type?: string;
   limit?: number;
   offset?: number;
+  created_after?: string;
+  created_before?: string;
 }
 
 export interface EntitySearchOptions {
   limit?: number;
   entity_type?: string;
   min_score?: number;
+  created_after?: string;
+  created_before?: string;
 }
 
 export interface EdgeSearchOptions {
   limit?: number;
   min_score?: number;
   include_expired?: boolean;
+  valid_after?: string;
+  valid_before?: string;
+  created_after?: string;
+  created_before?: string;
 }
 
 export interface VectorSearchOptions {
   limit?: number;
   min_score?: number;
+}
+
+export interface ChangelogEntry {
+  edge: EntityEdge;
+  sourceEntity: EntityNode;
+  targetEntity: EntityNode;
+  change_type: 'created' | 'expired' | 'invalidated';
+  changed_at: string;
 }
 
 export interface RetentionPolicy {
@@ -75,6 +91,19 @@ export interface IGraphStorage {
   getEpisode(uuid: string): Promise<EpisodicNode | null>;
   getRecentEpisodes(groupId: string, limit: number): Promise<EpisodicNode[]>;
   getEpisodeCount(groupId: string): Promise<number>;
+  getEpisodesByDateRange(
+    groupId: string,
+    from: string,
+    to: string,
+    limit?: number,
+  ): Promise<EpisodicNode[]>;
+
+  // === Changelog ===
+  getEdgeChangelog(
+    groupId: string,
+    since: string,
+    options?: { limit?: number },
+  ): Promise<ChangelogEntry[]>;
 
   // === Search ===
   searchEntities(

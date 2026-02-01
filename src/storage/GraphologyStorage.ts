@@ -2,13 +2,14 @@ import { MultiDirectedGraph } from 'graphology';
 import * as fs from 'fs';
 import * as path from 'path';
 import { generateUuid } from '../utils/uuid';
-import { nowIso, isOlderThanDays } from '../utils/temporal';
+import { nowIso, isOlderThanDays, isWithinDateRange } from '../utils/temporal';
 import { MinisearchProvider } from '../search/MinisearchProvider';
 import { cosineSimilarity } from '../embeddings/cosine';
 import type {
   IGraphStorage,
   EntitySearchResult,
   EdgeSearchResult,
+  ChangelogEntry,
   ListOptions,
   EntitySearchOptions,
   EdgeSearchOptions,
@@ -171,6 +172,11 @@ export class GraphologyStorage implements IGraphStorage {
       const entity = attrs.data as EntityNode;
       if (entity.group_id !== groupId) return;
       if (options?.entity_type && entity.entity_type !== options.entity_type) return;
+      if (
+        (options?.created_after || options?.created_before) &&
+        !isWithinDateRange(entity.created_at, options?.created_after, options?.created_before)
+      )
+        return;
       entities.push(entity);
     });
 
@@ -359,6 +365,93 @@ export class GraphologyStorage implements IGraphStorage {
     return count;
   }
 
+  async getEpisodesByDateRange(
+    groupId: string,
+    from: string,
+    to: string,
+    limit?: number,
+  ): Promise<EpisodicNode[]> {
+    const episodes: EpisodicNode[] = [];
+
+    this.graph.forEachNode((_key, attrs) => {
+      if (attrs.type !== 'episode') return;
+      const episode = attrs.data as EpisodicNode;
+      if (episode.group_id !== groupId) return;
+      if (!isWithinDateRange(episode.reference_time, from, to)) return;
+      episodes.push(episode);
+    });
+
+    episodes.sort(
+      (a, b) => new Date(a.reference_time).getTime() - new Date(b.reference_time).getTime(),
+    );
+    return limit ? episodes.slice(0, limit) : episodes;
+  }
+
+  // ===== Changelog =====
+
+  async getEdgeChangelog(
+    groupId: string,
+    since: string,
+    options?: { limit?: number },
+  ): Promise<ChangelogEntry[]> {
+    const entries: ChangelogEntry[] = [];
+    const sinceTs = new Date(since).getTime();
+
+    this.graph.forEachEdge((_edgeKey, attrs) => {
+      if (attrs.type !== 'entity_edge' || !attrs.data) return;
+      const edge = attrs.data as EntityEdge;
+      if (edge.group_id !== groupId) return;
+
+      const createdTs = new Date(edge.created_at).getTime();
+      const expiredTs = edge.expired_at ? new Date(edge.expired_at).getTime() : null;
+      const invalidTs = edge.invalid_at ? new Date(edge.invalid_at).getTime() : null;
+
+      const sourceNode = this.graph.hasNode(edge.source_node_uuid)
+        ? this.graph.getNodeAttributes(edge.source_node_uuid)
+        : null;
+      const targetNode = this.graph.hasNode(edge.target_node_uuid)
+        ? this.graph.getNodeAttributes(edge.target_node_uuid)
+        : null;
+      if (!sourceNode || !targetNode) return;
+      if (sourceNode.type !== 'entity' || targetNode.type !== 'entity') return;
+
+      const sourceEntity = sourceNode.data as EntityNode;
+      const targetEntity = targetNode.data as EntityNode;
+
+      if (createdTs >= sinceTs) {
+        entries.push({
+          edge,
+          sourceEntity,
+          targetEntity,
+          change_type: 'created',
+          changed_at: edge.created_at,
+        });
+      }
+
+      if (expiredTs && expiredTs >= sinceTs) {
+        entries.push({
+          edge,
+          sourceEntity,
+          targetEntity,
+          change_type: 'expired',
+          changed_at: edge.expired_at!,
+        });
+      } else if (invalidTs && invalidTs >= sinceTs && !expiredTs) {
+        entries.push({
+          edge,
+          sourceEntity,
+          targetEntity,
+          change_type: 'invalidated',
+          changed_at: edge.invalid_at!,
+        });
+      }
+    });
+
+    entries.sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
+    const limit = options?.limit ?? entries.length;
+    return entries.slice(0, limit);
+  }
+
   // ===== Search =====
 
   async searchEntities(
@@ -378,6 +471,11 @@ export class GraphologyStorage implements IGraphStorage {
       const entity = await this.getEntity(tr.id);
       if (!entity || entity.group_id !== groupId) continue;
       if (options?.entity_type && entity.entity_type !== options.entity_type) continue;
+      if (
+        (options?.created_after || options?.created_before) &&
+        !isWithinDateRange(entity.created_at, options?.created_after, options?.created_before)
+      )
+        continue;
 
       results.push({ entity, score: tr.score });
     }
@@ -403,6 +501,16 @@ export class GraphologyStorage implements IGraphStorage {
       const edge = await this.getEdge(tr.id);
       if (!edge || edge.group_id !== groupId) continue;
       if (!includeExpired && edge.expired_at !== null) continue;
+      if (
+        (options?.valid_after || options?.valid_before) &&
+        !isWithinDateRange(edge.valid_at, options?.valid_after, options?.valid_before)
+      )
+        continue;
+      if (
+        (options?.created_after || options?.created_before) &&
+        !isWithinDateRange(edge.created_at, options?.created_after, options?.created_before)
+      )
+        continue;
 
       const sourceEntity = await this.getEntity(edge.source_node_uuid);
       const targetEntity = await this.getEntity(edge.target_node_uuid);

@@ -53,7 +53,7 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 | **2** | Storage Backends | Embedded (zero-setup) or Neo4j (production) |
 | **5** | Extraction Stages | Entity, dedup, relationships, contradictions, embeddings |
 | **3** | Search Modes | Full-text, vector, hybrid RRF fusion |
-| **169** | Tests | Unit + integration across 17 test suites |
+| **198** | Tests | Unit + integration across 19 test suites |
 
 ---
 
@@ -136,8 +136,8 @@ On each conversation turn, Engram Memory:
 | Resource | Operations |
 | --- | --- |
 | **Entity** | Create, Get, Get by Name, List, Search, Update, Delete |
-| **Relationship** | Create, Get, Get Between, Get for Entity, Search, Update, Delete |
-| **Episode** | Get, Get Recent, Get Count |
+| **Relationship** | Create, Get, Get Between, Get for Entity, Search, Update, Delete, Get Changelog |
+| **Episode** | Get, Get Recent, Get by Date Range, Get Count |
 | **Traversal** | BFS from Entity, BFS from Episodes |
 
 ### Engram Admin
@@ -205,6 +205,22 @@ User message + AI response
 | **Hybrid RRF** | Reciprocal Rank Fusion combining text + vector | Embeddings enabled |
 
 Hybrid search automatically activates when both text and vector search are available.
+
+All search operations support optional **temporal filters** (`valid_after`, `valid_before`, `created_after`, `created_before`) to scope results by time.
+
+---
+
+## Temporal Queries
+
+Engram tracks when facts are valid (`valid_at`, `invalid_at`) and when they were superseded (`expired_at`). You can query the graph by time:
+
+| Operation | Node | Description |
+| --- | --- | --- |
+| **Get by Date Range** | Explorer > Episode | Retrieve episodes within a time window by `reference_time` |
+| **Get Changelog** | Explorer > Relationship | Get recently created, expired, or invalidated relationships since a given date |
+| **Search with date filters** | Explorer > Entity/Relationship Search | Filter search results by `valid_after`, `valid_before`, or `created_after` |
+
+Date parameters use ISO 8601 format (e.g. `2026-01-15T00:00:00.000Z`). The LLM agent can convert natural language like "last week" into concrete dates before calling these operations.
 
 ---
 
