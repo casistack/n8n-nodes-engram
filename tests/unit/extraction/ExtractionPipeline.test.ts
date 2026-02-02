@@ -549,38 +549,47 @@ describe('ExtractionPipeline', () => {
 			fact: 'Alice knows Python',
 		});
 
-		mockChatJson
-			// 1. Entity extraction
-			.mockResolvedValueOnce({
-				entities: [
-					{ name: 'Alice', entity_type: 'person', summary: 'A person' },
-					{ name: 'Java', entity_type: 'concept', summary: 'A programming language' },
-				],
-			})
-			// 2. Entity dedup: Java vs Python (same type 'concept', different name → LLM fallback)
-			//    Java vs Alice skipped (different entity_type: concept vs person)
-			//    Java vs Java → exact name match (no LLM call)
-			.mockResolvedValueOnce({
-				is_duplicate: false,
-				merged_summary: '',
-			})
-			// 3. Relationship extraction
-			.mockResolvedValueOnce({
-				relationships: [
-					{
-						source_entity: 'Alice',
-						target_entity: 'Java',
-						name: 'KNOWS',
-						fact: 'Alice knows Java',
-					},
-				],
-			})
-			// No edge dedup call — different target, no existing KNOWS between Alice and Java
-			// 4. Cross-target contradiction: KNOWS Python vs KNOWS Java
-			.mockResolvedValueOnce({
-				is_contradiction: false,
-				explanation: 'Knowing Java does not contradict knowing Python',
-			});
+		// Use mockImplementation to handle non-deterministic entity iteration order.
+		// listEntities sorts by created_at desc; entities created in rapid succession
+		// may share the same timestamp, making sort order unstable. This means the
+		// entity dedup LLM call for "Java vs Python" may or may not fire depending
+		// on whether Java is encountered before or after Python in the existing list.
+		mockChatJson.mockImplementation((messages: Array<{ role: string; content: string }>) => {
+			const systemMsg = messages[0]?.content || '';
+			const userMsg = messages[1]?.content || '';
+
+			if (systemMsg.includes('entity extraction system')) {
+				return Promise.resolve({
+					entities: [
+						{ name: 'Alice', entity_type: 'person', summary: 'A person' },
+						{ name: 'Java', entity_type: 'concept', summary: 'A programming language' },
+					],
+				});
+			}
+			if (systemMsg.includes('entity deduplication system')) {
+				return Promise.resolve({ is_duplicate: false, merged_summary: '' });
+			}
+			if (systemMsg.includes('relationship extraction system')) {
+				return Promise.resolve({
+					relationships: [
+						{
+							source_entity: 'Alice',
+							target_entity: 'Java',
+							name: 'KNOWS',
+							fact: 'Alice knows Java',
+						},
+					],
+				});
+			}
+			if (systemMsg.includes('contradiction detection system')) {
+				return Promise.resolve({
+					is_contradiction: false,
+					explanation: 'Knowing Java does not contradict knowing Python',
+				});
+			}
+			// Fallback — should not be reached
+			return Promise.resolve({});
+		});
 
 		await pipeline.process(
 			'I also know Java.',
