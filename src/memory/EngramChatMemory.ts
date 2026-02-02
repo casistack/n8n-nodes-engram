@@ -139,12 +139,32 @@ export class EngramChatMemory extends BaseChatMemory {
   }
 
   async saveContext(inputValues: InputValues, outputValues: OutputValues): Promise<void> {
-    // Use the default BaseChatMemory implementation to save messages
-    // This calls chatHistory.addUserMessage() and chatHistory.addAIMessage()
-    await super.saveContext(inputValues, outputValues);
+    // n8n agents may pass multiple keys (input, system_message, formatting_instructions).
+    // LangChain's BaseChatMemory.saveContext throws if it sees >1 key without an explicit
+    // inputKey/outputKey. Filter down to just the keys we care about to avoid this.
+    const filteredInput: InputValues = {};
+    const inputKey = this.inputKey || 'input';
+    if (inputValues[inputKey] !== undefined) {
+      filteredInput[inputKey] = inputValues[inputKey];
+    } else {
+      // Fallback: pass the first key so LangChain doesn't get an empty object
+      const firstKey = Object.keys(inputValues)[0];
+      if (firstKey) filteredInput[firstKey] = inputValues[firstKey];
+    }
+
+    const filteredOutput: OutputValues = {};
+    const outputKey = this.outputKey || 'output';
+    if (outputValues[outputKey] !== undefined) {
+      filteredOutput[outputKey] = outputValues[outputKey];
+    } else {
+      const firstKey = Object.keys(outputValues)[0];
+      if (firstKey) filteredOutput[firstKey] = outputValues[firstKey];
+    }
+
+    await super.saveContext(filteredInput, filteredOutput);
 
     // If extraction is enabled, extract entities and relationships
-    // (Will be implemented in Phase 5 - Extraction Pipeline)
+    // Pass original unfiltered values so extraction can find the text
     if (this.enableExtraction) {
       await this.runExtraction(inputValues, outputValues);
     }
