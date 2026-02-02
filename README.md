@@ -144,13 +144,13 @@ On each conversation turn, Engram Memory:
 
 > Regular node&mdash;administration and analysis.
 
-| Category | Operations |
+| Resource | Operations |
 | --- | --- |
 | **Monitoring** | Stats, List Groups, Group Stats |
-| **Lifecycle** | Apply Retention, Clear Group, Bulk Clear, Clear All |
+| **Lifecycle** | Apply Retention, Clear Group, Bulk Clear Groups, Clear All |
 | **Hygiene** | Orphaned Entities, Duplicate Entities, Expire Stale Edges |
+| **Portability** | Export, Import |
 | **Analysis** | Detect Communities |
-| **Portability** | Export (JSON), Import (JSON) |
 
 ### Engram Trigger
 

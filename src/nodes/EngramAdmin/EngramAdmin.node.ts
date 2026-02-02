@@ -21,7 +21,7 @@ export class EngramAdmin implements INodeType {
     name: 'engramAdmin',
     icon: 'file:engram-admin.png',
     group: ['transform'],
-    version: 1,
+    version: [1, 2],
     description: 'Manage and administer the Engram knowledge graph',
     defaults: {
       name: 'Engram Admin',
@@ -59,85 +59,171 @@ export class EngramAdmin implements INodeType {
         ],
         default: 'embedded',
       },
+      // ===== Resource =====
+      {
+        displayName: 'Resource',
+        name: 'resource',
+        type: 'options',
+        noDataExpression: true,
+        options: [
+          {
+            name: 'Monitoring',
+            value: 'monitoring',
+            description: 'Graph statistics and group monitoring',
+          },
+          {
+            name: 'Lifecycle',
+            value: 'lifecycle',
+            description: 'Data retention, clearing groups, and cleanup',
+          },
+          {
+            name: 'Hygiene',
+            value: 'hygiene',
+            description: 'Find orphaned entities, duplicates, and stale edges',
+          },
+          {
+            name: 'Portability',
+            value: 'portability',
+            description: 'Export and import graph data',
+          },
+          {
+            name: 'Analysis',
+            value: 'analysis',
+            description: 'Community detection and graph analysis',
+          },
+        ],
+        default: 'monitoring',
+      },
+      // ===== Operations per resource =====
       {
         displayName: 'Operation',
         name: 'operation',
         type: 'options',
         noDataExpression: true,
+        displayOptions: { show: { resource: ['monitoring'] } },
         options: [
-          // --- Monitoring ---
           {
             name: 'Stats',
             value: 'stats',
             description: 'Get graph statistics with enhanced metrics',
+            action: 'Get graph statistics',
           },
           {
             name: 'List Groups',
             value: 'listGroups',
             description: 'List all groups/sessions with per-group statistics',
+            action: 'List all groups',
           },
           {
             name: 'Group Stats',
             value: 'groupStats',
             description: 'Get detailed statistics for a specific group/session',
+            action: 'Get group statistics',
           },
-          // --- Data Lifecycle ---
+        ],
+        default: 'stats',
+      },
+      {
+        displayName: 'Operation',
+        name: 'operation',
+        type: 'options',
+        noDataExpression: true,
+        displayOptions: { show: { resource: ['lifecycle'] } },
+        options: [
           {
             name: 'Apply Retention',
             value: 'applyRetention',
             description: 'Remove old episodes based on a retention policy',
+            action: 'Apply retention policy',
           },
           {
             name: 'Clear Group',
             value: 'clearGroup',
             description: 'Clear all data for a specific group/session',
+            action: 'Clear a group',
           },
           {
             name: 'Bulk Clear Groups',
             value: 'bulkClearGroups',
             description: 'Clear multiple groups/sessions at once',
+            action: 'Bulk clear groups',
           },
           {
             name: 'Clear All',
             value: 'clearAll',
             description: 'Clear ALL data from the graph (destructive!)',
+            action: 'Clear all data',
           },
-          // --- Data Hygiene ---
+        ],
+        default: 'applyRetention',
+      },
+      {
+        displayName: 'Operation',
+        name: 'operation',
+        type: 'options',
+        noDataExpression: true,
+        displayOptions: { show: { resource: ['hygiene'] } },
+        options: [
           {
             name: 'Orphaned Entities',
             value: 'orphanedEntities',
             description: 'Find or remove entities with no relationships',
+            action: 'Find orphaned entities',
           },
           {
             name: 'Duplicate Entities',
             value: 'duplicateEntities',
             description: 'Find entities with duplicate or similar names',
+            action: 'Find duplicate entities',
           },
           {
             name: 'Expire Stale Edges',
             value: 'expireStaleEdges',
             description: 'Find and expire edges with broken references or past validity',
+            action: 'Expire stale edges',
           },
-          // --- Data Portability ---
+        ],
+        default: 'orphanedEntities',
+      },
+      {
+        displayName: 'Operation',
+        name: 'operation',
+        type: 'options',
+        noDataExpression: true,
+        displayOptions: { show: { resource: ['portability'] } },
+        options: [
           {
             name: 'Export',
             value: 'export',
             description: 'Export graph data as JSON',
+            action: 'Export graph data',
           },
           {
             name: 'Import',
             value: 'import',
             description: 'Import graph data from JSON',
+            action: 'Import graph data',
           },
-          // --- Analysis ---
+        ],
+        default: 'export',
+      },
+      {
+        displayName: 'Operation',
+        name: 'operation',
+        type: 'options',
+        noDataExpression: true,
+        displayOptions: { show: { resource: ['analysis'] } },
+        options: [
           {
             name: 'Detect Communities',
             value: 'detectCommunities',
             description: 'Detect entity communities/clusters using label propagation',
+            action: 'Detect communities',
           },
         ],
-        default: 'stats',
+        default: 'detectCommunities',
       },
+      // ===== Parameters (displayOptions unchanged) =====
       // --- Group ID (required) for single-group operations ---
       {
         displayName: 'Group ID',
@@ -380,6 +466,7 @@ export class EngramAdmin implements INodeType {
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const items = this.getInputData();
     const backend = this.getNodeParameter('backend', 0, 'embedded') as string;
+    const resource = this.getNodeParameter('resource', 0, 'monitoring') as string;
     const operation = this.getNodeParameter('operation', 0) as string;
 
     let storage;
@@ -402,558 +489,43 @@ export class EngramAdmin implements INodeType {
     await storage.initialize();
 
     const returnData: INodeExecutionData[] = [];
+    const ctx = this;
 
     try {
       for (let i = 0; i < items.length; i++) {
         try {
-          switch (operation) {
-            // =============================================
-            // MONITORING
-            // =============================================
-            case 'stats': {
-              const groupId = this.getNodeParameter('groupIdFilter', i, '') as string;
-              const baseStats = await storage.getStats(groupId || undefined);
-              const data = await storage.exportGraph(groupId || undefined);
+          const beforeLength = returnData.length;
 
-              const activeEdges = data.edges.filter((e) => e.expired_at === null).length;
-              const expiredEdges = data.edges.filter((e) => e.expired_at !== null).length;
-              const groupCount = baseStats.group_ids.length;
+          if (resource === 'monitoring') {
+            await executeMonitoring(ctx, storage, operation, i, returnData, backend);
+          } else if (resource === 'lifecycle') {
+            await executeLifecycle(ctx, storage, operation, i, returnData);
+          } else if (resource === 'hygiene') {
+            await executeHygiene(ctx, storage, operation, i, returnData);
+          } else if (resource === 'portability') {
+            await executePortability(ctx, storage, operation, i, returnData);
+          } else if (resource === 'analysis') {
+            await executeAnalysis(ctx, storage, operation, i, returnData);
+          }
 
-              const enhancedStats = {
-                ...baseStats,
-                group_count: groupCount,
-                active_edge_count: activeEdges,
-                expired_edge_count: expiredEdges,
-                avg_edges_per_entity:
-                  baseStats.entity_count > 0
-                    ? Math.round((baseStats.edge_count / baseStats.entity_count) * 100) / 100
-                    : 0,
-                avg_episodes_per_group:
-                  groupCount > 0
-                    ? Math.round((baseStats.episode_count / groupCount) * 100) / 100
-                    : 0,
-                storage_backend: backend,
-                data_span_days:
-                  baseStats.oldest_episode && baseStats.newest_episode
-                    ? Math.round(
-                        ((new Date(baseStats.newest_episode).getTime() -
-                          new Date(baseStats.oldest_episode).getTime()) /
-                          (1000 * 60 * 60 * 24)) *
-                          10,
-                      ) / 10
-                    : null,
-              };
-
-              returnData.push({ json: enhancedStats as unknown as IDataObject });
-              break;
+          // Fallback for v1 workflows where resource defaults to 'monitoring'
+          // but operation may belong to a different resource
+          if (returnData.length === beforeLength) {
+            await executeLifecycle(ctx, storage, operation, i, returnData);
+            if (returnData.length === beforeLength) {
+              await executeHygiene(ctx, storage, operation, i, returnData);
             }
-
-            case 'listGroups': {
-              const includeStats = this.getNodeParameter('includeStats', i, true) as boolean;
-              const limit = this.getNodeParameter('limit', i, 100) as number;
-              const globalStats = await storage.getStats();
-              const allGroupIds = globalStats.group_ids.slice(0, limit);
-
-              if (includeStats) {
-                for (const gid of allGroupIds) {
-                  const gStats = await storage.getStats(gid);
-                  returnData.push({
-                    json: {
-                      group_id: gid,
-                      entity_count: gStats.entity_count,
-                      edge_count: gStats.edge_count,
-                      episode_count: gStats.episode_count,
-                      entity_types: gStats.entity_types,
-                      oldest_episode: gStats.oldest_episode,
-                      newest_episode: gStats.newest_episode,
-                    },
-                  });
-                }
-              } else {
-                for (const gid of allGroupIds) {
-                  returnData.push({ json: { group_id: gid } });
-                }
-              }
-
-              if (returnData.length === 0) {
-                returnData.push({
-                  json: {
-                    message: 'No groups found',
-                    total_groups: 0,
-                  },
-                });
-              }
-              break;
+            if (returnData.length === beforeLength) {
+              await executePortability(ctx, storage, operation, i, returnData);
             }
-
-            case 'groupStats': {
-              const groupId = this.getNodeParameter('groupId', i) as string;
-              if (!groupId) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group ID is required for Group Stats operation',
-                  { itemIndex: i },
-                );
-              }
-
-              const gStats = await storage.getStats(groupId);
-              const gData = await storage.exportGraph(groupId);
-
-              const activeEdges = gData.edges.filter((e) => e.expired_at === null).length;
-              const expiredEdges = gData.edges.filter((e) => e.expired_at !== null).length;
-
-              // Find relationship types
-              const relationshipTypes: Record<string, number> = {};
-              for (const edge of gData.edges) {
-                relationshipTypes[edge.name] = (relationshipTypes[edge.name] || 0) + 1;
-              }
-
-              returnData.push({
-                json: {
-                  group_id: groupId,
-                  entity_count: gStats.entity_count,
-                  edge_count: gStats.edge_count,
-                  episode_count: gStats.episode_count,
-                  entity_types: gStats.entity_types,
-                  relationship_types: relationshipTypes,
-                  active_edge_count: activeEdges,
-                  expired_edge_count: expiredEdges,
-                  avg_edges_per_entity:
-                    gStats.entity_count > 0
-                      ? Math.round((gStats.edge_count / gStats.entity_count) * 100) / 100
-                      : 0,
-                  oldest_episode: gStats.oldest_episode,
-                  newest_episode: gStats.newest_episode,
-                  data_span_days:
-                    gStats.oldest_episode && gStats.newest_episode
-                      ? Math.round(
-                          ((new Date(gStats.newest_episode).getTime() -
-                            new Date(gStats.oldest_episode).getTime()) /
-                            (1000 * 60 * 60 * 24)) *
-                            10,
-                        ) / 10
-                      : null,
-                },
-              });
-              break;
-            }
-
-            // =============================================
-            // DATA LIFECYCLE
-            // =============================================
-            case 'applyRetention': {
-              const groupId = this.getNodeParameter('groupId', i) as string;
-              if (!groupId) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group ID is required for Apply Retention operation',
-                  { itemIndex: i },
-                );
-              }
-              const retentionType = this.getNodeParameter('retentionType', i) as string;
-              const retentionValue = this.getNodeParameter('retentionValue', i) as number;
-
-              const removed = await storage.applyRetention(groupId, {
-                type: retentionType as 'days' | 'max_episodes',
-                value: retentionValue,
-              });
-
-              returnData.push({
-                json: {
-                  success: true,
-                  operation: 'applyRetention',
-                  group_id: groupId,
-                  policy: { type: retentionType, value: retentionValue },
-                  episodes_removed: removed,
-                },
-              });
-              break;
-            }
-
-            case 'clearGroup': {
-              const groupId = this.getNodeParameter('groupId', i) as string;
-              if (!groupId) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group ID is required for Clear Group operation',
-                  {
-                    itemIndex: i,
-                    description: 'Provide the session/group ID whose data you want to delete.',
-                  },
-                );
-              }
-              await storage.clearGroup(groupId);
-              returnData.push({
-                json: { success: true, operation: 'clearGroup', group_id: groupId },
-              });
-              break;
-            }
-
-            case 'bulkClearGroups': {
-              const confirmDestructive = this.getNodeParameter(
-                'confirmDestructive',
-                i,
-                false,
-              ) as boolean;
-              if (!confirmDestructive) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Confirm Destructive must be enabled to proceed with Bulk Clear Groups',
-                  {
-                    itemIndex: i,
-                    description:
-                      'This is a safety measure. Enable "Confirm Destructive" to proceed.',
-                  },
-                );
-              }
-
-              const groupIdsRaw = this.getNodeParameter('groupIds', i) as unknown;
-              let groupIds: string[];
-              if (Array.isArray(groupIdsRaw)) {
-                groupIds = groupIdsRaw.filter(
-                  (id): id is string => typeof id === 'string' && id.length > 0,
-                );
-              } else {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group IDs must be a JSON array of strings',
-                  { itemIndex: i },
-                );
-              }
-
-              if (groupIds.length === 0) {
-                throw new NodeOperationError(this.getNode(), 'Group IDs array is empty', {
-                  itemIndex: i,
-                });
-              }
-
-              const cleared: string[] = [];
-              const failed: Array<{ group_id: string; error: string }> = [];
-
-              for (const gid of groupIds) {
-                try {
-                  await storage.clearGroup(gid);
-                  cleared.push(gid);
-                } catch (err) {
-                  failed.push({ group_id: gid, error: (err as Error).message });
-                }
-              }
-
-              returnData.push({
-                json: {
-                  success: failed.length === 0,
-                  operation: 'bulkClearGroups',
-                  cleared,
-                  failed,
-                  total_cleared: cleared.length,
-                  total_failed: failed.length,
-                },
-              });
-              break;
-            }
-
-            case 'clearAll': {
-              await storage.clearAll();
-              returnData.push({
-                json: { success: true, operation: 'clearAll' },
-              });
-              break;
-            }
-
-            // =============================================
-            // DATA HYGIENE
-            // =============================================
-            case 'orphanedEntities': {
-              const groupId = this.getNodeParameter('groupId', i) as string;
-              if (!groupId) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group ID is required for Orphaned Entities operation',
-                  { itemIndex: i },
-                );
-              }
-              const deleteOrphans = this.getNodeParameter('deleteOrphans', i, false) as boolean;
-
-              const entities = await storage.listEntities(groupId, { limit: 10000 });
-              const orphaned: Array<{
-                uuid: string;
-                name: string;
-                entity_type: string;
-                summary: string;
-                created_at: string;
-              }> = [];
-
-              for (const entity of entities) {
-                const edges = await storage.getEdgesForEntity(entity.uuid);
-                if (edges.length === 0) {
-                  orphaned.push({
-                    uuid: entity.uuid,
-                    name: entity.name,
-                    entity_type: entity.entity_type,
-                    summary: entity.summary,
-                    created_at: entity.created_at,
-                  });
-                }
-              }
-
-              if (deleteOrphans) {
-                for (const o of orphaned) {
-                  await storage.deleteEntity(o.uuid);
-                }
-              }
-
-              returnData.push({
-                json: {
-                  operation: 'orphanedEntities',
-                  group_id: groupId,
-                  orphaned,
-                  total_orphaned: orphaned.length,
-                  deleted: deleteOrphans,
-                },
-              });
-              break;
-            }
-
-            case 'duplicateEntities': {
-              const groupId = this.getNodeParameter('groupId', i) as string;
-              if (!groupId) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group ID is required for Duplicate Entities operation',
-                  { itemIndex: i },
-                );
-              }
-
-              const entities = await storage.listEntities(groupId, { limit: 10000 });
-              const nameMap = new Map<string, typeof entities>();
-
-              for (const entity of entities) {
-                const key = entity.name.toLowerCase().trim();
-                if (!nameMap.has(key)) nameMap.set(key, []);
-                nameMap.get(key)!.push(entity);
-              }
-
-              const duplicateGroups: Array<{
-                canonical_name: string;
-                count: number;
-                entities: Array<{
-                  uuid: string;
-                  name: string;
-                  entity_type: string;
-                  edge_count: number;
-                  created_at: string;
-                }>;
-              }> = [];
-
-              for (const [canonicalName, group] of nameMap) {
-                if (group.length > 1) {
-                  const enriched = [];
-                  for (const e of group) {
-                    const edges = await storage.getEdgesForEntity(e.uuid);
-                    enriched.push({
-                      uuid: e.uuid,
-                      name: e.name,
-                      entity_type: e.entity_type,
-                      edge_count: edges.length,
-                      created_at: e.created_at,
-                    });
-                  }
-                  duplicateGroups.push({
-                    canonical_name: canonicalName,
-                    count: group.length,
-                    entities: enriched,
-                  });
-                }
-              }
-
-              returnData.push({
-                json: {
-                  operation: 'duplicateEntities',
-                  group_id: groupId,
-                  duplicate_groups: duplicateGroups,
-                  total_duplicate_groups: duplicateGroups.length,
-                },
-              });
-              break;
-            }
-
-            case 'expireStaleEdges': {
-              const groupId = this.getNodeParameter('groupId', i) as string;
-              if (!groupId) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group ID is required for Expire Stale Edges operation',
-                  { itemIndex: i },
-                );
-              }
-              const dryRun = this.getNodeParameter('dryRun', i, true) as boolean;
-
-              const data = await storage.exportGraph(groupId);
-              const entityUuids = new Set(data.entities.map((e) => e.uuid));
-              const staleEdges: Array<{
-                uuid: string;
-                name: string;
-                fact: string;
-                reason: string;
-              }> = [];
-
-              for (const edge of data.edges) {
-                if (edge.expired_at) continue; // already expired
-
-                if (
-                  !entityUuids.has(edge.source_node_uuid) ||
-                  !entityUuids.has(edge.target_node_uuid)
-                ) {
-                  staleEdges.push({
-                    uuid: edge.uuid,
-                    name: edge.name,
-                    fact: edge.fact,
-                    reason: 'dangling_reference',
-                  });
-                } else if (edge.invalid_at && new Date(edge.invalid_at) < new Date()) {
-                  staleEdges.push({
-                    uuid: edge.uuid,
-                    name: edge.name,
-                    fact: edge.fact,
-                    reason: 'past_invalid_at',
-                  });
-                }
-              }
-
-              if (!dryRun) {
-                for (const edge of staleEdges) {
-                  await storage.updateEdge(edge.uuid, { expired_at: nowIso() });
-                }
-              }
-
-              returnData.push({
-                json: {
-                  operation: 'expireStaleEdges',
-                  group_id: groupId,
-                  dry_run: dryRun,
-                  stale_edges: staleEdges,
-                  total_stale: staleEdges.length,
-                  expired: !dryRun,
-                },
-              });
-              break;
-            }
-
-            // =============================================
-            // ANALYSIS
-            // =============================================
-            case 'detectCommunities': {
-              const groupId = this.getNodeParameter('groupId', i) as string;
-              if (!groupId) {
-                throw new NodeOperationError(
-                  this.getNode(),
-                  'Group ID is required for Detect Communities operation',
-                  { itemIndex: i },
-                );
-              }
-
-              const minCommunitySize = this.getNodeParameter('minCommunitySize', i, 2) as number;
-              const generateSummaries = this.getNodeParameter(
-                'generateSummaries',
-                i,
-                false,
-              ) as boolean;
-
-              const detector = new CommunityDetector(storage);
-              let result = await detector.detect(groupId, { minCommunitySize });
-
-              if (generateSummaries) {
-                const extractionCreds = await this.getCredentials('engramExtractionApi');
-                const model = this.getNodeParameter('summaryModel', i, '') as string;
-                const concurrency = this.getNodeParameter('summaryConcurrency', i, 3) as number;
-
-                if (!model) {
-                  throw new NodeOperationError(
-                    this.getNode(),
-                    'Summary Model is required when Generate Summaries is enabled',
-                    { itemIndex: i },
-                  );
-                }
-
-                const llm = new LlmClient({
-                  apiKey: extractionCreds.apiKey as string,
-                  baseUrl: extractionCreds.baseUrl as string,
-                  model,
-                });
-                const summarizer = new CommunitySummarizer(llm);
-                result = await summarizer.summarizeAll(result, concurrency);
-              }
-
-              returnData.push({
-                json: {
-                  total_entities: result.total_entities,
-                  unclustered_entities: result.unclustered_entities,
-                  detection_method: result.detection_method,
-                  community_count: result.communities.length,
-                  communities: result.communities.map((c) => ({
-                    id: c.id,
-                    label: c.label,
-                    summary: c.summary,
-                    entity_count: c.entity_count,
-                    edge_count: c.edge_count,
-                    key_entities: c.key_entities,
-                    members: c.members.map((m) => ({
-                      uuid: m.entity.uuid,
-                      name: m.entity.name,
-                      entity_type: m.entity.entity_type,
-                      edge_count: m.edges.length,
-                    })),
-                  })),
-                },
-              });
-              break;
-            }
-
-            // =============================================
-            // DATA PORTABILITY
-            // =============================================
-            case 'export': {
-              const groupId = this.getNodeParameter('groupIdFilter', i, '') as string;
-              const data = await storage.exportGraph(groupId || undefined);
-              returnData.push({ json: data as unknown as IDataObject });
-              break;
-            }
-
-            case 'import': {
-              const importData = this.getNodeParameter('importData', i) as unknown;
-              if (
-                !importData ||
-                typeof importData !== 'object' ||
-                !Array.isArray((importData as GraphData).entities) ||
-                !Array.isArray((importData as GraphData).edges) ||
-                !Array.isArray((importData as GraphData).episodes)
-              ) {
-                throw new NodeOperationError(this.getNode(), 'Invalid import data format', {
-                  itemIndex: i,
-                  description:
-                    'Import data must be a JSON object with "entities", "edges", and "episodes" arrays. Use data from a previous Export operation.',
-                });
-              }
-              await storage.importGraph(importData as GraphData);
-              const graphData = importData as GraphData;
-              returnData.push({
-                json: {
-                  success: true,
-                  operation: 'import',
-                  imported: {
-                    entities: graphData.entities.length,
-                    edges: graphData.edges.length,
-                    episodes: graphData.episodes.length,
-                  },
-                },
-              });
-              break;
+            if (returnData.length === beforeLength) {
+              await executeAnalysis(ctx, storage, operation, i, returnData);
             }
           }
         } catch (error: unknown) {
           if (error instanceof NodeOperationError) throw error;
           throw new NodeOperationError(
-            this.getNode(),
+            ctx.getNode(),
             `Engram Admin error: ${(error as Error).message}`,
             { itemIndex: i },
           );
@@ -966,5 +538,546 @@ export class EngramAdmin implements INodeType {
     }
 
     return [returnData.length > 0 ? returnData : [{ json: {} }]];
+  }
+}
+
+// =============================================
+// MONITORING
+// =============================================
+
+async function executeMonitoring(
+  ctx: IExecuteFunctions,
+  storage: Awaited<ReturnType<typeof createStorage>>,
+  operation: string,
+  i: number,
+  returnData: INodeExecutionData[],
+  backend: string,
+): Promise<void> {
+  if (operation === 'stats') {
+    const groupId = ctx.getNodeParameter('groupIdFilter', i, '') as string;
+    const baseStats = await storage.getStats(groupId || undefined);
+    const data = await storage.exportGraph(groupId || undefined);
+
+    const activeEdges = data.edges.filter((e) => e.expired_at === null).length;
+    const expiredEdges = data.edges.filter((e) => e.expired_at !== null).length;
+    const groupCount = baseStats.group_ids.length;
+
+    const enhancedStats = {
+      ...baseStats,
+      group_count: groupCount,
+      active_edge_count: activeEdges,
+      expired_edge_count: expiredEdges,
+      avg_edges_per_entity:
+        baseStats.entity_count > 0
+          ? Math.round((baseStats.edge_count / baseStats.entity_count) * 100) / 100
+          : 0,
+      avg_episodes_per_group:
+        groupCount > 0 ? Math.round((baseStats.episode_count / groupCount) * 100) / 100 : 0,
+      storage_backend: backend,
+      data_span_days:
+        baseStats.oldest_episode && baseStats.newest_episode
+          ? Math.round(
+              ((new Date(baseStats.newest_episode).getTime() -
+                new Date(baseStats.oldest_episode).getTime()) /
+                (1000 * 60 * 60 * 24)) *
+                10,
+            ) / 10
+          : null,
+    };
+
+    returnData.push({ json: enhancedStats as unknown as IDataObject });
+  } else if (operation === 'listGroups') {
+    const includeStats = ctx.getNodeParameter('includeStats', i, true) as boolean;
+    const limit = ctx.getNodeParameter('limit', i, 100) as number;
+    const globalStats = await storage.getStats();
+    const allGroupIds = globalStats.group_ids.slice(0, limit);
+
+    if (includeStats) {
+      for (const gid of allGroupIds) {
+        const gStats = await storage.getStats(gid);
+        returnData.push({
+          json: {
+            group_id: gid,
+            entity_count: gStats.entity_count,
+            edge_count: gStats.edge_count,
+            episode_count: gStats.episode_count,
+            entity_types: gStats.entity_types,
+            oldest_episode: gStats.oldest_episode,
+            newest_episode: gStats.newest_episode,
+          },
+        });
+      }
+    } else {
+      for (const gid of allGroupIds) {
+        returnData.push({ json: { group_id: gid } });
+      }
+    }
+
+    if (returnData.length === 0) {
+      returnData.push({
+        json: {
+          message: 'No groups found',
+          total_groups: 0,
+        },
+      });
+    }
+  } else if (operation === 'groupStats') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Group Stats operation',
+        { itemIndex: i },
+      );
+    }
+
+    const gStats = await storage.getStats(groupId);
+    const gData = await storage.exportGraph(groupId);
+
+    const activeEdges = gData.edges.filter((e) => e.expired_at === null).length;
+    const expiredEdges = gData.edges.filter((e) => e.expired_at !== null).length;
+
+    const relationshipTypes: Record<string, number> = {};
+    for (const edge of gData.edges) {
+      relationshipTypes[edge.name] = (relationshipTypes[edge.name] || 0) + 1;
+    }
+
+    returnData.push({
+      json: {
+        group_id: groupId,
+        entity_count: gStats.entity_count,
+        edge_count: gStats.edge_count,
+        episode_count: gStats.episode_count,
+        entity_types: gStats.entity_types,
+        relationship_types: relationshipTypes,
+        active_edge_count: activeEdges,
+        expired_edge_count: expiredEdges,
+        avg_edges_per_entity:
+          gStats.entity_count > 0
+            ? Math.round((gStats.edge_count / gStats.entity_count) * 100) / 100
+            : 0,
+        oldest_episode: gStats.oldest_episode,
+        newest_episode: gStats.newest_episode,
+        data_span_days:
+          gStats.oldest_episode && gStats.newest_episode
+            ? Math.round(
+                ((new Date(gStats.newest_episode).getTime() -
+                  new Date(gStats.oldest_episode).getTime()) /
+                  (1000 * 60 * 60 * 24)) *
+                  10,
+              ) / 10
+            : null,
+      },
+    });
+  }
+}
+
+// =============================================
+// LIFECYCLE
+// =============================================
+
+async function executeLifecycle(
+  ctx: IExecuteFunctions,
+  storage: Awaited<ReturnType<typeof createStorage>>,
+  operation: string,
+  i: number,
+  returnData: INodeExecutionData[],
+): Promise<void> {
+  if (operation === 'applyRetention') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Apply Retention operation',
+        { itemIndex: i },
+      );
+    }
+    const retentionType = ctx.getNodeParameter('retentionType', i) as string;
+    const retentionValue = ctx.getNodeParameter('retentionValue', i) as number;
+
+    const removed = await storage.applyRetention(groupId, {
+      type: retentionType as 'days' | 'max_episodes',
+      value: retentionValue,
+    });
+
+    returnData.push({
+      json: {
+        success: true,
+        operation: 'applyRetention',
+        group_id: groupId,
+        policy: { type: retentionType, value: retentionValue },
+        episodes_removed: removed,
+      },
+    });
+  } else if (operation === 'clearGroup') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Clear Group operation',
+        {
+          itemIndex: i,
+          description: 'Provide the session/group ID whose data you want to delete.',
+        },
+      );
+    }
+    await storage.clearGroup(groupId);
+    returnData.push({
+      json: { success: true, operation: 'clearGroup', group_id: groupId },
+    });
+  } else if (operation === 'bulkClearGroups') {
+    const confirmDestructive = ctx.getNodeParameter('confirmDestructive', i, false) as boolean;
+    if (!confirmDestructive) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Confirm Destructive must be enabled to proceed with Bulk Clear Groups',
+        {
+          itemIndex: i,
+          description: 'This is a safety measure. Enable "Confirm Destructive" to proceed.',
+        },
+      );
+    }
+
+    const groupIdsRaw = ctx.getNodeParameter('groupIds', i) as unknown;
+    let groupIds: string[];
+    if (Array.isArray(groupIdsRaw)) {
+      groupIds = groupIdsRaw.filter((id): id is string => typeof id === 'string' && id.length > 0);
+    } else {
+      throw new NodeOperationError(ctx.getNode(), 'Group IDs must be a JSON array of strings', {
+        itemIndex: i,
+      });
+    }
+
+    if (groupIds.length === 0) {
+      throw new NodeOperationError(ctx.getNode(), 'Group IDs array is empty', {
+        itemIndex: i,
+      });
+    }
+
+    const cleared: string[] = [];
+    const failed: Array<{ group_id: string; error: string }> = [];
+
+    for (const gid of groupIds) {
+      try {
+        await storage.clearGroup(gid);
+        cleared.push(gid);
+      } catch (err) {
+        failed.push({ group_id: gid, error: (err as Error).message });
+      }
+    }
+
+    returnData.push({
+      json: {
+        success: failed.length === 0,
+        operation: 'bulkClearGroups',
+        cleared,
+        failed,
+        total_cleared: cleared.length,
+        total_failed: failed.length,
+      },
+    });
+  } else if (operation === 'clearAll') {
+    await storage.clearAll();
+    returnData.push({
+      json: { success: true, operation: 'clearAll' },
+    });
+  }
+}
+
+// =============================================
+// HYGIENE
+// =============================================
+
+async function executeHygiene(
+  ctx: IExecuteFunctions,
+  storage: Awaited<ReturnType<typeof createStorage>>,
+  operation: string,
+  i: number,
+  returnData: INodeExecutionData[],
+): Promise<void> {
+  if (operation === 'orphanedEntities') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Orphaned Entities operation',
+        { itemIndex: i },
+      );
+    }
+    const deleteOrphans = ctx.getNodeParameter('deleteOrphans', i, false) as boolean;
+
+    const entities = await storage.listEntities(groupId, { limit: 10000 });
+    const orphaned: Array<{
+      uuid: string;
+      name: string;
+      entity_type: string;
+      summary: string;
+      created_at: string;
+    }> = [];
+
+    for (const entity of entities) {
+      const edges = await storage.getEdgesForEntity(entity.uuid);
+      if (edges.length === 0) {
+        orphaned.push({
+          uuid: entity.uuid,
+          name: entity.name,
+          entity_type: entity.entity_type,
+          summary: entity.summary,
+          created_at: entity.created_at,
+        });
+      }
+    }
+
+    if (deleteOrphans) {
+      for (const o of orphaned) {
+        await storage.deleteEntity(o.uuid);
+      }
+    }
+
+    returnData.push({
+      json: {
+        operation: 'orphanedEntities',
+        group_id: groupId,
+        orphaned,
+        total_orphaned: orphaned.length,
+        deleted: deleteOrphans,
+      },
+    });
+  } else if (operation === 'duplicateEntities') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Duplicate Entities operation',
+        { itemIndex: i },
+      );
+    }
+
+    const entities = await storage.listEntities(groupId, { limit: 10000 });
+    const nameMap = new Map<string, typeof entities>();
+
+    for (const entity of entities) {
+      const key = entity.name.toLowerCase().trim();
+      if (!nameMap.has(key)) nameMap.set(key, []);
+      nameMap.get(key)!.push(entity);
+    }
+
+    const duplicateGroups: Array<{
+      canonical_name: string;
+      count: number;
+      entities: Array<{
+        uuid: string;
+        name: string;
+        entity_type: string;
+        edge_count: number;
+        created_at: string;
+      }>;
+    }> = [];
+
+    for (const [canonicalName, group] of nameMap) {
+      if (group.length > 1) {
+        const enriched = [];
+        for (const e of group) {
+          const edges = await storage.getEdgesForEntity(e.uuid);
+          enriched.push({
+            uuid: e.uuid,
+            name: e.name,
+            entity_type: e.entity_type,
+            edge_count: edges.length,
+            created_at: e.created_at,
+          });
+        }
+        duplicateGroups.push({
+          canonical_name: canonicalName,
+          count: group.length,
+          entities: enriched,
+        });
+      }
+    }
+
+    returnData.push({
+      json: {
+        operation: 'duplicateEntities',
+        group_id: groupId,
+        duplicate_groups: duplicateGroups,
+        total_duplicate_groups: duplicateGroups.length,
+      },
+    });
+  } else if (operation === 'expireStaleEdges') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Expire Stale Edges operation',
+        { itemIndex: i },
+      );
+    }
+    const dryRun = ctx.getNodeParameter('dryRun', i, true) as boolean;
+
+    const data = await storage.exportGraph(groupId);
+    const entityUuids = new Set(data.entities.map((e) => e.uuid));
+    const staleEdges: Array<{
+      uuid: string;
+      name: string;
+      fact: string;
+      reason: string;
+    }> = [];
+
+    for (const edge of data.edges) {
+      if (edge.expired_at) continue;
+
+      if (!entityUuids.has(edge.source_node_uuid) || !entityUuids.has(edge.target_node_uuid)) {
+        staleEdges.push({
+          uuid: edge.uuid,
+          name: edge.name,
+          fact: edge.fact,
+          reason: 'dangling_reference',
+        });
+      } else if (edge.invalid_at && new Date(edge.invalid_at) < new Date()) {
+        staleEdges.push({
+          uuid: edge.uuid,
+          name: edge.name,
+          fact: edge.fact,
+          reason: 'past_invalid_at',
+        });
+      }
+    }
+
+    if (!dryRun) {
+      for (const edge of staleEdges) {
+        await storage.updateEdge(edge.uuid, { expired_at: nowIso() });
+      }
+    }
+
+    returnData.push({
+      json: {
+        operation: 'expireStaleEdges',
+        group_id: groupId,
+        dry_run: dryRun,
+        stale_edges: staleEdges,
+        total_stale: staleEdges.length,
+        expired: !dryRun,
+      },
+    });
+  }
+}
+
+// =============================================
+// PORTABILITY
+// =============================================
+
+async function executePortability(
+  ctx: IExecuteFunctions,
+  storage: Awaited<ReturnType<typeof createStorage>>,
+  operation: string,
+  i: number,
+  returnData: INodeExecutionData[],
+): Promise<void> {
+  if (operation === 'export') {
+    const groupId = ctx.getNodeParameter('groupIdFilter', i, '') as string;
+    const data = await storage.exportGraph(groupId || undefined);
+    returnData.push({ json: data as unknown as IDataObject });
+  } else if (operation === 'import') {
+    const importData = ctx.getNodeParameter('importData', i) as unknown;
+    if (
+      !importData ||
+      typeof importData !== 'object' ||
+      !Array.isArray((importData as GraphData).entities) ||
+      !Array.isArray((importData as GraphData).edges) ||
+      !Array.isArray((importData as GraphData).episodes)
+    ) {
+      throw new NodeOperationError(ctx.getNode(), 'Invalid import data format', {
+        itemIndex: i,
+        description:
+          'Import data must be a JSON object with "entities", "edges", and "episodes" arrays. Use data from a previous Export operation.',
+      });
+    }
+    await storage.importGraph(importData as GraphData);
+    const graphData = importData as GraphData;
+    returnData.push({
+      json: {
+        success: true,
+        operation: 'import',
+        imported: {
+          entities: graphData.entities.length,
+          edges: graphData.edges.length,
+          episodes: graphData.episodes.length,
+        },
+      },
+    });
+  }
+}
+
+// =============================================
+// ANALYSIS
+// =============================================
+
+async function executeAnalysis(
+  ctx: IExecuteFunctions,
+  storage: Awaited<ReturnType<typeof createStorage>>,
+  operation: string,
+  i: number,
+  returnData: INodeExecutionData[],
+): Promise<void> {
+  if (operation === 'detectCommunities') {
+    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Detect Communities operation',
+        { itemIndex: i },
+      );
+    }
+
+    const minCommunitySize = ctx.getNodeParameter('minCommunitySize', i, 2) as number;
+    const generateSummaries = ctx.getNodeParameter('generateSummaries', i, false) as boolean;
+
+    const detector = new CommunityDetector(storage);
+    let result = await detector.detect(groupId, { minCommunitySize });
+
+    if (generateSummaries) {
+      const extractionCreds = await ctx.getCredentials('engramExtractionApi');
+      const model = ctx.getNodeParameter('summaryModel', i, '') as string;
+      const concurrency = ctx.getNodeParameter('summaryConcurrency', i, 3) as number;
+
+      if (!model) {
+        throw new NodeOperationError(
+          ctx.getNode(),
+          'Summary Model is required when Generate Summaries is enabled',
+          { itemIndex: i },
+        );
+      }
+
+      const llm = new LlmClient({
+        apiKey: extractionCreds.apiKey as string,
+        baseUrl: extractionCreds.baseUrl as string,
+        model,
+      });
+      const summarizer = new CommunitySummarizer(llm);
+      result = await summarizer.summarizeAll(result, concurrency);
+    }
+
+    returnData.push({
+      json: {
+        total_entities: result.total_entities,
+        unclustered_entities: result.unclustered_entities,
+        detection_method: result.detection_method,
+        community_count: result.communities.length,
+        communities: result.communities.map((c) => ({
+          id: c.id,
+          label: c.label,
+          summary: c.summary,
+          entity_count: c.entity_count,
+          edge_count: c.edge_count,
+          key_entities: c.key_entities,
+          members: c.members.map((m) => ({
+            uuid: m.entity.uuid,
+            name: m.entity.name,
+            entity_type: m.entity.entity_type,
+            edge_count: m.edges.length,
+          })),
+        })),
+      },
+    });
   }
 }

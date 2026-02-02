@@ -94,17 +94,56 @@ export function deduplicationUser(
   return parts.join('\n');
 }
 
-export const CONTRADICTION_SYSTEM = [
-  'You are a contradiction detection system. Determine if a new fact contradicts an existing fact.',
+export const EDGE_DEDUP_SYSTEM = [
+  'You are an edge deduplication system. Determine if a new fact about a relationship between two entities is a duplicate of an existing fact.',
   '',
   'Rules:',
-  '- A contradiction means the new fact makes the old fact no longer true',
-  '- Example: "Alice lives in London" contradicts "Alice lives in Tokyo" (can only live in one place)',
-  '- Example: "Alice knows Python" does NOT contradict "Alice knows JavaScript" (can know both)',
+  '- A duplicate means the new fact describes the same relationship, possibly with updated details',
+  '- If duplicate, provide a merged_fact that keeps the most current and complete information',
+  '- Example: "Alice works at Google as a senior engineer" and "Alice works at Google as VP of Engineering" are duplicates (same employment, role updated). merged_fact: "Alice works at Google as VP of Engineering"',
+  '- Example: "Alice lives in London" and "Alice has a flat in London" are duplicates (same residency). merged_fact: "Alice lives in London and has a flat there"',
+  '- Example: "Alice knows Python" and "Alice knows Java" are NOT duplicates (different skills)',
+  '- Example: "Bob earns 120k" and "Bob earns 250k" are duplicates (same salary relationship, amount updated). merged_fact: "Bob earns 250k"',
   '- Return ONLY valid JSON',
   '',
   'Output format:',
-  '{"is_contradiction": true, "explanation": "The new fact about living location replaces the old one"}',
+  '{"is_duplicate": true, "merged_fact": "The most current and complete version of the fact"}',
+].join('\n');
+
+export function edgeDedupUser(
+  existingFact: string,
+  newFact: string,
+  edgeName: string,
+  sourceEntity: string,
+  targetEntity: string,
+): string {
+  const parts = [
+    'Is the new fact a duplicate of the existing fact?',
+    '',
+    'Entities: ' + sourceEntity + ' -> ' + targetEntity,
+    'Relationship type: ' + edgeName,
+    'Existing fact: ' + existingFact,
+    'New fact: ' + newFact,
+  ];
+  return parts.join('\n');
+}
+
+export const CONTRADICTION_SYSTEM = [
+  'You are a contradiction detection system. Determine if a new fact contradicts an existing fact between the same entities.',
+  '',
+  'Rules:',
+  '- A contradiction means the new fact makes the old fact no longer true or no longer current',
+  '- Consider the relationship types when provided. A change in relationship type between the same entities is a strong signal of contradiction.',
+  '- Temporal/status changes count as contradictions: if someone WORKS_AT a place and a new fact says they WORKED_AT that place (past tense), the current employment is contradicted.',
+  '- Example: "Alice lives in London" (LIVES_IN) contradicts "Alice lives in Tokyo" (LIVES_IN) — can only live in one place',
+  '- Example: "Bob works at Google" (WORKS_AT) is contradicted by "Bob worked at Google before quitting" (WORKED_AT) — present-tense employment is no longer true',
+  '- Example: "Alice knows Python" (KNOWS) does NOT contradict "Alice knows JavaScript" (KNOWS) — can know both',
+  '- Example: "Alice manages Bob" (MANAGES) does NOT contradict "Alice mentors Bob" (MENTORS) — different coexisting relationships',
+  '- When relationship types differ, ask: does the new relationship type imply the old one is no longer active?',
+  '- Return ONLY valid JSON',
+  '',
+  'Output format:',
+  '{"is_contradiction": true, "explanation": "The new fact about past employment replaces the current employment status"}',
 ].join('\n');
 
 export function contradictionUser(
@@ -112,13 +151,60 @@ export function contradictionUser(
   newFact: string,
   sourceEntity: string,
   targetEntity: string,
+  existingEdgeName?: string,
+  newEdgeName?: string,
 ): string {
   const parts = [
     'Does the new fact contradict the existing fact?',
     '',
     'Entities: ' + sourceEntity + ' -> ' + targetEntity,
-    'Existing fact: ' + existingFact,
-    'New fact: ' + newFact,
+  ];
+
+  if (existingEdgeName) {
+    parts.push('Existing relationship type: ' + existingEdgeName);
+  }
+  parts.push('Existing fact: ' + existingFact);
+
+  if (newEdgeName) {
+    parts.push('New relationship type: ' + newEdgeName);
+  }
+  parts.push('New fact: ' + newFact);
+
+  return parts.join('\n');
+}
+
+export const CROSS_NAME_EDGE_DEDUP_SYSTEM = [
+  'You are an edge deduplication system. Determine if two facts about the same entities describe the same underlying relationship, even though they use different relationship names.',
+  '',
+  'Rules:',
+  '- Two edges are duplicates if they describe the SAME core relationship, even with different labels',
+  '- Example: "WORKS_AT" and "EMPLOYED_BY" between Person->Company are duplicates (same employment relationship)',
+  '- Example: "HAS_ROLE" and "HOLDS_POSITION" between Person->Company are duplicates (same position relationship)',
+  '- Example: "WORKS_AT" and "MANAGES" between Person->Company are NOT duplicates (employment vs management are different relationships)',
+  '- Example: "LIVES_IN" and "RESIDES_AT" between Person->City are duplicates (same residency relationship)',
+  '- Example: "VISITED" and "LIVES_IN" between Person->City are NOT duplicates (visiting vs living are fundamentally different)',
+  '- When in doubt, say NOT duplicate — it is safer to keep both edges than to incorrectly merge',
+  '- If duplicate, provide a merged_fact combining the most complete and current information from both facts',
+  '- Return ONLY valid JSON',
+  '',
+  'Output format:',
+  '{"is_duplicate": true, "merged_fact": "The most current and complete version of the fact"}',
+].join('\n');
+
+export function crossNameEdgeDedupUser(
+  existingFact: string,
+  newFact: string,
+  existingEdgeName: string,
+  newEdgeName: string,
+  sourceEntity: string,
+  targetEntity: string,
+): string {
+  const parts = [
+    'Are these two relationships about the same entities duplicates, despite having different names?',
+    '',
+    'Entities: ' + sourceEntity + ' -> ' + targetEntity,
+    'Existing relationship: ' + existingEdgeName + ' — "' + existingFact + '"',
+    'New relationship: ' + newEdgeName + ' — "' + newFact + '"',
   ];
   return parts.join('\n');
 }

@@ -30,13 +30,22 @@ export class ContradictionDetector {
     newFact: string,
     sourceEntity: string,
     targetEntity: string,
+    existingEdgeName?: string,
+    newEdgeName?: string,
   ): Promise<ContradictionResolution> {
     try {
       const result = await this.llm.chatJson<ContradictionResult>([
         { role: 'system', content: CONTRADICTION_SYSTEM },
         {
           role: 'user',
-          content: contradictionUser(existingFact, newFact, sourceEntity, targetEntity),
+          content: contradictionUser(
+            existingFact,
+            newFact,
+            sourceEntity,
+            targetEntity,
+            existingEdgeName,
+            newEdgeName,
+          ),
         },
       ]);
 

@@ -73,6 +73,9 @@
     ]
   },
   "dependencies": {
+    "@langchain/community": "^1.0.5",
+    "@langchain/core": "^1.1.8",
+    "@langchain/textsplitters": "^1.0.1",
     "graphology": "^0.25.4",
     "graphology-types": "^0.24.7",
     "minisearch": "^7.1.0",
@@ -81,9 +84,6 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@langchain/community": "^1.0.5",
-    "@langchain/core": "^1.1.8",
-    "@langchain/textsplitters": "^1.0.1",
     "@types/jest": "^29.5.12",
     "@types/lodash": "^4.17.23",
     "@types/node": "^22.2.0",
@@ -105,8 +105,6 @@
     "typescript": "^5.5.4"
   },
   "peerDependencies": {
-    "@langchain/core": ">=0.2.0",
-    "@langchain/community": ">=0.2.0",
     "n8n-core": ">=1.57.0",
     "n8n-workflow": "*"
   }

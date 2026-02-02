@@ -5,6 +5,7 @@ import { EntityExtractor } from './EntityExtractor';
 import { RelationshipExtractor } from './RelationshipExtractor';
 import { EntityDeduplicator } from './EntityDeduplicator';
 import { ContradictionDetector } from './ContradictionDetector';
+import { EdgeDeduplicator } from './EdgeDeduplicator';
 import { EmbeddingService, type EmbeddingConfig } from '../embeddings';
 import { nowIso } from '../utils/temporal';
 
@@ -31,6 +32,7 @@ export class ExtractionPipeline {
   private relationshipExtractor: RelationshipExtractor;
   private deduplicator: EntityDeduplicator;
   private contradictionDetector: ContradictionDetector;
+  private edgeDeduplicator: EdgeDeduplicator;
   private embeddingService: EmbeddingService | null = null;
   private entityTypes: string[];
   private groupId: string;
@@ -42,6 +44,7 @@ export class ExtractionPipeline {
     this.relationshipExtractor = new RelationshipExtractor(llm);
     this.deduplicator = new EntityDeduplicator(llm);
     this.contradictionDetector = new ContradictionDetector(llm);
+    this.edgeDeduplicator = new EdgeDeduplicator(llm);
     this.entityTypes = config.entityTypes;
     this.groupId = config.groupId;
 
@@ -133,6 +136,34 @@ export class ExtractionPipeline {
     });
   }
 
+  private async expireContradictedEdges(
+    edges: import('../schemas').EntityEdge[],
+    newFact: string,
+    sourceEntityName: string,
+    targetEntityName: string,
+    newEdgeName: string,
+  ): Promise<void> {
+    for (const existingEdge of edges) {
+      if (existingEdge.expired_at) continue; // Already expired
+
+      const resolution = await this.contradictionDetector.detect(
+        existingEdge.fact,
+        newFact,
+        sourceEntityName,
+        targetEntityName,
+        existingEdge.name,
+        newEdgeName,
+      );
+
+      if (resolution.isContradiction && resolution.expiredAt) {
+        await this.storage.updateEdge(existingEdge.uuid, {
+          expired_at: resolution.expiredAt,
+          invalid_at: resolution.expiredAt,
+        });
+      }
+    }
+  }
+
   private async persistRelationship(
     rel: {
       source_entity: string;
@@ -150,26 +181,149 @@ export class ExtractionPipeline {
 
     if (!sourceEntity || !targetEntity) return;
 
-    // Check for contradictions with existing edges between these entities
-    const existingEdges = await this.storage.getEdgesBetween(sourceEntity.uuid, targetEntity.uuid);
+    const normalizedNewEdgeName = rel.name.toUpperCase().replace(/\s+/g, '_');
 
-    for (const existingEdge of existingEdges) {
-      if (existingEdge.expired_at) continue; // Already expired
+    // --- Fetch edges between this pair ONCE (reused by dedup + contradiction) ---
+    let samePairEdges: import('../schemas').EntityEdge[] = [];
+    try {
+      samePairEdges = await this.storage.getEdgesBetween(sourceEntity.uuid, targetEntity.uuid);
+    } catch (error) {
+      console.warn(
+        'Engram: Failed to fetch edges between',
+        sourceEntity.name,
+        'and',
+        targetEntity.name + ':',
+        (error as Error).message,
+      );
+      // If we can't fetch existing edges, skip dedup/contradiction and just create
+    }
 
-      const resolution = await this.contradictionDetector.detect(
-        existingEdge.fact,
+    // --- Same-Name Edge Deduplication ---
+    // Check if an equivalent edge already exists between the same pair with the same name.
+    // If so, update in-place rather than creating a duplicate.
+    try {
+      const existingMatchingEdge = samePairEdges.find(
+        (e) => e.name === normalizedNewEdgeName && !e.expired_at,
+      );
+
+      if (existingMatchingEdge) {
+        const { isDuplicate, mergedFact } = await this.edgeDeduplicator.isDuplicate(
+          existingMatchingEdge.fact,
+          rel.fact,
+          normalizedNewEdgeName,
+          sourceEntity.name,
+          targetEntity.name,
+        );
+
+        if (isDuplicate) {
+          const updates = await this.buildEdgeUpdates(
+            existingMatchingEdge,
+            mergedFact || rel.fact,
+            episodeUuid,
+          );
+          if (Object.keys(updates).length > 0) {
+            await this.storage.updateEdge(existingMatchingEdge.uuid, updates);
+          }
+          return; // Deduplicated — skip contradiction detection and creation
+        }
+      }
+    } catch (error) {
+      console.warn(
+        'Engram: Edge deduplication failed for',
+        sourceEntity.name,
+        '->',
+        targetEntity.name + ':',
+        (error as Error).message,
+      );
+      // Fall through to cross-name dedup, then contradiction detection + creation
+    }
+
+    // --- Cross-Name Edge Deduplication ---
+    // Check if an edge with a DIFFERENT name but the same semantic meaning
+    // already exists between this pair. Example: WORKS_AT already exists,
+    // HOLDS_POSITION is extracted — they describe the same employment relationship.
+    // If found, update the existing edge's fact and return early.
+    try {
+      const crossNameCandidates = samePairEdges.filter(
+        (e) => e.name !== normalizedNewEdgeName && !e.expired_at,
+      );
+
+      if (crossNameCandidates.length > 0) {
+        // Check first active candidate (simplest, lowest risk)
+        const candidate = crossNameCandidates[0];
+        const { isDuplicate, mergedFact } = await this.edgeDeduplicator.isDuplicateCrossName(
+          candidate.fact,
+          rel.fact,
+          candidate.name,
+          normalizedNewEdgeName,
+          sourceEntity.name,
+          targetEntity.name,
+        );
+
+        if (isDuplicate) {
+          const updates = await this.buildEdgeUpdates(
+            candidate,
+            mergedFact || rel.fact,
+            episodeUuid,
+          );
+          if (Object.keys(updates).length > 0) {
+            await this.storage.updateEdge(candidate.uuid, updates);
+          }
+          return; // Cross-name deduplicated — skip contradiction detection and creation
+        }
+      }
+    } catch (error) {
+      console.warn(
+        'Engram: Cross-name edge deduplication failed for',
+        sourceEntity.name,
+        '->',
+        targetEntity.name + ':',
+        (error as Error).message,
+      );
+      // Fall through to contradiction detection + creation
+    }
+
+    // --- Contradiction Detection ---
+    try {
+      // Pass 1: Check edges between the same entity pair (any edge name).
+      // Catches type changes like WORKS_AT → WORKED_AT on the same pair.
+      // Reuses samePairEdges fetched above (no duplicate storage call).
+      await this.expireContradictedEdges(
+        samePairEdges,
         rel.fact,
         sourceEntity.name,
         targetEntity.name,
+        normalizedNewEdgeName,
       );
 
-      if (resolution.isContradiction && resolution.expiredAt) {
-        // Expire the contradicted edge
-        await this.storage.updateEdge(existingEdge.uuid, {
-          expired_at: resolution.expiredAt,
-          invalid_at: resolution.expiredAt,
-        });
-      }
+      // Pass 2: Check outgoing edges from source with the same edge name
+      // but pointing to a DIFFERENT target.
+      // Catches e.g. LIVES_IN London → LIVES_IN Berlin.
+      const checkedUuids = new Set(samePairEdges.map((e) => e.uuid));
+      const allSourceEdges = await this.storage.getEdgesForEntity(sourceEntity.uuid);
+      const crossTargetEdges = allSourceEdges.filter(
+        (e) =>
+          e.source_node_uuid === sourceEntity.uuid &&
+          e.name === normalizedNewEdgeName &&
+          e.target_node_uuid !== targetEntity.uuid &&
+          !e.expired_at &&
+          !checkedUuids.has(e.uuid),
+      );
+      await this.expireContradictedEdges(
+        crossTargetEdges,
+        rel.fact,
+        sourceEntity.name,
+        targetEntity.name,
+        normalizedNewEdgeName,
+      );
+    } catch (error) {
+      console.warn(
+        'Engram: Contradiction detection failed for edge between',
+        sourceEntity.name,
+        'and',
+        targetEntity.name + ':',
+        (error as Error).message,
+      );
     }
 
     // Create the new edge (with optional fact embedding)
@@ -187,12 +341,48 @@ export class ExtractionPipeline {
       group_id: this.groupId,
       source_node_uuid: sourceEntity.uuid,
       target_node_uuid: targetEntity.uuid,
-      name: rel.name.toUpperCase().replace(/\s+/g, '_'),
+      name: normalizedNewEdgeName,
       fact: rel.fact,
       fact_embedding: factEmbedding ?? null,
       valid_at: nowIso(),
       episodes: episodeUuid ? [episodeUuid] : [],
     });
+  }
+
+  /**
+   * Build an updates object for an edge dedup merge (same-name or cross-name).
+   * Updates fact + embedding + episodes as needed.
+   */
+  private async buildEdgeUpdates(
+    existingEdge: import('../schemas').EntityEdge,
+    effectiveFact: string,
+    episodeUuid?: string,
+  ): Promise<Record<string, unknown>> {
+    const updates: Record<string, unknown> = {};
+
+    if (effectiveFact !== existingEdge.fact) {
+      updates.fact = effectiveFact;
+
+      // Regenerate fact embedding if service available
+      if (this.embeddingService) {
+        try {
+          const result = await this.embeddingService.embed(effectiveFact);
+          updates.fact_embedding = result.embedding;
+        } catch (error) {
+          console.warn('Engram: Failed to regenerate edge embedding:', (error as Error).message);
+        }
+      }
+    }
+
+    // Merge episode if provided
+    if (episodeUuid) {
+      const existingEpisodes = existingEdge.episodes || [];
+      if (!existingEpisodes.includes(episodeUuid)) {
+        updates.episodes = [...existingEpisodes, episodeUuid];
+      }
+    }
+
+    return updates;
   }
 
   private findEntity(

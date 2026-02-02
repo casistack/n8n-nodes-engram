@@ -59,7 +59,7 @@ echo "==> Uninstalling old version from n8n..."
 
 # --- Install new version ---
 echo "==> Installing $TGZ_FILE into n8n..."
-(cd "$N8N_NODES_DIR" && npm install "$PROJECT_DIR/$TGZ_FILE" --quiet)
+(cd "$N8N_NODES_DIR" && npm install "$PROJECT_DIR/$TGZ_FILE" --quiet --legacy-peer-deps)
 
 # --- Register in n8n database (Community Nodes) ---
 if [[ -f "$N8N_DB" ]]; then
