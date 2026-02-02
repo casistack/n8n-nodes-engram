@@ -743,7 +743,7 @@ async function executeEntityOperation(
   returnData: INodeExecutionData[],
 ): Promise<void> {
   if (operation === 'create') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const name = ctx.getNodeParameter('entityName', i) as string;
     const entityType = ctx.getNodeParameter('entityType', i, '') as string;
     const summary = ctx.getNodeParameter('summary', i, '') as string;
@@ -787,7 +787,7 @@ async function executeEntityOperation(
     const entity = await storage.updateEntity(uuid, updates);
     returnData.push({ json: entity });
   } else if (operation === 'search') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const query = ctx.getNodeParameter('query', i) as string;
     const limit = ctx.getNodeParameter('limit', i) as number;
     const minScore = ctx.getNodeParameter('minRelevanceScore', i, 0) as number;
@@ -814,7 +814,7 @@ async function executeEntityOperation(
     const entity = await storage.getEntity(uuid);
     if (entity) returnData.push({ json: entity });
   } else if (operation === 'getByName') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const name = ctx.getNodeParameter('entityName', i) as string;
     if (!name) {
       throw new NodeOperationError(ctx.getNode(), 'Entity Name is required', { itemIndex: i });
@@ -822,7 +822,7 @@ async function executeEntityOperation(
     const entity = await storage.getEntityByName(name, groupId);
     if (entity) returnData.push({ json: entity });
   } else if (operation === 'list') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const limit = ctx.getNodeParameter('limit', i) as number;
     const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
     const entities = await storage.listEntities(groupId, {
@@ -850,7 +850,7 @@ async function executeRelationshipOperation(
   returnData: INodeExecutionData[],
 ): Promise<void> {
   if (operation === 'create') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const sourceUuid = ctx.getNodeParameter('sourceUuid', i) as string;
     const targetUuid = ctx.getNodeParameter('targetUuid', i) as string;
     const name = ctx.getNodeParameter('relationshipName', i, '') as string;
@@ -910,7 +910,7 @@ async function executeRelationshipOperation(
     const edge = await storage.updateEdge(uuid, updates);
     returnData.push({ json: edge });
   } else if (operation === 'search') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const query = ctx.getNodeParameter('query', i) as string;
     const limit = ctx.getNodeParameter('limit', i) as number;
     const minScore = ctx.getNodeParameter('minRelevanceScore', i, 0) as number;
@@ -960,7 +960,7 @@ async function executeRelationshipOperation(
       returnData.push({ json: e });
     }
   } else if (operation === 'getChangelog') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const sinceDate = ctx.getNodeParameter('sinceDate', i) as string;
     const limit = ctx.getNodeParameter('limit', i, 50) as number;
 
@@ -1005,14 +1005,14 @@ async function executeEpisodeOperation(
     const episode = await storage.getEpisode(uuid);
     if (episode) returnData.push({ json: episode });
   } else if (operation === 'getRecent') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const limit = ctx.getNodeParameter('limit', i) as number;
     const episodes = await storage.getRecentEpisodes(groupId, limit);
     for (const ep of episodes) {
       returnData.push({ json: ep });
     }
   } else if (operation === 'getByDateRange') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const fromDate = ctx.getNodeParameter('fromDate', i) as string;
     const toDate = ctx.getNodeParameter('toDate', i) as string;
     const limit = ctx.getNodeParameter('limit', i, 50) as number;
@@ -1028,7 +1028,7 @@ async function executeEpisodeOperation(
       returnData.push({ json: ep });
     }
   } else if (operation === 'getCount') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const count = await storage.getEpisodeCount(groupId);
     returnData.push({ json: { group_id: groupId, episode_count: count } });
   }
@@ -1083,7 +1083,7 @@ async function executeTraversalOperation(
       },
     });
   } else if (operation === 'bfsFromEpisodes') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(ctx.getNode(), 'Group ID is required', { itemIndex: i });
     }

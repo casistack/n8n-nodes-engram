@@ -554,7 +554,7 @@ async function executeMonitoring(
   backend: string,
 ): Promise<void> {
   if (operation === 'stats') {
-    const groupId = ctx.getNodeParameter('groupIdFilter', i, '') as string;
+    const groupId = (ctx.getNodeParameter('groupIdFilter', i, '') as string).trim();
     const baseStats = await storage.getStats(groupId || undefined);
     const data = await storage.exportGraph(groupId || undefined);
 
@@ -622,7 +622,7 @@ async function executeMonitoring(
       });
     }
   } else if (operation === 'groupStats') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(
         ctx.getNode(),
@@ -684,7 +684,7 @@ async function executeLifecycle(
   returnData: INodeExecutionData[],
 ): Promise<void> {
   if (operation === 'applyRetention') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(
         ctx.getNode(),
@@ -710,7 +710,7 @@ async function executeLifecycle(
       },
     });
   } else if (operation === 'clearGroup') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(
         ctx.getNode(),
@@ -796,7 +796,7 @@ async function executeHygiene(
   returnData: INodeExecutionData[],
 ): Promise<void> {
   if (operation === 'orphanedEntities') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(
         ctx.getNode(),
@@ -844,7 +844,7 @@ async function executeHygiene(
       },
     });
   } else if (operation === 'duplicateEntities') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(
         ctx.getNode(),
@@ -904,7 +904,7 @@ async function executeHygiene(
       },
     });
   } else if (operation === 'expireStaleEdges') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(
         ctx.getNode(),
@@ -974,7 +974,7 @@ async function executePortability(
   returnData: INodeExecutionData[],
 ): Promise<void> {
   if (operation === 'export') {
-    const groupId = ctx.getNodeParameter('groupIdFilter', i, '') as string;
+    const groupId = (ctx.getNodeParameter('groupIdFilter', i, '') as string).trim();
     const data = await storage.exportGraph(groupId || undefined);
     returnData.push({ json: data as unknown as IDataObject });
   } else if (operation === 'import') {
@@ -1020,7 +1020,7 @@ async function executeAnalysis(
   returnData: INodeExecutionData[],
 ): Promise<void> {
   if (operation === 'detectCommunities') {
-    const groupId = ctx.getNodeParameter('groupId', i) as string;
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
       throw new NodeOperationError(
         ctx.getNode(),

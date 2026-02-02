@@ -148,7 +148,7 @@ export function getSessionId(
     }
   }
 
-  return sessionId;
+  return sessionId.trim();
 }
 
 export async function logAiEvent(
