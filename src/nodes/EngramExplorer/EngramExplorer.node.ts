@@ -10,6 +10,8 @@ import {
 import { createStorage } from '../../storage/StorageFactory';
 import { HybridSearchEngine } from '../../search/HybridSearchEngine';
 import { nowIso } from '../../utils/temporal';
+import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
+import { customStoragePathProperty } from '../../descriptions';
 import { GraphTraverser } from '../../traversal/GraphTraverser';
 import { EpisodeTraverser } from '../../traversal/EpisodeTraverser';
 
@@ -48,6 +50,7 @@ export class EngramExplorer implements INodeType {
         ],
         default: 'embedded',
       },
+      customStoragePathProperty,
       {
         displayName: 'Resource',
         name: 'resource',
@@ -694,9 +697,22 @@ export class EngramExplorer implements INodeType {
       });
     } else {
       const workflowId = this.getWorkflow().id ?? 'default';
+      const customPath = this.getNodeParameter('customStoragePath', 0, '') as string;
+      const persistPath = resolveStoragePath({
+        customStoragePath: customPath,
+        workflowId,
+      });
+
+      migrateStorageIfNeeded({
+        newPath: persistPath,
+        workflowId,
+        staticData: this.getWorkflowStaticData('node'),
+        logger: this.logger,
+      });
+
       storage = createStorage({
         backend: 'embedded',
-        persistPath: `engram-data/${workflowId}-engram.json`,
+        persistPath,
       });
     }
     await storage.initialize();

@@ -11,6 +11,8 @@ import {
 import { createStorage } from '../../storage/StorageFactory';
 import type { GraphData } from '../../schemas';
 import { nowIso } from '../../utils/temporal';
+import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
+import { customStoragePathProperty } from '../../descriptions';
 import { CommunityDetector } from '../../community/CommunityDetector';
 import { CommunitySummarizer } from '../../community/CommunitySummarizer';
 import { LlmClient } from '../../extraction/LlmClient';
@@ -59,6 +61,7 @@ export class EngramAdmin implements INodeType {
         ],
         default: 'embedded',
       },
+      customStoragePathProperty,
       // ===== Resource =====
       {
         displayName: 'Resource',
@@ -481,9 +484,22 @@ export class EngramAdmin implements INodeType {
       });
     } else {
       const workflowId = this.getWorkflow().id ?? 'default';
+      const customPath = this.getNodeParameter('customStoragePath', 0, '') as string;
+      const persistPath = resolveStoragePath({
+        customStoragePath: customPath,
+        workflowId,
+      });
+
+      migrateStorageIfNeeded({
+        newPath: persistPath,
+        workflowId,
+        staticData: this.getWorkflowStaticData('node'),
+        logger: this.logger,
+      });
+
       storage = createStorage({
         backend: 'embedded',
-        persistPath: `engram-data/${workflowId}-engram.json`,
+        persistPath,
       });
     }
     await storage.initialize();

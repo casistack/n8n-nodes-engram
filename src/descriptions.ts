@@ -41,3 +41,19 @@ export const contextWindowLengthProperty: INodeProperties = {
   default: 5,
   hint: 'How many past interactions the model receives as context',
 };
+
+export const customStoragePathProperty: INodeProperties = {
+  displayName: 'Custom Storage Path',
+  name: 'customStoragePath',
+  type: 'string',
+  default: '',
+  placeholder: '/data/engram',
+  // eslint-disable-next-line n8n-nodes-base/node-param-description-miscased-id
+  description:
+    'Custom directory for graph data files. Leave empty to use the default n8n storage directory (~/.n8n/storage/). Set this when using Docker with custom volume mounts.',
+  displayOptions: {
+    show: {
+      backend: ['embedded'],
+    },
+  },
+};

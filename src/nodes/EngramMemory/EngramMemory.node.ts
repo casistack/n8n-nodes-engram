@@ -16,8 +16,9 @@ import {
   sessionIdOption,
   sessionKeyProperty,
   contextWindowLengthProperty,
+  customStoragePathProperty,
 } from '../../descriptions';
-import { getSessionId } from '../../utils/helpers';
+import { getSessionId, resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
 
 import { EngramChatMemory } from '../../memory/EngramChatMemory';
 import { createStorage } from '../../storage/StorageFactory';
@@ -96,6 +97,7 @@ export class EngramMemory implements INodeType {
         default: 'embedded',
         description: 'Where to store the knowledge graph data',
       },
+      customStoragePathProperty,
       // Context Window
       {
         ...contextWindowLengthProperty,
@@ -409,9 +411,20 @@ export class EngramMemory implements INodeType {
           database: credentials.database as string,
         });
       } else {
-        // Embedded: use a persist path based on workflow/node context
         const workflowId = this.getWorkflow().id ?? 'default';
-        const persistPath = `engram-data/${workflowId}-engram.json`;
+        const customPath = this.getNodeParameter('customStoragePath', itemIndex, '') as string;
+        const persistPath = resolveStoragePath({
+          customStoragePath: customPath,
+          workflowId,
+        });
+
+        migrateStorageIfNeeded({
+          newPath: persistPath,
+          workflowId,
+          staticData: this.getWorkflowStaticData('node'),
+          logger: this.logger,
+        });
+
         storage = createStorage({
           backend: 'embedded',
           persistPath,

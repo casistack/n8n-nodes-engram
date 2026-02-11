@@ -8,6 +8,8 @@ import {
 } from 'n8n-workflow';
 
 import { createStorage } from '../../storage/StorageFactory';
+import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
+import { customStoragePathProperty } from '../../descriptions';
 
 export class EngramTrigger implements INodeType {
   description: INodeTypeDescription = {
@@ -46,6 +48,7 @@ export class EngramTrigger implements INodeType {
         ],
         default: 'embedded',
       },
+      customStoragePathProperty,
       {
         displayName: 'Event',
         name: 'event',
@@ -84,6 +87,7 @@ export class EngramTrigger implements INodeType {
     const event = this.getNodeParameter('event') as string;
     const groupIdRaw = this.getNodeParameter('groupId', '') as string;
     const groupId = groupIdRaw.trim() || undefined;
+    const staticData = this.getWorkflowStaticData('node');
 
     let storage;
     if (backend === 'neo4j') {
@@ -97,15 +101,27 @@ export class EngramTrigger implements INodeType {
       });
     } else {
       const workflowId = this.getWorkflow().id ?? 'default';
+      const customPath = this.getNodeParameter('customStoragePath', '') as string;
+      const persistPath = resolveStoragePath({
+        customStoragePath: customPath,
+        workflowId,
+      });
+
+      migrateStorageIfNeeded({
+        newPath: persistPath,
+        workflowId,
+        staticData,
+        logger: this.logger,
+      });
+
       storage = createStorage({
         backend: 'embedded',
-        persistPath: `engram-data/${workflowId}-engram.json`,
+        persistPath,
       });
     }
     await storage.initialize();
 
     // Get the last poll timestamp from static data
-    const staticData = this.getWorkflowStaticData('node');
     const lastPollTime = (staticData.lastPollTime as string) || new Date(0).toISOString();
 
     const lastPollDate = new Date(lastPollTime).getTime();
