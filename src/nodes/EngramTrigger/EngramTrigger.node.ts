@@ -11,6 +11,19 @@ import { createStorage } from '../../storage/StorageFactory';
 import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
 import { customStoragePathProperty } from '../../descriptions';
 
+interface TriggerItem {
+  uuid: string;
+  created_at: string;
+}
+
+interface TriggerCursor {
+  backend: string;
+  event: string;
+  groupId: string;
+  createdAt: string;
+  uuid: string;
+}
+
 export class EngramTrigger implements INodeType {
   description: INodeTypeDescription = {
     displayName: 'Engram Trigger',
@@ -86,7 +99,7 @@ export class EngramTrigger implements INodeType {
     const backend = this.getNodeParameter('backend', 'embedded') as string;
     const event = this.getNodeParameter('event') as string;
     const groupIdRaw = this.getNodeParameter('groupId', '') as string;
-    const groupId = groupIdRaw.trim() || undefined;
+    const groupId = groupIdRaw.trim();
     const staticData = this.getWorkflowStaticData('node');
 
     let storage;
@@ -121,39 +134,41 @@ export class EngramTrigger implements INodeType {
     }
     await storage.initialize();
 
-    // Get the last poll timestamp from static data
-    const lastPollTime = (staticData.lastPollTime as string) || new Date(0).toISOString();
-
-    const lastPollDate = new Date(lastPollTime).getTime();
+    const cursor = getTriggerCursor(staticData, {
+      backend,
+      event,
+      groupId,
+    });
 
     try {
       const newItems: INodeExecutionData[] = [];
+      const data = await storage.exportGraph(groupId || undefined);
 
-      if (event === 'new_entity') {
-        const entities = await storage.listEntities(groupId ?? '', { limit: 100 });
-        for (const entity of entities) {
-          if (new Date(entity.created_at).getTime() > lastPollDate) {
-            newItems.push({ json: entity });
-          }
-        }
-      } else if (event === 'new_episode') {
-        const episodes = await storage.getRecentEpisodes(groupId ?? '', 100);
-        for (const episode of episodes) {
-          if (new Date(episode.created_at).getTime() > lastPollDate) {
-            newItems.push({ json: episode });
-          }
-        }
-      } else if (event === 'new_relationship') {
-        const data = await storage.exportGraph(groupId);
-        for (const edge of data.edges) {
-          if (new Date(edge.created_at).getTime() > lastPollDate) {
-            newItems.push({ json: edge });
-          }
-        }
+      const candidates =
+        event === 'new_entity'
+          ? data.entities
+          : event === 'new_episode'
+            ? data.episodes
+            : data.edges;
+
+      const sorted = [...candidates].sort(compareTriggerItems);
+      const freshItems = sorted.filter((item) => isAfterCursor(item, cursor));
+
+      for (const item of freshItems) {
+        newItems.push({ json: item });
       }
 
-      // Update the last poll timestamp
-      staticData.lastPollTime = new Date().toISOString();
+      if (freshItems.length > 0) {
+        const last = freshItems[freshItems.length - 1];
+        staticData.__engramTriggerCursor = {
+          backend,
+          event,
+          groupId,
+          createdAt: last.created_at,
+          uuid: last.uuid,
+        };
+        staticData.lastPollTime = last.created_at;
+      }
 
       if (newItems.length === 0) return null;
       return [newItems];
@@ -168,4 +183,50 @@ export class EngramTrigger implements INodeType {
       }
     }
   }
+}
+
+function compareTriggerItems(a: TriggerItem, b: TriggerItem): number {
+  const tsDiff = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+  if (tsDiff !== 0) return tsDiff;
+  return a.uuid.localeCompare(b.uuid);
+}
+
+function isAfterCursor(item: TriggerItem, cursor: TriggerCursor): boolean {
+  const itemTs = new Date(item.created_at).getTime();
+  const cursorTs = new Date(cursor.createdAt).getTime();
+
+  if (itemTs > cursorTs) return true;
+  if (itemTs < cursorTs) return false;
+  return item.uuid > cursor.uuid;
+}
+
+function getTriggerCursor(
+  staticData: Record<string, unknown>,
+  config: { backend: string; event: string; groupId: string },
+): TriggerCursor {
+  const stored = staticData.__engramTriggerCursor as Partial<TriggerCursor> | undefined;
+
+  if (
+    stored &&
+    stored.backend === config.backend &&
+    stored.event === config.event &&
+    stored.groupId === config.groupId &&
+    typeof stored.createdAt === 'string' &&
+    typeof stored.uuid === 'string'
+  ) {
+    return stored as TriggerCursor;
+  }
+
+  const legacyTime =
+    typeof staticData.lastPollTime === 'string'
+      ? staticData.lastPollTime
+      : new Date(0).toISOString();
+
+  return {
+    backend: config.backend,
+    event: config.event,
+    groupId: config.groupId,
+    createdAt: legacyTime,
+    uuid: '',
+  };
 }

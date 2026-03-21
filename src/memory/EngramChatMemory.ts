@@ -1,13 +1,16 @@
 import { BaseChatMemory } from '@langchain/community/memory/chat_memory';
 import type { BaseChatMemoryInput } from '@langchain/community/memory/chat_memory';
-import type { InputValues, MemoryVariables, OutputValues } from '@langchain/core/memory';
-import { SystemMessage } from '@langchain/core/messages';
+import {
+  getInputValue,
+  getOutputValue,
+  type InputValues,
+  type MemoryVariables,
+  type OutputValues,
+} from '@langchain/core/memory';
+import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { IGraphStorage } from '../storage/IGraphStorage';
 import { EngramChatMessageHistory } from './EngramChatMessageHistory';
-import {
-  ExtractionPipeline,
-  type ExtractionPipelineConfig,
-} from '../extraction/ExtractionPipeline';
+import { ExtractionPipeline } from '../extraction/ExtractionPipeline';
 import { HybridSearchEngine } from '../search/HybridSearchEngine';
 import { EmbeddingService, type EmbeddingConfig } from '../embeddings';
 import type { LlmClientConfig } from '../extraction/LlmClient';
@@ -161,12 +164,20 @@ export class EngramChatMemory extends BaseChatMemory {
       if (firstKey) filteredOutput[firstKey] = outputValues[firstKey];
     }
 
-    await super.saveContext(filteredInput, filteredOutput);
+    const humanInput = getInputValue(filteredInput, this.inputKey);
+    const aiOutput = getOutputValue(filteredOutput, this.outputKey);
+
+    const humanEpisodeUuid = await this.engramHistory.addMessageAndGetEpisodeUuid(
+      new HumanMessage(humanInput),
+    );
+    const aiEpisodeUuid = await this.engramHistory.addMessageAndGetEpisodeUuid(
+      new AIMessage(aiOutput),
+    );
 
     // If extraction is enabled, extract entities and relationships
     // Pass original unfiltered values so extraction can find the text
     if (this.enableExtraction) {
-      await this.runExtraction(inputValues, outputValues);
+      await this.runExtraction(inputValues, outputValues, [humanEpisodeUuid, aiEpisodeUuid]);
     }
   }
 
@@ -235,7 +246,11 @@ export class EngramChatMemory extends BaseChatMemory {
     return '';
   }
 
-  private async runExtraction(inputValues: InputValues, outputValues: OutputValues): Promise<void> {
+  private async runExtraction(
+    inputValues: InputValues,
+    outputValues: OutputValues,
+    episodeUuids: string[],
+  ): Promise<void> {
     if (!this.extractionPipeline) return;
 
     const humanText = this.extractInputText(inputValues);
@@ -244,7 +259,7 @@ export class EngramChatMemory extends BaseChatMemory {
     if (!humanText && !aiText) return;
 
     try {
-      await this.extractionPipeline.process(humanText, aiText);
+      await this.extractionPipeline.process(humanText, aiText, episodeUuids);
     } catch (error) {
       // Extraction failure should never break the conversation flow
       console.warn('Engram: Extraction pipeline failed:', (error as Error).message);

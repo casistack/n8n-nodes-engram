@@ -2,6 +2,8 @@ import {
   NodeConnectionType,
   type IExecuteFunctions,
   type INodeExecutionData,
+  type ILoadOptionsFunctions,
+  type INodePropertyOptions,
   type INodeType,
   type INodeTypeDescription,
   NodeOperationError,
@@ -9,6 +11,7 @@ import {
 
 import { createStorage } from '../../storage/StorageFactory';
 import { HybridSearchEngine } from '../../search/HybridSearchEngine';
+import { EmbeddingService } from '../../embeddings';
 import { nowIso } from '../../utils/temporal';
 import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
 import { customStoragePathProperty } from '../../descriptions';
@@ -35,6 +38,15 @@ export class EngramExplorer implements INodeType {
         displayOptions: {
           show: {
             backend: ['neo4j'],
+          },
+        },
+      },
+      {
+        name: 'engramExtractionApi',
+        required: false,
+        displayOptions: {
+          show: {
+            searchMode: ['hybrid'],
           },
         },
       },
@@ -284,6 +296,50 @@ export class EngramExplorer implements INodeType {
           show: { operation: ['search'] },
         },
         description: 'Search query text to find matching entities or relationships',
+      },
+      {
+        displayName: 'Search Mode',
+        name: 'searchMode',
+        type: 'options',
+        default: 'text',
+        displayOptions: {
+          show: {
+            operation: ['search'],
+            resource: ['entity', 'relationship'],
+          },
+        },
+        options: [
+          {
+            name: 'Text Only',
+            value: 'text',
+            description: 'Search using full-text matching only.',
+          },
+          {
+            name: 'Hybrid (Text + Semantic)',
+            value: 'hybrid',
+            description:
+              'Combine full-text search with embedding-based semantic search using RRF fusion.',
+          },
+        ],
+        description: 'How search results should be retrieved and ranked.',
+      },
+      {
+        displayName: 'Embedding Model',
+        name: 'embeddingModel',
+        type: 'options',
+        typeOptions: {
+          loadOptionsMethod: 'getModels',
+        },
+        default: '',
+        displayOptions: {
+          show: {
+            operation: ['search'],
+            resource: ['entity', 'relationship'],
+            searchMode: ['hybrid'],
+          },
+        },
+        description:
+          'Embedding model used for semantic search. Uses the Engram Extraction LLM credential.',
       },
       // ===== Entity-specific Parameters =====
       // Entity name — for getByName and create
@@ -593,11 +649,24 @@ export class EngramExplorer implements INodeType {
         default: '',
         displayOptions: {
           show: {
-            resource: ['entity'],
             operation: ['search', 'list'],
+            resource: ['entity', 'relationship'],
           },
         },
-        description: 'Only return entities created after this date',
+        description: 'Only return results created after this date',
+      },
+      {
+        displayName: 'Created Before',
+        name: 'createdBefore',
+        type: 'dateTime',
+        default: '',
+        displayOptions: {
+          show: {
+            operation: ['search', 'list'],
+            resource: ['entity', 'relationship'],
+          },
+        },
+        description: 'Only return results created before this date',
       },
       // ===== Traversal-specific Parameters =====
       {
@@ -677,6 +746,67 @@ export class EngramExplorer implements INodeType {
         description: 'Number of recent episodes to start traversal from',
       },
     ],
+  };
+
+  methods = {
+    loadOptions: {
+      async getModels(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+        let credentials;
+        try {
+          credentials = await this.getCredentials('engramExtractionApi');
+        } catch {
+          return [{ name: 'Configure credential first', value: '' }];
+        }
+
+        const baseUrl = (credentials.baseUrl as string).replace(/\/$/, '');
+        const apiKey = credentials.apiKey as string;
+
+        try {
+          let response;
+          try {
+            response = await this.helpers.httpRequest({
+              method: 'GET',
+              url: `${baseUrl}/models`,
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+              },
+              timeout: 10000,
+            });
+          } catch {
+            response = await this.helpers.httpRequest({
+              method: 'GET',
+              url: `${baseUrl}/models`,
+              timeout: 10000,
+            });
+          }
+
+          const modelList = response.data || response;
+          const models = (Array.isArray(modelList) ? modelList : []) as Array<{
+            id: string;
+            owned_by?: string;
+          }>;
+
+          if (models.length === 0) {
+            return [{ name: 'No models found — check Base URL in credential', value: '' }];
+          }
+
+          return models
+            .map((model) => ({
+              name: model.id,
+              value: model.id,
+              description: model.owned_by ? `Provider: ${model.owned_by}` : undefined,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        } catch (error) {
+          return [
+            {
+              name: `Error: ${(error as Error).message.slice(0, 80)}`,
+              value: '',
+            },
+          ];
+        }
+      },
+    },
   };
 
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -808,18 +938,20 @@ async function executeEntityOperation(
     const limit = ctx.getNodeParameter('limit', i) as number;
     const minScore = ctx.getNodeParameter('minRelevanceScore', i, 0) as number;
     const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
+    const createdBefore = ctx.getNodeParameter('createdBefore', i, '') as string;
 
     if (!query) {
       throw new NodeOperationError(ctx.getNode(), 'Query is required', { itemIndex: i });
     }
 
-    const searchEngine = new HybridSearchEngine(storage);
-    const results = await searchEngine.searchEntities(query, groupId, {
+    const searchEngine = await createExplorerSearchEngine(ctx, storage, i);
+    const results = await searchEngine.search(query, groupId, {
       limit,
-      min_score: minScore,
-      created_after: createdAfter || undefined,
+      minScore,
+      createdAfter: createdAfter || undefined,
+      createdBefore: createdBefore || undefined,
     });
-    for (const r of results) {
+    for (const r of results.entities) {
       returnData.push({ json: { ...r.entity, _score: r.score } });
     }
   } else if (operation === 'get') {
@@ -841,9 +973,11 @@ async function executeEntityOperation(
     const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const limit = ctx.getNodeParameter('limit', i) as number;
     const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
+    const createdBefore = ctx.getNodeParameter('createdBefore', i, '') as string;
     const entities = await storage.listEntities(groupId, {
       limit,
       created_after: createdAfter || undefined,
+      created_before: createdBefore || undefined,
     });
     for (const e of entities) {
       returnData.push({ json: e });
@@ -932,19 +1066,23 @@ async function executeRelationshipOperation(
     const minScore = ctx.getNodeParameter('minRelevanceScore', i, 0) as number;
     const validAfter = ctx.getNodeParameter('searchValidAfter', i, '') as string;
     const validBefore = ctx.getNodeParameter('searchValidBefore', i, '') as string;
+    const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
+    const createdBefore = ctx.getNodeParameter('createdBefore', i, '') as string;
 
     if (!query) {
       throw new NodeOperationError(ctx.getNode(), 'Query is required', { itemIndex: i });
     }
 
-    const searchEngine = new HybridSearchEngine(storage);
-    const results = await searchEngine.searchEdges(query, groupId, {
+    const searchEngine = await createExplorerSearchEngine(ctx, storage, i);
+    const results = await searchEngine.search(query, groupId, {
       limit,
-      min_score: minScore,
-      valid_after: validAfter || undefined,
-      valid_before: validBefore || undefined,
+      minScore,
+      validAfter: validAfter || undefined,
+      validBefore: validBefore || undefined,
+      createdAfter: createdAfter || undefined,
+      createdBefore: createdBefore || undefined,
     });
-    for (const r of results) {
+    for (const r of results.edges) {
       returnData.push({
         json: {
           ...r.edge,
@@ -1144,4 +1282,33 @@ function parseAttributes(raw: string | object): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+async function createExplorerSearchEngine(
+  ctx: IExecuteFunctions,
+  storage: Awaited<ReturnType<typeof createStorage>>,
+  itemIndex: number,
+): Promise<HybridSearchEngine> {
+  const searchMode = ctx.getNodeParameter('searchMode', itemIndex, 'text') as string;
+  if (searchMode !== 'hybrid') {
+    return new HybridSearchEngine(storage);
+  }
+
+  const embeddingModel = ctx.getNodeParameter('embeddingModel', itemIndex, '') as string;
+  if (!embeddingModel) {
+    throw new NodeOperationError(
+      ctx.getNode(),
+      'Embedding Model is required when Search Mode is set to Hybrid (Text + Semantic)',
+      { itemIndex },
+    );
+  }
+
+  const credentials = await ctx.getCredentials('engramExtractionApi');
+  const embeddingService = new EmbeddingService({
+    apiKey: credentials.apiKey as string,
+    baseUrl: credentials.baseUrl as string,
+    model: embeddingModel,
+  });
+
+  return new HybridSearchEngine(storage, embeddingService);
 }

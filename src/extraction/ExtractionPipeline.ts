@@ -53,7 +53,11 @@ export class ExtractionPipeline {
     }
   }
 
-  async process(humanMessage: string, aiMessage: string, episodeUuid?: string): Promise<void> {
+  async process(
+    humanMessage: string,
+    aiMessage: string,
+    episodeUuids: string[] = [],
+  ): Promise<void> {
     // Step 1: Get existing entity names for dedup context
     const existingEntities = await this.storage.listEntities(this.groupId);
     const existingNames = existingEntities.map((e) => e.name);
@@ -89,7 +93,7 @@ export class ExtractionPipeline {
 
     // Step 5: Persist relationships with contradiction detection
     for (const rel of extractedRelationships) {
-      await this.persistRelationship(rel, resolvedEntities, existingEntities, episodeUuid);
+      await this.persistRelationship(rel, resolvedEntities, existingEntities, episodeUuids);
     }
   }
 
@@ -173,7 +177,7 @@ export class ExtractionPipeline {
     },
     resolvedEntities: Map<string, EntityNode>,
     existingEntities: EntityNode[],
-    episodeUuid?: string,
+    episodeUuids: string[],
   ): Promise<void> {
     // Find source and target entity UUIDs
     const sourceEntity = this.findEntity(rel.source_entity, resolvedEntities, existingEntities);
@@ -219,7 +223,7 @@ export class ExtractionPipeline {
           const updates = await this.buildEdgeUpdates(
             existingMatchingEdge,
             mergedFact || rel.fact,
-            episodeUuid,
+            episodeUuids,
           );
           if (Object.keys(updates).length > 0) {
             await this.storage.updateEdge(existingMatchingEdge.uuid, updates);
@@ -264,7 +268,7 @@ export class ExtractionPipeline {
           const updates = await this.buildEdgeUpdates(
             candidate,
             mergedFact || rel.fact,
-            episodeUuid,
+            episodeUuids,
           );
           if (Object.keys(updates).length > 0) {
             await this.storage.updateEdge(candidate.uuid, updates);
@@ -345,7 +349,7 @@ export class ExtractionPipeline {
       fact: rel.fact,
       fact_embedding: factEmbedding ?? null,
       valid_at: nowIso(),
-      episodes: episodeUuid ? [episodeUuid] : [],
+      episodes: episodeUuids,
     });
   }
 
@@ -356,7 +360,7 @@ export class ExtractionPipeline {
   private async buildEdgeUpdates(
     existingEdge: import('../schemas').EntityEdge,
     effectiveFact: string,
-    episodeUuid?: string,
+    episodeUuids: string[],
   ): Promise<Record<string, unknown>> {
     const updates: Record<string, unknown> = {};
 
@@ -375,10 +379,16 @@ export class ExtractionPipeline {
     }
 
     // Merge episode if provided
-    if (episodeUuid) {
+    if (episodeUuids.length > 0) {
       const existingEpisodes = existingEdge.episodes || [];
-      if (!existingEpisodes.includes(episodeUuid)) {
-        updates.episodes = [...existingEpisodes, episodeUuid];
+      const mergedEpisodes = [...existingEpisodes];
+      for (const episodeUuid of episodeUuids) {
+        if (!mergedEpisodes.includes(episodeUuid)) {
+          mergedEpisodes.push(episodeUuid);
+        }
+      }
+      if (mergedEpisodes.length !== existingEpisodes.length) {
+        updates.episodes = mergedEpisodes;
       }
     }
 

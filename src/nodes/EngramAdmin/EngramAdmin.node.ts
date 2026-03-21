@@ -324,10 +324,10 @@ export class EngramAdmin implements INodeType {
         default: false,
         displayOptions: {
           show: {
-            operation: ['bulkClearGroups'],
+            operation: ['bulkClearGroups', 'clearAll'],
           },
         },
-        description: 'Safety latch: must be enabled for the bulk clear to proceed',
+        description: 'Safety latch: must be enabled before destructive global operations proceed',
       },
       // --- Orphaned entities parameters ---
       {
@@ -793,6 +793,17 @@ async function executeLifecycle(
       },
     });
   } else if (operation === 'clearAll') {
+    const confirmDestructive = ctx.getNodeParameter('confirmDestructive', i, false) as boolean;
+    if (!confirmDestructive) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Confirm Destructive must be enabled to proceed with Clear All',
+        {
+          itemIndex: i,
+          description: 'This is a safety measure. Enable "Confirm Destructive" to proceed.',
+        },
+      );
+    }
     await storage.clearAll();
     returnData.push({
       json: { success: true, operation: 'clearAll' },

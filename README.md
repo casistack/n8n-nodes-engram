@@ -246,7 +246,8 @@ Engram stores conversation data and extracted knowledge. You should understand w
 
 **Embedded backend:**
 
-- Data is stored as a JSON file at `engram-data/{workflowId}-engram.json` inside your n8n data directory
+- Data is stored as a JSON file at `~/.n8n/storage/n8n-nodes-engram/{workflowId}-engram.json` by default
+- You can override the default with **Custom Storage Path** when using embedded storage
 - The file contains all entities, relationships, episodes, and embeddings in plain text
 - Backups: copy the JSON file
 

@@ -34,6 +34,10 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   }
 
   async addMessage(message: BaseMessage): Promise<void> {
+    await this.addMessageAndGetEpisodeUuid(message);
+  }
+
+  async addMessageAndGetEpisodeUuid(message: BaseMessage): Promise<string> {
     const role = this.messageToRole(message);
     const content =
       typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
@@ -47,6 +51,7 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     });
 
     this.lastEpisodeUuid = episode.uuid;
+    return episode.uuid;
   }
 
   async addUserMessage(message: string): Promise<void> {

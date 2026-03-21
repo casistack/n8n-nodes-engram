@@ -50,7 +50,7 @@ export const customStoragePathProperty: INodeProperties = {
   placeholder: '/data/engram',
   // eslint-disable-next-line n8n-nodes-base/node-param-description-miscased-id
   description:
-    'Custom directory for graph data files. Leave empty to use the default n8n storage directory (~/.n8n/storage/). Set this when using Docker with custom volume mounts.',
+    'Custom directory for graph data files. Leave empty to use the default n8n storage directory (~/.n8n/storage/) which inherits correct permissions automatically. Only set this for custom Docker volume mounts — you are responsible for ensuring the n8n process user has read/write access to the directory.',
   displayOptions: {
     show: {
       backend: ['embedded'],
