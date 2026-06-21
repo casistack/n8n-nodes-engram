@@ -9,7 +9,7 @@ import {
 } from 'n8n-workflow';
 
 import { createStorage } from '../../storage/StorageFactory';
-import type { GraphData } from '../../schemas';
+import { GraphDataSchema, type GraphData } from '../../schemas';
 import { nowIso } from '../../utils/temporal';
 import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
 import { customStoragePathProperty } from '../../descriptions';
@@ -1006,21 +1006,19 @@ async function executePortability(
     returnData.push({ json: data as unknown as IDataObject });
   } else if (operation === 'import') {
     const importData = ctx.getNodeParameter('importData', i) as unknown;
-    if (
-      !importData ||
-      typeof importData !== 'object' ||
-      !Array.isArray((importData as GraphData).entities) ||
-      !Array.isArray((importData as GraphData).edges) ||
-      !Array.isArray((importData as GraphData).episodes)
-    ) {
+    const parsed = GraphDataSchema.safeParse(importData);
+
+    if (!parsed.success) {
+      const firstIssue = parsed.error.issues[0];
+      const issuePath = firstIssue?.path.length ? firstIssue.path.join('.') : 'root';
       throw new NodeOperationError(ctx.getNode(), 'Invalid import data format', {
         itemIndex: i,
-        description:
-          'Import data must be a JSON object with "entities", "edges", and "episodes" arrays. Use data from a previous Export operation.',
+        description: `Import data must match the Engram export schema. First issue: ${issuePath} - ${firstIssue?.message ?? 'unknown validation error'}.`,
       });
     }
-    await storage.importGraph(importData as GraphData);
-    const graphData = importData as GraphData;
+
+    const graphData: GraphData = parsed.data;
+    await storage.importGraph(graphData);
     returnData.push({
       json: {
         success: true,

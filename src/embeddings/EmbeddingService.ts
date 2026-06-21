@@ -3,6 +3,8 @@
  * Works with OpenAI, OpenRouter, Ollama, or any compatible endpoint.
  */
 
+import { normalizeHttpBaseUrl } from '../utils/url';
+
 export interface EmbeddingConfig {
   apiKey: string;
   baseUrl: string;
@@ -27,7 +29,7 @@ export class EmbeddingService {
 
   constructor(config: EmbeddingConfig) {
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.baseUrl = normalizeHttpBaseUrl(config.baseUrl, 'Embedding API baseUrl');
     this.model = config.model;
     this.dimensions = config.dimensions;
     this.timeoutMs = config.timeoutMs ?? 30_000;

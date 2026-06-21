@@ -30,7 +30,7 @@ export async function callMethodAsync<T>(
     executeFunctions: IExecuteFunctions;
     connectionType: NodeConnectionType;
     currentNodeRunIndex: number;
-    method: (...args: any[]) => Promise<unknown>;
+    method: (...args: any[]) => unknown;
     arguments: unknown[];
   },
 ): Promise<unknown> {

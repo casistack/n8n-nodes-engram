@@ -71,6 +71,26 @@ describe('EmbeddingService', () => {
 			expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/v1/embeddings');
 		});
 
+		it('should reject non-http baseUrl protocols before fetch', async () => {
+			expect(() => new EmbeddingService({
+				apiKey: 'key',
+				baseUrl: 'file:///tmp/embeddings',
+				model: 'model',
+			})).toThrow('Embedding API baseUrl must use http or https');
+
+			expect(mockFetch).not.toHaveBeenCalled();
+		});
+
+		it('should reject malformed baseUrl values before fetch', async () => {
+			expect(() => new EmbeddingService({
+				apiKey: 'key',
+				baseUrl: 'not a url',
+				model: 'model',
+			})).toThrow('Embedding API baseUrl must be a valid HTTP(S) URL');
+
+			expect(mockFetch).not.toHaveBeenCalled();
+		});
+
 		it('should include dimensions when configured', async () => {
 			const svc = new EmbeddingService({
 				apiKey: 'key',

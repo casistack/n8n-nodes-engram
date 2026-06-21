@@ -80,4 +80,54 @@ describe('EngramAdmin', () => {
       'Confirm Destructive must be enabled to proceed with Clear All',
     );
   });
+
+  it('rejects import payloads that do not match the graph schema', async () => {
+    const admin = new EngramAdmin();
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'import',
+      parameters: {
+        resource: 'portability',
+        importData: {
+          version: '1.0',
+          exported_at: 'not-a-date',
+          entities: [],
+          edges: [],
+          episodes: [],
+        },
+      },
+    });
+
+    await expect(admin.execute.call(context)).rejects.toThrow('Invalid import data format');
+  });
+
+  it('imports valid graph schema payloads', async () => {
+    const admin = new EngramAdmin();
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'import',
+      parameters: {
+        resource: 'portability',
+        importData: {
+          version: '1.0',
+          exported_at: new Date().toISOString(),
+          entities: [],
+          edges: [],
+          episodes: [],
+        },
+      },
+    });
+
+    const result = await admin.execute.call(context);
+
+    expect(result[0][0].json).toEqual({
+      success: true,
+      operation: 'import',
+      imported: {
+        entities: 0,
+        edges: 0,
+        episodes: 0,
+      },
+    });
+  });
 });

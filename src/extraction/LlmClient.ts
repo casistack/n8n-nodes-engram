@@ -3,6 +3,8 @@
  * Works with OpenAI, OpenRouter, Ollama, or any compatible endpoint.
  */
 
+import { normalizeHttpBaseUrl } from '../utils/url';
+
 export interface LlmClientConfig {
   apiKey: string;
   baseUrl: string;
@@ -33,7 +35,7 @@ export class LlmClient {
 
   constructor(config: LlmClientConfig) {
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.baseUrl = normalizeHttpBaseUrl(config.baseUrl, 'LLM API baseUrl');
     this.model = config.model;
     this.timeoutMs = config.timeoutMs ?? 30_000;
   }
