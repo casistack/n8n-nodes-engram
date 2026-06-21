@@ -65,6 +65,24 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 
 ---
 
+## Screenshots
+
+Captured from a disposable local n8n instance with `n8n-nodes-engram` installed from the packed package.
+
+| Installed nodes | AI Memory node |
+| --- | --- |
+| <img src="docs/images/engram-node-picker.png" alt="Engram nodes in the n8n node picker" /> | <img src="docs/images/engram-memory-node.png" alt="Engram Memory node parameters" /> |
+
+| Explorer actions | Admin operations |
+| --- | --- |
+| <img src="docs/images/engram-explorer-actions.png" alt="Engram Explorer actions in n8n" /> | <img src="docs/images/engram-admin-actions.png" alt="Engram Admin monitoring and hygiene actions in n8n" /> |
+
+| Admin diagnostics output | Graph event trigger |
+| --- | --- |
+| <img src="docs/images/engram-admin-diagnostics-output.png" alt="Engram Admin diagnostics output" /> | <img src="docs/images/engram-trigger-node.png" alt="Engram Trigger events in n8n" /> |
+
+---
+
 ## Installation
 
 ### Via n8n Community Nodes
