@@ -81,6 +81,110 @@ describe('EngramAdmin', () => {
     );
   });
 
+  it('returns quick diagnostics without scanning the full graph by default', async () => {
+    const admin = new EngramAdmin();
+    const storage = createStorage({
+      backend: 'embedded',
+      persistPath,
+    });
+    await storage.initialize();
+    await storage.addEntity({
+      name: 'Alice',
+      group_id: 'diag-group',
+      summary: 'A person',
+      entity_type: 'person',
+    });
+
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'diagnostics',
+      parameters: {
+        resource: 'monitoring',
+      },
+    });
+
+    const result = await admin.execute.call(context);
+
+    expect(result[0][0].json).toEqual(
+      expect.objectContaining({
+        operation: 'diagnostics',
+        status: 'ok',
+        storage_backend: 'embedded',
+        initialized: true,
+        deep_checks: 'disabled',
+      }),
+    );
+    expect(result[0][0].json.quick_checks).toEqual(
+      expect.objectContaining({
+        group_count: 1,
+        entity_count: 1,
+        edge_count: 0,
+        episode_count: 0,
+      }),
+    );
+    expect(result[0][0].json.embedded_storage).toEqual(
+      expect.objectContaining({
+        workflow_id: 'wf-admin-test',
+        persist_path: persistPath,
+        custom_storage_path_configured: true,
+      }),
+    );
+  });
+
+  it('runs opt-in deep diagnostics for graph quality checks', async () => {
+    const admin = new EngramAdmin();
+    const storage = createStorage({
+      backend: 'embedded',
+      persistPath,
+    });
+    await storage.initialize();
+    const alice = await storage.addEntity({
+      name: 'Alice',
+      group_id: 'diag-group',
+      summary: 'A person',
+      entity_type: 'person',
+      name_embedding: [0.1, 0.2],
+    });
+    const bob = await storage.addEntity({
+      name: 'Bob',
+      group_id: 'diag-group',
+      summary: 'A person',
+      entity_type: 'person',
+    });
+    await storage.addEdge({
+      group_id: 'diag-group',
+      source_node_uuid: alice.uuid,
+      target_node_uuid: bob.uuid,
+      name: 'KNOWS',
+      fact: 'Alice knows Bob',
+      fact_embedding: [0.3, 0.4],
+    });
+
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'diagnostics',
+      parameters: {
+        resource: 'monitoring',
+        includeDeepChecks: 'enabled',
+      },
+    });
+
+    const result = await admin.execute.call(context);
+
+    expect(result[0][0].json.deep_checks).toEqual(
+      expect.objectContaining({
+        scanned_full_graph: true,
+        active_edge_count: 1,
+        expired_edge_count: 0,
+        invalidated_edge_count: 0,
+        dangling_edge_count: 0,
+        duplicate_entity_name_groups: 0,
+        entities_with_name_embeddings: 1,
+        edges_with_fact_embeddings: 1,
+      }),
+    );
+  });
+
   it('rejects import payloads that do not match the graph schema', async () => {
     const admin = new EngramAdmin();
     const context = createExecuteContext({

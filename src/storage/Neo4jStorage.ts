@@ -1,6 +1,6 @@
 import neo4j, { type Driver, type Session } from 'neo4j-driver';
 import { generateUuid } from '../utils/uuid';
-import { nowIso, isOlderThanDays } from '../utils/temporal';
+import { nowIso } from '../utils/temporal';
 import { cosineSimilarity } from '../embeddings/cosine';
 import type {
   IGraphStorage,

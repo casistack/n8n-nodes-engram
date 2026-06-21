@@ -17,6 +17,14 @@ import { CommunityDetector } from '../../community/CommunityDetector';
 import { CommunitySummarizer } from '../../community/CommunitySummarizer';
 import { LlmClient } from '../../extraction/LlmClient';
 
+interface DiagnosticsContext {
+  backend: string;
+  persistPath?: string;
+  workflowId?: string;
+  customStoragePathConfigured?: boolean;
+  databaseConfigured?: boolean;
+}
+
 export class EngramAdmin implements INodeType {
   description: INodeTypeDescription = {
     displayName: 'Engram Admin',
@@ -122,6 +130,12 @@ export class EngramAdmin implements INodeType {
             value: 'groupStats',
             description: 'Get detailed statistics for a specific group/session',
             action: 'Get group statistics',
+          },
+          {
+            name: 'Diagnostics',
+            value: 'diagnostics',
+            description: 'Run read-only operational diagnostics',
+            action: 'Run diagnostics',
           },
         ],
         default: 'stats',
@@ -262,6 +276,31 @@ export class EngramAdmin implements INodeType {
         },
         description:
           'Optional: limit to a specific group/session. Leave empty to include all groups.',
+      },
+      {
+        displayName: 'Include Deep Checks',
+        name: 'includeDeepChecks',
+        type: 'options',
+        options: [
+          {
+            name: 'Disabled',
+            value: 'disabled',
+            description: 'Only run quick storage and stats checks',
+          },
+          {
+            name: 'Enabled',
+            value: 'enabled',
+            description: 'Export graph data to calculate expensive data-quality diagnostics',
+          },
+        ],
+        default: 'disabled',
+        displayOptions: {
+          show: {
+            operation: ['diagnostics'],
+          },
+        },
+        description:
+          'Whether to run graph-wide checks. Enable only when you are comfortable scanning the full graph.',
       },
       // --- Retention parameters ---
       {
@@ -473,6 +512,8 @@ export class EngramAdmin implements INodeType {
     const operation = this.getNodeParameter('operation', 0) as string;
 
     let storage;
+    let diagnosticsContext: DiagnosticsContext;
+
     if (backend === 'neo4j') {
       const credentials = await this.getCredentials('engramNeo4jApi');
       storage = createStorage({
@@ -482,6 +523,10 @@ export class EngramAdmin implements INodeType {
         password: credentials.password as string,
         database: credentials.database as string,
       });
+      diagnosticsContext = {
+        backend,
+        databaseConfigured: Boolean((credentials.database as string | undefined)?.trim()),
+      };
     } else {
       const workflowId = this.getWorkflow().id ?? 'default';
       const customPath = this.getNodeParameter('customStoragePath', 0, '') as string;
@@ -501,11 +546,16 @@ export class EngramAdmin implements INodeType {
         backend: 'embedded',
         persistPath,
       });
+      diagnosticsContext = {
+        backend,
+        persistPath,
+        workflowId,
+        customStoragePathConfigured: customPath.trim().length > 0,
+      };
     }
     await storage.initialize();
 
     const returnData: INodeExecutionData[] = [];
-    const ctx = this;
 
     try {
       for (let i = 0; i < items.length; i++) {
@@ -513,35 +563,35 @@ export class EngramAdmin implements INodeType {
           const beforeLength = returnData.length;
 
           if (resource === 'monitoring') {
-            await executeMonitoring(ctx, storage, operation, i, returnData, backend);
+            await executeMonitoring(this, storage, operation, i, returnData, diagnosticsContext);
           } else if (resource === 'lifecycle') {
-            await executeLifecycle(ctx, storage, operation, i, returnData);
+            await executeLifecycle(this, storage, operation, i, returnData);
           } else if (resource === 'hygiene') {
-            await executeHygiene(ctx, storage, operation, i, returnData);
+            await executeHygiene(this, storage, operation, i, returnData);
           } else if (resource === 'portability') {
-            await executePortability(ctx, storage, operation, i, returnData);
+            await executePortability(this, storage, operation, i, returnData);
           } else if (resource === 'analysis') {
-            await executeAnalysis(ctx, storage, operation, i, returnData);
+            await executeAnalysis(this, storage, operation, i, returnData);
           }
 
           // Fallback for v1 workflows where resource defaults to 'monitoring'
           // but operation may belong to a different resource
           if (returnData.length === beforeLength) {
-            await executeLifecycle(ctx, storage, operation, i, returnData);
+            await executeLifecycle(this, storage, operation, i, returnData);
             if (returnData.length === beforeLength) {
-              await executeHygiene(ctx, storage, operation, i, returnData);
+              await executeHygiene(this, storage, operation, i, returnData);
             }
             if (returnData.length === beforeLength) {
-              await executePortability(ctx, storage, operation, i, returnData);
+              await executePortability(this, storage, operation, i, returnData);
             }
             if (returnData.length === beforeLength) {
-              await executeAnalysis(ctx, storage, operation, i, returnData);
+              await executeAnalysis(this, storage, operation, i, returnData);
             }
           }
         } catch (error: unknown) {
           if (error instanceof NodeOperationError) throw error;
           throw new NodeOperationError(
-            ctx.getNode(),
+            this.getNode(),
             `Engram Admin error: ${(error as Error).message}`,
             { itemIndex: i },
           );
@@ -567,7 +617,7 @@ async function executeMonitoring(
   operation: string,
   i: number,
   returnData: INodeExecutionData[],
-  backend: string,
+  diagnosticsContext: DiagnosticsContext,
 ): Promise<void> {
   if (operation === 'stats') {
     const groupId = (ctx.getNodeParameter('groupIdFilter', i, '') as string).trim();
@@ -589,7 +639,7 @@ async function executeMonitoring(
           : 0,
       avg_episodes_per_group:
         groupCount > 0 ? Math.round((baseStats.episode_count / groupCount) * 100) / 100 : 0,
-      storage_backend: backend,
+      storage_backend: diagnosticsContext.backend,
       data_span_days:
         baseStats.oldest_episode && baseStats.newest_episode
           ? Math.round(
@@ -685,6 +735,93 @@ async function executeMonitoring(
             : null,
       },
     });
+  } else if (operation === 'diagnostics') {
+    const includeDeepChecks =
+      (ctx.getNodeParameter('includeDeepChecks', i, 'disabled') as string) === 'enabled';
+    const stats = await storage.getStats();
+    const warnings: string[] = [];
+
+    if (stats.group_ids.length === 0) {
+      warnings.push('No groups found. Engram storage is initialized but currently empty.');
+    }
+
+    if (stats.entity_count > 0 && stats.edge_count === 0) {
+      warnings.push('Entities exist but no relationships were found.');
+    }
+
+    const diagnostics: IDataObject = {
+      operation: 'diagnostics',
+      status: 'ok',
+      storage_backend: diagnosticsContext.backend,
+      initialized: true,
+      quick_checks: {
+        group_count: stats.group_ids.length,
+        entity_count: stats.entity_count,
+        edge_count: stats.edge_count,
+        episode_count: stats.episode_count,
+        entity_types: stats.entity_types,
+        oldest_episode: stats.oldest_episode,
+        newest_episode: stats.newest_episode,
+      },
+      warnings,
+      deep_checks: includeDeepChecks ? null : 'disabled',
+    };
+
+    if (diagnosticsContext.backend === 'embedded') {
+      diagnostics.embedded_storage = {
+        workflow_id: diagnosticsContext.workflowId,
+        persist_path: diagnosticsContext.persistPath,
+        custom_storage_path_configured: diagnosticsContext.customStoragePathConfigured,
+      };
+    } else if (diagnosticsContext.backend === 'neo4j') {
+      diagnostics.neo4j = {
+        database_configured: diagnosticsContext.databaseConfigured,
+      };
+    }
+
+    if (includeDeepChecks) {
+      const data = await storage.exportGraph();
+      const entityUuids = new Set(data.entities.map((entity) => entity.uuid));
+      const danglingEdges = data.edges.filter(
+        (edge) =>
+          !entityUuids.has(edge.source_node_uuid) || !entityUuids.has(edge.target_node_uuid),
+      );
+      const duplicateEntityKeys = new Map<string, number>();
+
+      for (const entity of data.entities) {
+        const key = `${entity.group_id}:${entity.name.toLowerCase().trim()}`;
+        duplicateEntityKeys.set(key, (duplicateEntityKeys.get(key) ?? 0) + 1);
+      }
+
+      const duplicateEntityNameCount = [...duplicateEntityKeys.values()].filter(
+        (count) => count > 1,
+      ).length;
+
+      if (danglingEdges.length > 0) {
+        warnings.push(`${danglingEdges.length} dangling edge(s) reference missing entities.`);
+      }
+
+      if (duplicateEntityNameCount > 0) {
+        warnings.push(`${duplicateEntityNameCount} duplicate entity name group(s) found.`);
+      }
+
+      diagnostics.deep_checks = {
+        scanned_full_graph: true,
+        active_edge_count: data.edges.filter((edge) => edge.expired_at === null).length,
+        expired_edge_count: data.edges.filter((edge) => edge.expired_at !== null).length,
+        invalidated_edge_count: data.edges.filter((edge) => edge.invalid_at !== null).length,
+        dangling_edge_count: danglingEdges.length,
+        duplicate_entity_name_groups: duplicateEntityNameCount,
+        entities_with_name_embeddings: data.entities.filter(
+          (entity) => Array.isArray(entity.name_embedding) && entity.name_embedding.length > 0,
+        ).length,
+        edges_with_fact_embeddings: data.edges.filter(
+          (edge) => Array.isArray(edge.fact_embedding) && edge.fact_embedding.length > 0,
+        ).length,
+      };
+    }
+
+    returnData.push({ json: diagnostics });
   }
 }
 

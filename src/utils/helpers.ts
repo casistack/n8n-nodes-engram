@@ -182,7 +182,7 @@ export function serializeChatHistory(chatHistory: BaseMessage[]): string {
 export const getConnectedTools = async (
   ctx: IExecuteFunctions,
   enforceUniqueNames: boolean,
-  convertStructuredTool: boolean = true,
+  _convertStructuredTool: boolean = true,
 ) => {
   const connectedTools =
     ((await ctx.getInputConnectionData(NodeConnectionType.AiTool, 0)) as Tool[]) || [];

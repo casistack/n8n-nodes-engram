@@ -53,7 +53,7 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 | **2** | Storage Backends | Embedded (zero-setup) or Neo4j (production) |
 | **5** | Extraction Stages | Entity, dedup, relationships, contradictions, embeddings |
 | **3** | Search Modes | Full-text, vector, hybrid RRF fusion |
-| **198** | Tests | Unit + integration across 19 test suites |
+| **246** | Tests | Unit + integration across 26 test suites |
 
 ---
 
@@ -146,7 +146,7 @@ On each conversation turn, Engram Memory:
 
 | Resource | Operations |
 | --- | --- |
-| **Monitoring** | Stats, List Groups, Group Stats |
+| **Monitoring** | Stats, List Groups, Group Stats, Diagnostics |
 | **Lifecycle** | Apply Retention, Clear Group, Bulk Clear Groups, Clear All |
 | **Hygiene** | Orphaned Entities, Duplicate Entities, Expire Stale Edges |
 | **Portability** | Export, Import |
@@ -155,6 +155,10 @@ On each conversation turn, Engram Memory:
 ### Engram Trigger
 
 > Polling trigger&mdash;fires when new entities, relationships, or episodes appear in the graph.
+
+### Operational Diagnostics
+
+Engram Admin includes a read-only **Monitoring > Diagnostics** operation for production checks. By default it returns quick storage and graph counts only. Optional deep checks scan the full graph to report embedding coverage, expired/invalidated edges, dangling edges, and duplicate entity-name groups.
 
 ---
 

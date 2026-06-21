@@ -849,23 +849,22 @@ export class EngramExplorer implements INodeType {
 
     const returnData: INodeExecutionData[] = [];
 
-    const ctx = this;
     try {
       for (let i = 0; i < items.length; i++) {
         try {
           if (resource === 'entity') {
-            await executeEntityOperation(ctx, storage, operation, i, returnData);
+            await executeEntityOperation(this, storage, operation, i, returnData);
           } else if (resource === 'relationship') {
-            await executeRelationshipOperation(ctx, storage, operation, i, returnData);
+            await executeRelationshipOperation(this, storage, operation, i, returnData);
           } else if (resource === 'episode') {
-            await executeEpisodeOperation(ctx, storage, operation, i, returnData);
+            await executeEpisodeOperation(this, storage, operation, i, returnData);
           } else if (resource === 'traversal') {
-            await executeTraversalOperation(ctx, storage, operation, i, returnData);
+            await executeTraversalOperation(this, storage, operation, i, returnData);
           }
         } catch (error: unknown) {
           if (error instanceof NodeOperationError) throw error;
           throw new NodeOperationError(
-            ctx.getNode(),
+            this.getNode(),
             `Engram Explorer error: ${(error as Error).message}`,
             { itemIndex: i },
           );
