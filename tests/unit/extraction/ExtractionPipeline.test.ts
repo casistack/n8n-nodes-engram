@@ -124,12 +124,6 @@ describe('ExtractionPipeline', () => {
 			summary: 'Capital of England',
 			entity_type: 'location',
 		});
-		const tokyo = await storage.addEntity({
-			name: 'Tokyo',
-			group_id: 'test-group',
-			summary: 'Capital of Japan',
-			entity_type: 'location',
-		});
 		await storage.addEdge({
 			group_id: 'test-group',
 			source_node_uuid: alice.uuid,
@@ -170,7 +164,11 @@ describe('ExtractionPipeline', () => {
 		);
 
 		// Alice->Tokyo edge should exist
-		const tokyoEdges = await storage.getEdgesBetween(alice.uuid, tokyo.uuid);
+		const entities = await storage.listEntities('test-group');
+		const tokyo = entities.find((e) => e.name === 'Tokyo');
+		expect(tokyo).toBeDefined();
+
+		const tokyoEdges = await storage.getEdgesBetween(alice.uuid, tokyo!.uuid);
 		expect(tokyoEdges.length).toBeGreaterThanOrEqual(1);
 		expect(tokyoEdges.some((e) => e.fact === 'Alice moved to Tokyo')).toBe(true);
 	});
