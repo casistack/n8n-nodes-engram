@@ -7,6 +7,7 @@ import {
   type IDataObject,
   NodeOperationError,
 } from 'n8n-workflow';
+import { createHash } from 'crypto';
 
 import { createStorage } from '../../storage/StorageFactory';
 import { GraphDataSchema, type GraphData } from '../../schemas';
@@ -16,6 +17,7 @@ import { customStoragePathProperty } from '../../descriptions';
 import { CommunityDetector } from '../../community/CommunityDetector';
 import { CommunitySummarizer } from '../../community/CommunitySummarizer';
 import { LlmClient } from '../../extraction/LlmClient';
+import { EmbeddingService } from '../../embeddings';
 
 interface DiagnosticsContext {
   backend: string;
@@ -51,11 +53,6 @@ export class EngramAdmin implements INodeType {
       {
         name: 'engramExtractionApi',
         required: false,
-        displayOptions: {
-          show: {
-            generateSummaries: [true],
-          },
-        },
       },
     ],
     properties: [
@@ -132,6 +129,12 @@ export class EngramAdmin implements INodeType {
             action: 'Get group statistics',
           },
           {
+            name: 'Embedding Coverage',
+            value: 'embeddingCoverage',
+            description: 'Report embedding coverage for semantic and hybrid search',
+            action: 'Report embedding coverage',
+          },
+          {
             name: 'Diagnostics',
             value: 'diagnostics',
             description: 'Run read-only operational diagnostics',
@@ -198,6 +201,18 @@ export class EngramAdmin implements INodeType {
             value: 'expireStaleEdges',
             description: 'Find and expire edges with broken references or past validity',
             action: 'Expire stale edges',
+          },
+          {
+            name: 'Rebuild Search Index',
+            value: 'rebuildSearchIndex',
+            description: 'Rebuild the embedded full-text search index from stored graph data',
+            action: 'Rebuild search index',
+          },
+          {
+            name: 'Backfill Embeddings',
+            value: 'backfillEmbeddings',
+            description: 'Backfill missing entity and relationship embeddings',
+            action: 'Backfill embeddings',
           },
         ],
         default: 'orphanedEntities',
@@ -271,7 +286,7 @@ export class EngramAdmin implements INodeType {
         default: '',
         displayOptions: {
           show: {
-            operation: ['export', 'stats'],
+            operation: ['export', 'stats', 'embeddingCoverage', 'backfillEmbeddings'],
           },
         },
         description:
@@ -390,11 +405,69 @@ export class EngramAdmin implements INodeType {
         default: true,
         displayOptions: {
           show: {
-            operation: ['expireStaleEdges'],
+            operation: ['expireStaleEdges', 'backfillEmbeddings'],
           },
         },
         description:
-          'If enabled, only reports stale edges without modifying them. Disable to actually expire them.',
+          'If enabled, reports what would change without modifying graph data. Disable to perform the selected maintenance operation.',
+      },
+      {
+        displayName: 'Backfill Target',
+        name: 'backfillTarget',
+        type: 'options',
+        options: [
+          {
+            name: 'Entities and Relationships',
+            value: 'both',
+            description: 'Backfill missing entity name embeddings and relationship fact embeddings',
+          },
+          {
+            name: 'Entities Only',
+            value: 'entities',
+            description: 'Backfill only entity name embeddings',
+          },
+          {
+            name: 'Relationships Only',
+            value: 'relationships',
+            description: 'Backfill only relationship fact embeddings',
+          },
+        ],
+        default: 'both',
+        displayOptions: {
+          show: {
+            operation: ['backfillEmbeddings'],
+          },
+        },
+        description: 'Which missing embeddings to backfill',
+      },
+      {
+        displayName: 'Embedding Model',
+        name: 'backfillEmbeddingModel',
+        type: 'string',
+        default: '',
+        displayOptions: {
+          show: {
+            operation: ['backfillEmbeddings'],
+          },
+        },
+        description:
+          'Embedding model to use when Dry Run is disabled. Uses the Engram Extraction LLM credential.',
+      },
+      {
+        displayName: 'Backfill Limit',
+        name: 'backfillLimit',
+        type: 'number',
+        default: 50,
+        typeOptions: {
+          minValue: 1,
+          maxValue: 500,
+        },
+        displayOptions: {
+          show: {
+            operation: ['backfillEmbeddings'],
+          },
+        },
+        description: 'Maximum number of missing embeddings to process in one execution',
       },
       // --- List groups parameters ---
       {
@@ -426,6 +499,23 @@ export class EngramAdmin implements INodeType {
         },
         description: 'Maximum number of groups to return',
       },
+      // --- Export guardrails ---
+      {
+        displayName: 'Maximum Export Items',
+        name: 'maxExportItems',
+        type: 'number',
+        default: 0,
+        typeOptions: {
+          minValue: 0,
+        },
+        displayOptions: {
+          show: {
+            operation: ['export'],
+          },
+        },
+        description:
+          'Optional safety limit across entities, relationships, and episodes. Set 0 to preserve existing unlimited export behavior.',
+      },
       // --- Import data ---
       {
         displayName: 'Import Data',
@@ -440,6 +530,46 @@ export class EngramAdmin implements INodeType {
         },
         description:
           'JSON data to import (must contain entities, edges, and episodes arrays from a previous export)',
+      },
+      {
+        displayName: 'Import Mode',
+        name: 'importMode',
+        type: 'options',
+        options: [
+          {
+            name: 'Import',
+            value: 'import',
+            description: 'Validate and write the graph data',
+          },
+          {
+            name: 'Dry Run',
+            value: 'dryRun',
+            description: 'Validate only and report what would be imported',
+          },
+        ],
+        default: 'import',
+        displayOptions: {
+          show: {
+            operation: ['import'],
+          },
+        },
+        description: 'Whether to write the import or only validate it',
+      },
+      {
+        displayName: 'Maximum Import Items',
+        name: 'maxImportItems',
+        type: 'number',
+        default: 0,
+        typeOptions: {
+          minValue: 0,
+        },
+        displayOptions: {
+          show: {
+            operation: ['import'],
+          },
+        },
+        description:
+          'Optional safety limit across entities, relationships, and episodes. Set 0 to preserve existing unlimited import behavior.',
       },
       // --- Community Detection Parameters ---
       {
@@ -733,6 +863,36 @@ async function executeMonitoring(
                   10,
               ) / 10
             : null,
+      },
+    });
+  } else if (operation === 'embeddingCoverage') {
+    const groupId = (ctx.getNodeParameter('groupIdFilter', i, '') as string).trim();
+    const data = await storage.exportGraph(groupId || undefined);
+    const entitiesWithEmbeddings = data.entities.filter(
+      (entity) => Array.isArray(entity.name_embedding) && entity.name_embedding.length > 0,
+    ).length;
+    const edgesWithEmbeddings = data.edges.filter(
+      (edge) => Array.isArray(edge.fact_embedding) && edge.fact_embedding.length > 0,
+    ).length;
+
+    returnData.push({
+      json: {
+        operation: 'embeddingCoverage',
+        group_id: groupId || null,
+        entity_count: data.entities.length,
+        edge_count: data.edges.length,
+        entities_with_name_embeddings: entitiesWithEmbeddings,
+        edges_with_fact_embeddings: edgesWithEmbeddings,
+        entity_embedding_coverage:
+          data.entities.length > 0
+            ? Math.round((entitiesWithEmbeddings / data.entities.length) * 10000) / 100
+            : 0,
+        edge_embedding_coverage:
+          data.edges.length > 0
+            ? Math.round((edgesWithEmbeddings / data.edges.length) * 10000) / 100
+            : 0,
+        missing_entity_embeddings: data.entities.length - entitiesWithEmbeddings,
+        missing_edge_embeddings: data.edges.length - edgesWithEmbeddings,
       },
     });
   } else if (operation === 'diagnostics') {
@@ -1123,6 +1283,131 @@ async function executeHygiene(
         expired: !dryRun,
       },
     });
+  } else if (operation === 'rebuildSearchIndex') {
+    if (typeof storage.rebuildSearchIndex !== 'function') {
+      returnData.push({
+        json: {
+          operation: 'rebuildSearchIndex',
+          status: 'skipped',
+          reason: 'Storage backend does not require a local full-text index rebuild.',
+        },
+      });
+      return;
+    }
+
+    const result = await storage.rebuildSearchIndex();
+    returnData.push({
+      json: {
+        operation: 'rebuildSearchIndex',
+        status: 'ok',
+        ...result,
+      },
+    });
+  } else if (operation === 'backfillEmbeddings') {
+    const groupId = (ctx.getNodeParameter('groupIdFilter', i, '') as string).trim();
+    const dryRun = ctx.getNodeParameter('dryRun', i, true) as boolean;
+    const target = ctx.getNodeParameter('backfillTarget', i, 'both') as string;
+    const limit = ctx.getNodeParameter('backfillLimit', i, 50) as number;
+    const data = await storage.exportGraph(groupId || undefined);
+
+    const missingEntities =
+      target === 'relationships'
+        ? []
+        : data.entities.filter(
+            (entity) => !Array.isArray(entity.name_embedding) || entity.name_embedding.length === 0,
+          );
+    const missingEdges =
+      target === 'entities'
+        ? []
+        : data.edges.filter(
+            (edge) => !Array.isArray(edge.fact_embedding) || edge.fact_embedding.length === 0,
+          );
+
+    const candidates = [
+      ...missingEntities.map((entity) => ({ kind: 'entity' as const, uuid: entity.uuid, entity })),
+      ...missingEdges.map((edge) => ({ kind: 'edge' as const, uuid: edge.uuid, edge })),
+    ].slice(0, limit);
+
+    if (dryRun) {
+      returnData.push({
+        json: {
+          operation: 'backfillEmbeddings',
+          mode: 'dryRun',
+          group_id: groupId || null,
+          target,
+          limit,
+          missing_entity_embeddings: missingEntities.length,
+          missing_edge_embeddings: missingEdges.length,
+          planned_updates: candidates.length,
+          written: false,
+        },
+      });
+      return;
+    }
+
+    const model = (ctx.getNodeParameter('backfillEmbeddingModel', i, '') as string).trim();
+    if (!model) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Embedding Model is required when Backfill Embeddings dry run is disabled',
+        { itemIndex: i },
+      );
+    }
+
+    const credentials = await ctx.getCredentials('engramExtractionApi');
+    const embeddingService = new EmbeddingService({
+      apiKey: credentials.apiKey as string,
+      baseUrl: credentials.baseUrl as string,
+      model,
+    });
+    const updated: string[] = [];
+    const failed: Array<{ uuid: string; kind: string; error: string }> = [];
+
+    for (const candidate of candidates) {
+      try {
+        if (candidate.kind === 'entity') {
+          const result = await embeddingService.embed(candidate.entity.name);
+          await storage.updateEntity(candidate.entity.uuid, {
+            name_embedding: result.embedding,
+            attributes: mergeMaintenanceAttributes(candidate.entity.attributes, {
+              embedding_backfilled_at: nowIso(),
+              embedding_model: model,
+            }),
+          });
+        } else {
+          const result = await embeddingService.embed(candidate.edge.fact);
+          await storage.updateEdge(candidate.edge.uuid, {
+            fact_embedding: result.embedding,
+            attributes: mergeMaintenanceAttributes(candidate.edge.attributes, {
+              embedding_backfilled_at: nowIso(),
+              embedding_model: model,
+            }),
+          });
+        }
+        updated.push(candidate.uuid);
+      } catch (error) {
+        failed.push({
+          uuid: candidate.uuid,
+          kind: candidate.kind,
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    returnData.push({
+      json: {
+        operation: 'backfillEmbeddings',
+        mode: 'write',
+        group_id: groupId || null,
+        target,
+        limit,
+        updated,
+        failed,
+        total_updated: updated.length,
+        total_failed: failed.length,
+        written: true,
+      },
+    });
   }
 }
 
@@ -1139,10 +1424,34 @@ async function executePortability(
 ): Promise<void> {
   if (operation === 'export') {
     const groupId = (ctx.getNodeParameter('groupIdFilter', i, '') as string).trim();
+    const maxExportItems = ctx.getNodeParameter('maxExportItems', i, 0) as number;
     const data = await storage.exportGraph(groupId || undefined);
-    returnData.push({ json: data as unknown as IDataObject });
+    const totalItems = countGraphItems(data);
+
+    if (maxExportItems > 0 && totalItems > maxExportItems) {
+      throw new NodeOperationError(ctx.getNode(), 'Export exceeds configured safety limit', {
+        itemIndex: i,
+        description: `Export contains ${totalItems} items, which exceeds Maximum Export Items (${maxExportItems}). Increase the limit or export a single group.`,
+      });
+    }
+
+    const exportData: GraphData = {
+      ...data,
+      metadata: {
+        checksum_sha256: graphChecksum(data),
+        checksum_algorithm: 'sha256',
+        generated_by: 'n8n-nodes-engram',
+        entity_count: data.entities.length,
+        edge_count: data.edges.length,
+        episode_count: data.episodes.length,
+      },
+    };
+
+    returnData.push({ json: exportData as unknown as IDataObject });
   } else if (operation === 'import') {
     const importData = ctx.getNodeParameter('importData', i) as unknown;
+    const importMode = ctx.getNodeParameter('importMode', i, 'import') as string;
+    const maxImportItems = ctx.getNodeParameter('maxImportItems', i, 0) as number;
     const parsed = GraphDataSchema.safeParse(importData);
 
     if (!parsed.success) {
@@ -1155,19 +1464,87 @@ async function executePortability(
     }
 
     const graphData: GraphData = parsed.data;
-    await storage.importGraph(graphData);
+    const totalItems = countGraphItems(graphData);
+
+    if (maxImportItems > 0 && totalItems > maxImportItems) {
+      throw new NodeOperationError(ctx.getNode(), 'Import exceeds configured safety limit', {
+        itemIndex: i,
+        description: `Import contains ${totalItems} items, which exceeds Maximum Import Items (${maxImportItems}). Increase the limit or split the import.`,
+      });
+    }
+
+    const checksum = graphData.metadata?.checksum_sha256;
+    if (checksum && checksum !== graphChecksum(graphData)) {
+      throw new NodeOperationError(ctx.getNode(), 'Import checksum verification failed', {
+        itemIndex: i,
+        description:
+          'The import metadata checksum does not match the graph contents. Re-export the data or inspect it before importing.',
+      });
+    }
+
+    const entityUuids = new Set(graphData.entities.map((entity) => entity.uuid));
+    const danglingEdges = graphData.edges.filter(
+      (edge) => !entityUuids.has(edge.source_node_uuid) || !entityUuids.has(edge.target_node_uuid),
+    );
+
+    if (importMode !== 'dryRun') {
+      await storage.importGraph(graphData);
+    }
+
     returnData.push({
       json: {
         success: true,
         operation: 'import',
+        mode: importMode,
+        checksum_verified: Boolean(checksum),
+        warnings:
+          danglingEdges.length > 0
+            ? [`${danglingEdges.length} edge(s) reference entities missing from the import data.`]
+            : [],
         imported: {
           entities: graphData.entities.length,
           edges: graphData.edges.length,
           episodes: graphData.episodes.length,
         },
+        written: importMode !== 'dryRun',
       },
     });
   }
+}
+
+function countGraphItems(data: GraphData): number {
+  return data.entities.length + data.edges.length + data.episodes.length;
+}
+
+function graphChecksum(data: GraphData): string {
+  const checksumData = {
+    version: data.version,
+    exported_at: data.exported_at,
+    group_id: data.group_id,
+    entities: data.entities,
+    edges: data.edges,
+    episodes: data.episodes,
+  };
+
+  return createHash('sha256').update(JSON.stringify(checksumData)).digest('hex');
+}
+
+function mergeMaintenanceAttributes(
+  attributes: Record<string, unknown>,
+  maintenanceAttributes: Record<string, unknown>,
+): Record<string, unknown> {
+  const existingMaintenance =
+    typeof attributes.engram_maintenance === 'object' && attributes.engram_maintenance !== null
+      ? (attributes.engram_maintenance as Record<string, unknown>)
+      : {};
+
+  return {
+    ...attributes,
+    engram_maintenance: {
+      ...existingMaintenance,
+      ...maintenanceAttributes,
+    },
+  };
 }
 
 // =============================================

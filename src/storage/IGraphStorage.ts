@@ -137,6 +137,7 @@ export interface IGraphStorage {
   exportGraph(groupId?: string): Promise<GraphData>;
   importGraph(data: GraphData): Promise<void>;
   getStats(groupId?: string): Promise<GraphStats>;
+  rebuildSearchIndex?(): Promise<{ indexed_entities: number; indexed_edges: number }>;
 
   // === Retention ===
   applyRetention(groupId: string, policy: RetentionPolicy): Promise<number>;

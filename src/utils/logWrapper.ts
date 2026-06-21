@@ -11,7 +11,7 @@ import { Embeddings } from '@langchain/core/embeddings';
 import { VectorStore } from '@langchain/core/vectorstores';
 import type { Document } from '@langchain/core/documents';
 import { TextSplitter } from '@langchain/textsplitters';
-import type { BaseChatMemory } from '@langchain/community/memory/chat_memory';
+import type { BaseChatMemory } from '@langchain/classic/memory/chat_memory';
 import { BaseRetriever } from '@langchain/core/retrievers';
 import { BaseOutputParser, OutputParserException } from '@langchain/core/output_parsers';
 import { isObject } from 'lodash';

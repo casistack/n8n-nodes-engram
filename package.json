@@ -56,6 +56,7 @@
   "files": [
     "dist",
     "dist/nodes/**/*.png",
+    "docs",
     "LICENSE",
     "README.md"
   ],
@@ -73,7 +74,7 @@
     ]
   },
   "dependencies": {
-    "@langchain/community": "^1.1.29",
+    "@langchain/classic": "^1.0.36",
     "@langchain/core": "^1.2.0",
     "@langchain/textsplitters": "^1.0.1",
     "graphology": "^0.25.4",

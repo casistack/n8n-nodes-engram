@@ -39,6 +39,9 @@ interface GraphEdgeAttributes {
   data: EntityEdge | null;
 }
 
+const PERSIST_LOCK_TIMEOUT_MS = 5000;
+const PERSIST_LOCK_STALE_MS = 30000;
+
 export class GraphologyStorage implements IGraphStorage {
   private graph: MultiDirectedGraph<GraphNodeAttributes, GraphEdgeAttributes>;
   private searchProvider: MinisearchProvider;
@@ -792,6 +795,39 @@ export class GraphologyStorage implements IGraphStorage {
     };
   }
 
+  async rebuildSearchIndex(): Promise<{ indexed_entities: number; indexed_edges: number }> {
+    let indexedEntities = 0;
+    let indexedEdges = 0;
+
+    this.searchProvider.clear();
+
+    this.graph.forEachNode((_key, attrs) => {
+      if (attrs.type !== 'entity') return;
+      const entity = attrs.data as EntityNode;
+      this.searchProvider.indexEntity(entity.uuid, {
+        name: entity.name,
+        summary: entity.summary,
+        entity_type: entity.entity_type,
+      });
+      indexedEntities++;
+    });
+
+    this.graph.forEachEdge((_edgeKey, attrs) => {
+      if (attrs.type !== 'entity_edge' || !attrs.data) return;
+      const edge = attrs.data as EntityEdge;
+      this.searchProvider.indexEdge(edge.uuid, {
+        name: edge.name,
+        fact: edge.fact,
+      });
+      indexedEdges++;
+    });
+
+    return {
+      indexed_entities: indexedEntities,
+      indexed_edges: indexedEdges,
+    };
+  }
+
   // ===== Retention =====
 
   async applyRetention(groupId: string, policy: RetentionPolicy): Promise<number> {
@@ -863,11 +899,21 @@ export class GraphologyStorage implements IGraphStorage {
     const data = await this.exportGraph();
     const dir = path.dirname(this.persistPath);
 
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    await fs.promises.mkdir(dir, { recursive: true });
 
-    fs.writeFileSync(this.persistPath, JSON.stringify(data, null, 2), 'utf-8');
+    const payload = JSON.stringify(data, null, 2);
+    const tmpPath = `${this.persistPath}.${process.pid}.${Date.now()}.tmp`;
+    const releaseLock = await this.acquirePersistLock();
+
+    try {
+      await fs.promises.writeFile(tmpPath, payload, 'utf-8');
+      await fs.promises.rename(tmpPath, this.persistPath);
+    } catch (error) {
+      await fs.promises.rm(tmpPath, { force: true }).catch(() => {});
+      throw error;
+    } finally {
+      await releaseLock();
+    }
   }
 
   private async loadFromDisk(): Promise<void> {
@@ -880,6 +926,48 @@ export class GraphologyStorage implements IGraphStorage {
     } catch {
       // If file is corrupted, start fresh
       console.error(`Engram: Failed to load graph from ${this.persistPath}, starting fresh`);
+    }
+  }
+
+  private async acquirePersistLock(): Promise<() => Promise<void>> {
+    if (!this.persistPath) return async () => {};
+
+    const lockPath = `${this.persistPath}.lock`;
+    const startedAt = Date.now();
+
+    for (;;) {
+      try {
+        const handle = await fs.promises.open(lockPath, 'wx');
+        await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, 'utf-8');
+        await handle.close();
+        return async () => {
+          await fs.promises.rm(lockPath, { force: true });
+        };
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'EEXIST') throw error;
+
+        const lockIsStale = await this.isPersistLockStale(lockPath);
+        if (lockIsStale) {
+          await fs.promises.rm(lockPath, { force: true }).catch(() => {});
+          continue;
+        }
+
+        if (Date.now() - startedAt > PERSIST_LOCK_TIMEOUT_MS) {
+          throw new Error(`Timed out waiting for Engram storage lock: ${lockPath}`);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+  }
+
+  private async isPersistLockStale(lockPath: string): Promise<boolean> {
+    try {
+      const stats = await fs.promises.stat(lockPath);
+      return Date.now() - stats.mtimeMs > PERSIST_LOCK_STALE_MS;
+    } catch {
+      return false;
     }
   }
 }

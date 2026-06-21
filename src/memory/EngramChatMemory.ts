@@ -1,5 +1,5 @@
-import { BaseChatMemory } from '@langchain/community/memory/chat_memory';
-import type { BaseChatMemoryInput } from '@langchain/community/memory/chat_memory';
+import { BaseChatMemory } from '@langchain/classic/memory/chat_memory';
+import type { BaseChatMemoryInput } from '@langchain/classic/memory/chat_memory';
 import {
   getInputValue,
   getOutputValue,

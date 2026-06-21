@@ -1,0 +1,74 @@
+{
+  "name": "Engram Embedded Memory Starter",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "backend": "embedded",
+        "resource": "entity",
+        "operation": "create",
+        "groupId": "demo-session",
+        "entityName": "Engram",
+        "entityType": "concept",
+        "summary": "Knowledge graph memory for n8n AI agents"
+      },
+      "id": "create-demo-entity",
+      "name": "Create Demo Entity",
+      "type": "n8n-nodes-engram.engramExplorer",
+      "typeVersion": 3,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "backend": "embedded",
+        "resource": "entity",
+        "operation": "list",
+        "groupId": "demo-session",
+        "limit": 10,
+        "offset": 0
+      },
+      "id": "list-demo-entities",
+      "name": "List Demo Entities",
+      "type": "n8n-nodes-engram.engramExplorer",
+      "typeVersion": 3,
+      "position": [760, 300]
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Create Demo Entity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Demo Entity": {
+      "main": [
+        [
+          {
+            "node": "List Demo Entities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

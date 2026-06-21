@@ -115,4 +115,35 @@ describe('EngramExplorer', () => {
     expect(result[0][0].json.name).toBe('Alice');
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
+
+  it('supports offset pagination when listing entities', async () => {
+    const storage = createStorage({
+      backend: 'embedded',
+      persistPath,
+    });
+    await storage.initialize();
+
+    await storage.addEntity({ name: 'Alice', group_id: 'g1', entity_type: 'person' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await storage.addEntity({ name: 'Bob', group_id: 'g1', entity_type: 'person' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await storage.addEntity({ name: 'Carol', group_id: 'g1', entity_type: 'person' });
+
+    const explorer = new EngramExplorer();
+    const context = createExecuteContext({
+      tempDir,
+      parameters: {
+        resource: 'entity',
+        operation: 'list',
+        groupId: 'g1',
+        limit: 1,
+        offset: 1,
+      },
+    });
+
+    const result = await explorer.execute.call(context);
+
+    expect(result[0]).toHaveLength(1);
+    expect(result[0][0].json.name).toBe('Bob');
+  });
 });

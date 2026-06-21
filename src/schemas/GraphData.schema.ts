@@ -7,6 +7,16 @@ export const GraphDataSchema = z.object({
   version: z.literal('1.0'),
   exported_at: z.string().datetime(),
   group_id: z.string().optional(),
+  metadata: z
+    .object({
+      checksum_sha256: z.string().optional(),
+      checksum_algorithm: z.literal('sha256').optional(),
+      generated_by: z.string().optional(),
+      entity_count: z.number().int().nonnegative().optional(),
+      edge_count: z.number().int().nonnegative().optional(),
+      episode_count: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
   entities: z.array(EntityNodeSchema),
   edges: z.array(EntityEdgeSchema),
   episodes: z.array(EpisodicNodeSchema),

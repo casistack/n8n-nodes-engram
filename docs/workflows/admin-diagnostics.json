@@ -1,0 +1,45 @@
+{
+  "name": "Engram Admin Diagnostics",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "backend": "embedded",
+        "resource": "monitoring",
+        "operation": "diagnostics",
+        "includeDeepChecks": "disabled"
+      },
+      "id": "engram-diagnostics",
+      "name": "Engram Diagnostics",
+      "type": "n8n-nodes-engram.engramAdmin",
+      "typeVersion": 2,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Engram Diagnostics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

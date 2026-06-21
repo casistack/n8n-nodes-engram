@@ -551,6 +551,22 @@ export class EngramExplorer implements INodeType {
         },
         description: 'Maximum number of results to return',
       },
+      {
+        displayName: 'Offset',
+        name: 'offset',
+        type: 'number',
+        default: 0,
+        typeOptions: {
+          minValue: 0,
+        },
+        displayOptions: {
+          show: {
+            resource: ['entity'],
+            operation: ['list'],
+          },
+        },
+        description: 'Number of matching entities to skip before returning results',
+      },
       // Min relevance score for search operations
       {
         displayName: 'Min Relevance Score',
@@ -971,10 +987,12 @@ async function executeEntityOperation(
   } else if (operation === 'list') {
     const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const limit = ctx.getNodeParameter('limit', i) as number;
+    const offset = ctx.getNodeParameter('offset', i, 0) as number;
     const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
     const createdBefore = ctx.getNodeParameter('createdBefore', i, '') as string;
     const entities = await storage.listEntities(groupId, {
       limit,
+      offset,
       created_after: createdAfter || undefined,
       created_before: createdBefore || undefined,
     });

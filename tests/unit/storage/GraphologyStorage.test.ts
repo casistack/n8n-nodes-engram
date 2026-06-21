@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { GraphologyStorage } from '../../../src/storage/GraphologyStorage';
 import type { EntityNode, EntityEdge, EpisodicNode } from '../../../src/schemas';
 
@@ -487,6 +490,32 @@ describe('GraphologyStorage', () => {
 			expect(stats.episode_count).toBe(1);
 
 			await newStorage.close();
+		});
+
+		it('should persist embedded storage with atomic replacement files cleaned up', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-persist-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+
+			try {
+				const persistentStorage = new GraphologyStorage(persistPath);
+				await persistentStorage.initialize();
+				await persistentStorage.addEntity({
+					name: 'Persistent Alice',
+					group_id: 'persist-group',
+					entity_type: 'person',
+				});
+				await persistentStorage.close();
+
+				const persisted = JSON.parse(fs.readFileSync(persistPath, 'utf-8')) as {
+					entities: Array<{ name: string }>;
+				};
+				expect(persisted.entities).toHaveLength(1);
+				expect(persisted.entities[0].name).toBe('Persistent Alice');
+				expect(fs.existsSync(`${persistPath}.lock`)).toBe(false);
+				expect(fs.readdirSync(tempDir).filter((file) => file.endsWith('.tmp'))).toHaveLength(0);
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
 		});
 
 		it('should return correct stats', async () => {

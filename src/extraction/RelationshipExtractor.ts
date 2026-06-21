@@ -41,15 +41,25 @@ export class RelationshipExtractor {
 
       // Validate each relationship references known entities
       const entitySet = new Set(entityNames.map((n) => n.toLowerCase()));
-      return result.relationships.filter(
-        (r) =>
-          typeof r.source_entity === 'string' &&
-          typeof r.target_entity === 'string' &&
-          typeof r.name === 'string' &&
-          typeof r.fact === 'string' &&
-          entitySet.has(r.source_entity.toLowerCase()) &&
-          entitySet.has(r.target_entity.toLowerCase()),
-      );
+      return result.relationships
+        .filter(
+          (r) =>
+            typeof r.source_entity === 'string' &&
+            typeof r.target_entity === 'string' &&
+            typeof r.name === 'string' &&
+            r.name.trim() !== '' &&
+            typeof r.fact === 'string' &&
+            r.fact.trim() !== '' &&
+            r.source_entity.toLowerCase().trim() !== r.target_entity.toLowerCase().trim() &&
+            entitySet.has(r.source_entity.toLowerCase().trim()) &&
+            entitySet.has(r.target_entity.toLowerCase().trim()),
+        )
+        .map((r) => ({
+          source_entity: r.source_entity.trim(),
+          target_entity: r.target_entity.trim(),
+          name: r.name.trim(),
+          fact: r.fact.trim(),
+        }));
     } catch (error) {
       console.warn('Engram: Relationship extraction failed:', (error as Error).message);
       return [];

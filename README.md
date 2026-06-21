@@ -53,7 +53,7 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 | **2** | Storage Backends | Embedded (zero-setup) or Neo4j (production) |
 | **5** | Extraction Stages | Entity, dedup, relationships, contradictions, embeddings |
 | **3** | Search Modes | Full-text, vector, hybrid RRF fusion |
-| **246** | Tests | Unit + integration across 26 test suites |
+| **253** | Tests | Unit + integration across 26 test suites |
 
 ---
 
@@ -146,9 +146,9 @@ On each conversation turn, Engram Memory:
 
 | Resource | Operations |
 | --- | --- |
-| **Monitoring** | Stats, List Groups, Group Stats, Diagnostics |
+| **Monitoring** | Stats, List Groups, Group Stats, Embedding Coverage, Diagnostics |
 | **Lifecycle** | Apply Retention, Clear Group, Bulk Clear Groups, Clear All |
-| **Hygiene** | Orphaned Entities, Duplicate Entities, Expire Stale Edges |
+| **Hygiene** | Orphaned Entities, Duplicate Entities, Expire Stale Edges, Rebuild Search Index, Backfill Embeddings |
 | **Portability** | Export, Import |
 | **Analysis** | Detect Communities |
 
@@ -159,6 +159,14 @@ On each conversation turn, Engram Memory:
 ### Operational Diagnostics
 
 Engram Admin includes a read-only **Monitoring > Diagnostics** operation for production checks. By default it returns quick storage and graph counts only. Optional deep checks scan the full graph to report embedding coverage, expired/invalidated edges, dangling edges, and duplicate entity-name groups.
+
+Use **Monitoring > Embedding Coverage** to check whether entities and facts have vectors before enabling hybrid search broadly. Use **Hygiene > Rebuild Search Index** to rebuild the embedded full-text index from stored graph data. Use **Hygiene > Backfill Embeddings** in dry-run mode first, then disable dry-run to fill missing embeddings with the configured embedding model.
+
+### Import, Export, and Backups
+
+Engram exports include count metadata and a SHA-256 checksum. Imports support **Dry Run** mode, optional maximum item limits, checksum verification, and dangling-edge warnings before writing data.
+
+For production Neo4j deployments, see [`docs/production-neo4j.md`](docs/production-neo4j.md). Ready-to-import starter workflows are available in [`docs/workflows/`](docs/workflows/).
 
 ---
 
@@ -197,6 +205,8 @@ User message + AI response
 **Supported providers**: Any OpenAI-compatible API&mdash;OpenAI, OpenRouter, Ollama, LM Studio, Together AI, and others.
 
 **Configurable entity types**: `person`, `organization`, `location`, `concept`, `event`, or custom types.
+
+Extracted entities and relationships include `attributes.engram_extraction` provenance metadata with source, extraction timestamp, confidence placeholder, review status, and related episode UUIDs where available.
 
 ---
 

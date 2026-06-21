@@ -9,6 +9,8 @@ import { EdgeDeduplicator } from './EdgeDeduplicator';
 import { EmbeddingService, type EmbeddingConfig } from '../embeddings';
 import { nowIso } from '../utils/temporal';
 
+const EXTRACTION_METADATA_VERSION = 1;
+
 export interface ExtractionPipelineConfig {
   llmConfig: LlmClientConfig;
   entityTypes: string[];
@@ -137,6 +139,15 @@ export class ExtractionPipeline {
       summary: extracted.summary,
       entity_type: extracted.entity_type,
       name_embedding: nameEmbedding ?? null,
+      attributes: {
+        engram_extraction: {
+          version: EXTRACTION_METADATA_VERSION,
+          source: 'llm',
+          confidence: null,
+          reviewed: false,
+          extracted_at: nowIso(),
+        },
+      },
     });
   }
 
@@ -350,6 +361,16 @@ export class ExtractionPipeline {
       fact_embedding: factEmbedding ?? null,
       valid_at: nowIso(),
       episodes: episodeUuids,
+      attributes: {
+        engram_extraction: {
+          version: EXTRACTION_METADATA_VERSION,
+          source: 'llm',
+          confidence: null,
+          reviewed: false,
+          extracted_at: nowIso(),
+          episode_uuids: episodeUuids,
+        },
+      },
     });
   }
 

@@ -1,0 +1,40 @@
+name: n8n Smoke Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Package Registration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack Engram
+        run: npm pack
+      - name: Install into disposable n8n user folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          N8N_USER_FOLDER="$(mktemp -d)"
+          PACKAGE_TGZ="$(ls n8n-nodes-engram-*.tgz | head -n 1)"
+          mkdir -p "$N8N_USER_FOLDER/nodes"
+          npm install --prefix "$N8N_USER_FOLDER/nodes" "$PWD/$PACKAGE_TGZ"
+          N8N_USER_FOLDER="$N8N_USER_FOLDER" N8N_PORT=5679 timeout 45s npx --yes n8n@2.12.3 start > "$N8N_USER_FOLDER/n8n.log" 2>&1 &
+          N8N_PID="$!"
+          trap 'kill "$N8N_PID" 2>/dev/null || true' EXIT
+          for _ in {1..45}; do
+            if grep -q "Loaded all credentials and nodes from n8n-nodes-engram" "$N8N_USER_FOLDER/n8n.log"; then
+              grep "Loaded all credentials and nodes from n8n-nodes-engram" "$N8N_USER_FOLDER/n8n.log"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$N8N_USER_FOLDER/n8n.log"
+          exit 1
