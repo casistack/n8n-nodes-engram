@@ -65,9 +65,9 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 
 ---
 
-## Screenshots
+## Product Screenshots
 
-Captured from a disposable local n8n instance with `n8n-nodes-engram` installed from the packed package.
+Engram provides dedicated n8n nodes for AI memory, graph exploration, administration, diagnostics, and event-driven workflows.
 
 | Installed nodes | AI Memory node |
 | --- | --- |

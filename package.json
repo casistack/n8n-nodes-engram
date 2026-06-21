@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-engram",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Knowledge graph memory for n8n AI agents. Persistent, per-user memory with entity extraction, temporal fact tracking, community detection, graph traversal, and hybrid search.",
   "keywords": [
     "n8n-community-node-package",
