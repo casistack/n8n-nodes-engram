@@ -43,6 +43,21 @@ Expected result:
 - Use **Portability > Import** with **Import Mode: Dry Run** before restoring into production.
 - Keep **Maximum Import Items** and **Maximum Export Items** set when testing backup/restore automation.
 
+## Upgrading from Engram v0.4.x
+
+Engram `0.5.0` adds governance properties to episode records. Neo4j remains available after the package upgrade, but existing episode records must be normalized through a bounded, operator-controlled migration.
+
+1. Take a Neo4j-native backup or snapshot before upgrading Engram.
+2. Upgrade `n8n-nodes-engram` to `0.5.0` and restart n8n.
+3. Add an **Engram Admin** node using the production Neo4j credential.
+4. Select **Lifecycle > Migrate Storage Schema** and run **Dry Run**.
+5. Review the matched legacy episode count.
+6. Select **Migrate**, set **Confirm Migration** to **Confirmed**, and execute a bounded batch.
+7. Repeat until `remaining_count` is `0`.
+8. Run **Monitoring > Diagnostics** and confirm that `migration_required` is `false`.
+
+The migration only fills missing episode governance fields with conservative defaults. It does not overwrite existing values or perform an unbounded startup rewrite.
+
 ## Scaling Notes
 
 Neo4j is the safer backend when:

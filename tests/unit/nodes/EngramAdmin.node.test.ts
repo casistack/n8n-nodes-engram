@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { EngramAdmin } from '../../../src/nodes/EngramAdmin/EngramAdmin.node';
 import { createStorage } from '../../../src/storage/StorageFactory';
 import { resolveStoragePath } from '../../../src/utils/helpers';
@@ -81,6 +82,85 @@ describe('EngramAdmin', () => {
     );
   });
 
+  it('previews and confirms bounded episode purges', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    await storage.appendEpisode({
+      group_id: 'cleanup-group',
+      content: 'Historical monitor output',
+      role: 'system',
+      reference_time: '2026-07-15T10:00:00.000Z',
+      episode_kind: 'monitor_summary',
+      trust_level: 'unverified',
+    });
+    await storage.appendEpisode({
+      group_id: 'cleanup-group',
+      content: 'Human message',
+      role: 'human',
+      reference_time: '2026-07-15T11:00:00.000Z',
+      episode_kind: 'active_human',
+      trust_level: 'trusted',
+    });
+
+    const admin = new EngramAdmin();
+    const dryRunContext = createExecuteContext({
+      tempDir,
+      operation: 'purgeEpisodes',
+      parameters: {
+        groupId: 'cleanup-group',
+        purgeEpisodeKind: 'monitor_summary',
+        purgeMode: 'dryRun',
+        purgeLimit: 10,
+      },
+    });
+
+    const preview = await admin.execute.call(dryRunContext);
+    expect(preview[0][0].json).toEqual(
+      expect.objectContaining({
+        operation: 'purgeEpisodes',
+        dry_run: true,
+        matched_count: 1,
+        deleted_count: 0,
+      }),
+    );
+    expect(await storage.getEpisodeCount('cleanup-group')).toBe(2);
+
+    const unconfirmedContext = createExecuteContext({
+      tempDir,
+      operation: 'purgeEpisodes',
+      parameters: {
+        groupId: 'cleanup-group',
+        purgeEpisodeKind: 'monitor_summary',
+        purgeMode: 'delete',
+      },
+    });
+    await expect(admin.execute.call(unconfirmedContext)).rejects.toThrow(
+      'Confirm Episode Purge must be set to Confirmed before deleting episodes',
+    );
+
+    const deleteContext = createExecuteContext({
+      tempDir,
+      operation: 'purgeEpisodes',
+      parameters: {
+        groupId: 'cleanup-group',
+        purgeEpisodeKind: 'monitor_summary',
+        purgeMode: 'delete',
+        confirmEpisodePurge: 'confirmed',
+        purgeLimit: 10,
+      },
+    });
+    const deleted = await admin.execute.call(deleteContext);
+
+    expect(deleted[0][0].json).toEqual(
+      expect.objectContaining({
+        dry_run: false,
+        matched_count: 1,
+        deleted_count: 1,
+      }),
+    );
+    expect(await storage.getEpisodeCount('cleanup-group')).toBe(1);
+  });
+
   it('returns quick diagnostics without scanning the full graph by default', async () => {
     const admin = new EngramAdmin();
     const storage = createStorage({
@@ -128,6 +208,79 @@ describe('EngramAdmin', () => {
         persist_path: persistPath,
         custom_storage_path_configured: true,
       }),
+    );
+    expect(result[0][0].json.migration).toEqual(
+      expect.objectContaining({
+        backend: 'embedded',
+        target_version: '2.0',
+        migration_required: false,
+      }),
+    );
+  });
+
+  it('reports the verified automatic backup after migrating embedded storage', async () => {
+    const timestamp = '2026-06-21T12:00:00.000Z';
+    const backupPath = `${persistPath}.pre-schema-2.0.backup.json`;
+    fs.mkdirSync(path.dirname(persistPath), { recursive: true });
+    fs.writeFileSync(
+      persistPath,
+      JSON.stringify({
+        version: '1.0',
+        exported_at: timestamp,
+        entities: [],
+        edges: [],
+        episodes: [
+          {
+            uuid: '00000000-0000-4000-8000-000000000096',
+            group_id: 'legacy-admin',
+            content: 'Legacy episode',
+            role: 'human',
+            reference_time: timestamp,
+            created_at: timestamp,
+          },
+        ],
+      }),
+      'utf-8',
+    );
+
+    const admin = new EngramAdmin();
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'diagnostics',
+      parameters: { resource: 'monitoring' },
+    });
+    const result = await admin.execute.call(context);
+
+    expect(result[0][0].json.migration).toEqual(
+      expect.objectContaining({
+        source_version: '1.0',
+        automatic_migration_completed: true,
+        legacy_episode_count: 1,
+        backup: {
+          created: true,
+          verified: true,
+          path: backupPath,
+        },
+      }),
+    );
+    expect(fs.existsSync(backupPath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(persistPath, 'utf-8')).version).toBe('2.0');
+  });
+
+  it('requires confirmation before applying storage schema migration', async () => {
+    const admin = new EngramAdmin();
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'migrateStorageSchema',
+      parameters: {
+        resource: 'lifecycle',
+        storageMigrationMode: 'migrate',
+        confirmStorageMigration: 'notConfirmed',
+      },
+    });
+
+    await expect(admin.execute.call(context)).rejects.toThrow(
+      'Confirm Migration must be set to Confirmed before applying schema changes',
     );
   });
 
@@ -330,7 +483,7 @@ describe('EngramAdmin', () => {
       parameters: {
         resource: 'portability',
         importData: {
-          version: '1.0',
+          version: '2.0',
           exported_at: 'not-a-date',
           entities: [],
           edges: [],
@@ -350,42 +503,7 @@ describe('EngramAdmin', () => {
       parameters: {
         resource: 'portability',
         importData: {
-          version: '1.0',
-          exported_at: new Date().toISOString(),
-          entities: [],
-          edges: [],
-          episodes: [],
-        },
-      },
-    });
-
-    const result = await admin.execute.call(context);
-
-    expect(result[0][0].json).toEqual({
-      success: true,
-      operation: 'import',
-      mode: 'import',
-      checksum_verified: false,
-      warnings: [],
-      imported: {
-        entities: 0,
-        edges: 0,
-        episodes: 0,
-      },
-      written: true,
-    });
-  });
-
-  it('validates import payloads in dry-run mode without writing', async () => {
-    const admin = new EngramAdmin();
-    const context = createExecuteContext({
-      tempDir,
-      operation: 'import',
-      parameters: {
-        resource: 'portability',
-        importMode: 'dryRun',
-        importData: {
-          version: '1.0',
+          version: '2.0',
           exported_at: new Date().toISOString(),
           entities: [],
           edges: [],
@@ -400,10 +518,148 @@ describe('EngramAdmin', () => {
       expect.objectContaining({
         success: true,
         operation: 'import',
-        mode: 'dryRun',
-        written: false,
+        mode: 'import',
+        checksum_verified: false,
+        migration: expect.objectContaining({
+          source_version: '2.0',
+          target_version: '2.0',
+          migration_required: false,
+        }),
+        warnings: [],
+        imported: {
+          entities: 0,
+          edges: 0,
+          episodes: 0,
+        },
+        written: true,
       }),
     );
+  });
+
+  it('verifies checksummed legacy exports before applying provenance defaults', async () => {
+    const exportedAt = '2026-06-21T12:00:00.000Z';
+    const episodeUuid = '00000000-0000-4000-8000-000000000099';
+    const legacyGraph = {
+      version: '1.0' as const,
+      exported_at: exportedAt,
+      entities: [],
+      edges: [],
+      episodes: [
+        {
+          uuid: episodeUuid,
+          group_id: 'legacy-group',
+          content: 'A message created before structured provenance.',
+          role: 'human' as const,
+          source_type: 'message' as const,
+          reference_time: exportedAt,
+          previous_episode_uuid: null,
+          created_at: exportedAt,
+        },
+      ],
+    };
+    const checksum = createHash('sha256')
+      .update(JSON.stringify({ ...legacyGraph, group_id: undefined }))
+      .digest('hex');
+    const admin = new EngramAdmin();
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'import',
+      parameters: {
+        resource: 'portability',
+        importData: {
+          ...legacyGraph,
+          metadata: {
+            checksum_sha256: checksum,
+            checksum_algorithm: 'sha256',
+          },
+        },
+      },
+    });
+
+    const result = await admin.execute.call(context);
+    expect(result[0][0].json).toEqual(
+      expect.objectContaining({
+        success: true,
+        checksum_verified: true,
+        written: true,
+        migration: expect.objectContaining({
+          source_version: '1.0',
+          target_version: '2.0',
+          migration_required: true,
+          episode_defaults_applied: expect.objectContaining({
+            episode_kind: 1,
+            trust_level: 1,
+            review_status: 1,
+          }),
+        }),
+      }),
+    );
+
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const episode = await storage.getEpisode(episodeUuid);
+    await storage.close();
+
+    expect(episode).toEqual(
+      expect.objectContaining({
+        episode_kind: 'legacy',
+        trust_level: 'unverified',
+        review_status: 'proposed',
+        confidence: null,
+      }),
+    );
+  });
+
+  it('validates import payloads in dry-run mode without writing', async () => {
+    const episodeUuid = '00000000-0000-4000-8000-000000000097';
+    const timestamp = '2026-06-21T12:00:00.000Z';
+    const admin = new EngramAdmin();
+    const context = createExecuteContext({
+      tempDir,
+      operation: 'import',
+      parameters: {
+        resource: 'portability',
+        importMode: 'dryRun',
+        importData: {
+          version: '1.0',
+          exported_at: timestamp,
+          entities: [],
+          edges: [],
+          episodes: [
+            {
+              uuid: episodeUuid,
+              group_id: 'dry-run-group',
+              content: 'Legacy dry-run episode',
+              role: 'human',
+              reference_time: timestamp,
+              created_at: timestamp,
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await admin.execute.call(context);
+
+    expect(result[0][0].json).toEqual(
+      expect.objectContaining({
+        success: true,
+        operation: 'import',
+        mode: 'dryRun',
+        written: false,
+        migration: expect.objectContaining({
+          source_version: '1.0',
+          target_version: '2.0',
+          migration_required: true,
+          records: { entities: 0, facts: 0, episodes: 1 },
+        }),
+      }),
+    );
+
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    await expect(storage.getEpisode(episodeUuid)).resolves.toBeNull();
+    await storage.close();
   });
 
   it('adds checksum metadata to exports and enforces export size limits', async () => {
@@ -444,6 +700,7 @@ describe('EngramAdmin', () => {
         episode_count: 0,
       }),
     );
+    expect(result[0][0].json.version).toBe('2.0');
 
     const limitedContext = createExecuteContext({
       tempDir,

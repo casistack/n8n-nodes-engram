@@ -1,4 +1,4 @@
-import neo4j, { type Driver, type Session } from 'neo4j-driver';
+import neo4j, { type Driver, type ManagedTransaction, type Session } from 'neo4j-driver';
 import { generateUuid } from '../utils/uuid';
 import { nowIso } from '../utils/temporal';
 import { cosineSimilarity } from '../embeddings/cosine';
@@ -12,6 +12,16 @@ import type {
   EdgeSearchOptions,
   VectorSearchOptions,
   RetentionPolicy,
+  AppendEpisodeResult,
+  EpisodeFilterOptions,
+  UpdateEpisodeInput,
+  DeleteEpisodeOptions,
+  DeleteEpisodeResult,
+  PurgeEpisodesOptions,
+  PurgeEpisodesResult,
+  StorageMigrationStatus,
+  StorageSchemaMigrationOptions,
+  StorageSchemaMigrationResult,
 } from './IGraphStorage';
 import type {
   EntityNode,
@@ -21,7 +31,14 @@ import type {
   EpisodicNode,
   CreateEpisodicNode,
   GraphData,
+  ImportGraphData,
   GraphStats,
+} from '../schemas';
+import {
+  CURRENT_GRAPH_DATA_VERSION,
+  CreateEpisodicNodeSchema,
+  EpisodicNodeSchema,
+  migrateGraphData,
 } from '../schemas';
 
 export class Neo4jStorage implements IGraphStorage {
@@ -55,6 +72,15 @@ export class Neo4jStorage implements IGraphStorage {
         // Episode indexes
         await tx.run('CREATE INDEX IF NOT EXISTS FOR (ep:Episode) ON (ep.uuid)');
         await tx.run('CREATE INDEX IF NOT EXISTS FOR (ep:Episode) ON (ep.group_id)');
+        await tx.run(
+          'CREATE CONSTRAINT episode_source_dedup IF NOT EXISTS FOR (ep:Episode) REQUIRE ep.source_dedup_key IS UNIQUE',
+        );
+        await tx.run(
+          'CREATE CONSTRAINT episode_idempotency_dedup IF NOT EXISTS FOR (ep:Episode) REQUIRE ep.idempotency_dedup_key IS UNIQUE',
+        );
+        await tx.run(
+          'CREATE CONSTRAINT episode_group_lock IF NOT EXISTS FOR (lock:EpisodeGroupLock) REQUIRE lock.group_id IS UNIQUE',
+        );
 
         // Full-text search indexes
         await tx.run(
@@ -77,6 +103,215 @@ export class Neo4jStorage implements IGraphStorage {
 
   private getSession(): Session {
     return this.driver.session({ database: this.database });
+  }
+
+  private sourceDedupKey(input: {
+    group_id: string;
+    source_message_id?: string | null;
+    episode_kind?: string;
+  }): string | null {
+    if (!input.source_message_id || !input.episode_kind) return null;
+    return JSON.stringify([input.group_id, input.source_message_id, input.episode_kind]);
+  }
+
+  private idempotencyDedupKey(input: {
+    group_id: string;
+    idempotency_key?: string | null;
+  }): string | null {
+    if (!input.idempotency_key) return null;
+    return JSON.stringify([input.group_id, input.idempotency_key]);
+  }
+
+  private buildEpisodeFilter(
+    alias: string,
+    groupId: string,
+    options: EpisodeFilterOptions,
+  ): { where: string; params: Record<string, unknown> } {
+    const clauses = [`${alias}.group_id = $filter_group_id`];
+    const params: Record<string, unknown> = { filter_group_id: groupId };
+    const equalityFilters: Array<[keyof EpisodeFilterOptions, string]> = [
+      ['role', 'role'],
+      ['source_type', 'source_type'],
+      ['episode_kind', 'episode_kind'],
+      ['trust_level', 'trust_level'],
+      ['review_status', 'review_status'],
+      ['sender_id', 'sender_id'],
+      ['conversation_id', 'conversation_id'],
+      ['source_message_id', 'source_message_id'],
+      ['source_workflow_id', 'source_workflow_id'],
+      ['source_execution_id', 'source_execution_id'],
+    ];
+    for (const [optionKey, property] of equalityFilters) {
+      const value = options[optionKey];
+      if (typeof value !== 'string' || value === '') continue;
+      clauses.push(`${alias}.${property} = $filter_${property}`);
+      params[`filter_${property}`] = value;
+    }
+    if (options.sender_name) {
+      clauses.push(`toLower(${alias}.sender_name) = toLower($filter_sender_name)`);
+      params.filter_sender_name = options.sender_name;
+    }
+    const dateFilters: Array<[keyof EpisodeFilterOptions, string, '>=' | '<=']> = [
+      ['reference_after', 'reference_time', '>='],
+      ['reference_before', 'reference_time', '<='],
+      ['created_after', 'created_at', '>='],
+      ['created_before', 'created_at', '<='],
+    ];
+    for (const [optionKey, property, operator] of dateFilters) {
+      const value = options[optionKey];
+      if (typeof value !== 'string' || value === '') continue;
+      clauses.push(`${alias}.${property} ${operator} $filter_${optionKey}`);
+      params[`filter_${optionKey}`] = value;
+    }
+    return { where: clauses.join(' AND '), params };
+  }
+
+  private buildEpisodeListQuery(
+    groupId: string,
+    options: EpisodeFilterOptions,
+  ): { query: string; params: Record<string, unknown> } {
+    const { where, params } = this.buildEpisodeFilter('ep', groupId, options);
+    const sortBy = options.sort_by === 'reference_time' ? 'reference_time' : 'created_at';
+    const sortOrder = options.sort_order === 'asc' ? 'ASC' : 'DESC';
+    let query = `MATCH (ep:Episode) WHERE ${where}
+      RETURN ep
+      ORDER BY ep.${sortBy} ${sortOrder}, coalesce(ep.append_sequence, 0) ${sortOrder}, ep.uuid ${sortOrder}`;
+    if (options.offset !== undefined) {
+      query += ' SKIP $offset';
+      params.offset = neo4j.int(Math.max(0, options.offset));
+    }
+    if (options.limit !== undefined) {
+      query += ' LIMIT $limit';
+      params.limit = neo4j.int(Math.max(0, options.limit));
+    }
+    return { query, params };
+  }
+
+  private async lockEpisodeGroup(tx: ManagedTransaction, groupId: string): Promise<void> {
+    await tx.run(
+      `MERGE (lock:EpisodeGroupLock {group_id: $group_id})
+       SET lock.sequence = coalesce(lock.sequence, 0) + 1,
+           lock.updated_at = $updated_at`,
+      { group_id: groupId, updated_at: nowIso() },
+    );
+  }
+
+  private async countEdgesLinkedToEpisodes(episodeUuids: string[]): Promise<number> {
+    if (episodeUuids.length === 0) return 0;
+    const session = this.getSession();
+    try {
+      return await session.executeRead((tx) =>
+        this.countEdgesLinkedToEpisodesInTransaction(tx, episodeUuids),
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  private async countEdgesLinkedToEpisodesInTransaction(
+    tx: ManagedTransaction,
+    episodeUuids: string[],
+  ): Promise<number> {
+    if (episodeUuids.length === 0) return 0;
+    const result = await tx.run(
+      `MATCH ()-[r:RELATES_TO]->()
+       WHERE any(episodeUuid IN $episode_uuids WHERE episodeUuid IN r.episodes)
+       RETURN count(r) AS count`,
+      { episode_uuids: episodeUuids },
+    );
+    return result.records[0]?.get('count').toNumber() ?? 0;
+  }
+
+  private async deleteEpisodeInTransaction(
+    tx: ManagedTransaction,
+    uuid: string,
+    options: DeleteEpisodeOptions,
+    groupAlreadyLocked = false,
+  ): Promise<DeleteEpisodeResult> {
+    const existingResult = await tx.run('MATCH (ep:Episode {uuid: $uuid}) RETURN ep', { uuid });
+    if (existingResult.records.length === 0) {
+      return {
+        episode_uuid: uuid,
+        deleted: false,
+        repaired_successor_count: 0,
+        linked_edge_count: 0,
+        updated_edge_count: 0,
+        deleted_edge_count: 0,
+      };
+    }
+    const episode = this.recordToEpisode(existingResult.records[0].get('ep').properties);
+    if (!groupAlreadyLocked) await this.lockEpisodeGroup(tx, episode.group_id);
+
+    const linkedResult = await tx.run(
+      'MATCH ()-[r:RELATES_TO]->() WHERE $uuid IN r.episodes RETURN r',
+      { uuid },
+    );
+    const cleanup = options.fact_cleanup ?? 'unlink';
+    let updatedEdgeCount = 0;
+    let deletedEdgeCount = 0;
+    if (cleanup !== 'preserve') {
+      for (const record of linkedResult.records) {
+        const edge = this.recordToEdge(record.get('r').properties);
+        const remainingEpisodes = edge.episodes.filter((episodeUuid) => episodeUuid !== uuid);
+        if (cleanup === 'delete_orphaned' && remainingEpisodes.length === 0) {
+          await tx.run('MATCH ()-[r:RELATES_TO {uuid: $edge_uuid}]->() DELETE r', {
+            edge_uuid: edge.uuid,
+          });
+          deletedEdgeCount++;
+        } else {
+          await tx.run(
+            `MATCH ()-[r:RELATES_TO {uuid: $edge_uuid}]->()
+             SET r.episodes = $episodes, r.updated_at = $updated_at`,
+            { edge_uuid: edge.uuid, episodes: remainingEpisodes, updated_at: nowIso() },
+          );
+          updatedEdgeCount++;
+        }
+      }
+    }
+
+    const successorResult = await tx.run(
+      `MATCH (successor:Episode {group_id: $group_id})
+       WHERE successor.previous_episode_uuid = $uuid
+       RETURN successor.uuid AS uuid`,
+      { group_id: episode.group_id, uuid },
+    );
+    const successorUuids = successorResult.records.map((record) => record.get('uuid') as string);
+    const repairChain = options.repair_chain ?? true;
+    if (repairChain) {
+      for (const successorUuid of successorUuids) {
+        await tx.run(
+          `MATCH (successor:Episode {uuid: $successor_uuid})
+           SET successor.previous_episode_uuid = $previous_uuid,
+               successor.updated_at = $updated_at`,
+          {
+            successor_uuid: successorUuid,
+            previous_uuid: episode.previous_episode_uuid,
+            updated_at: nowIso(),
+          },
+        );
+      }
+    }
+
+    await tx.run('MATCH (ep:Episode {uuid: $uuid}) DETACH DELETE ep', { uuid });
+    if (repairChain && episode.previous_episode_uuid) {
+      for (const successorUuid of successorUuids) {
+        await tx.run(
+          `MATCH (previous:Episode {uuid: $previous_uuid})
+           MATCH (successor:Episode {uuid: $successor_uuid})
+           MERGE (previous)-[:NEXT_EPISODE]->(successor)`,
+          { previous_uuid: episode.previous_episode_uuid, successor_uuid: successorUuid },
+        );
+      }
+    }
+
+    return {
+      episode_uuid: uuid,
+      deleted: true,
+      repaired_successor_count: repairChain ? successorUuids.length : 0,
+      linked_edge_count: linkedResult.records.length,
+      updated_edge_count: updatedEdgeCount,
+      deleted_edge_count: deletedEdgeCount,
+    };
   }
 
   // ===== Entity Operations =====
@@ -466,20 +701,86 @@ export class Neo4jStorage implements IGraphStorage {
   // ===== Episode Operations =====
 
   async addEpisode(input: CreateEpisodicNode): Promise<EpisodicNode> {
-    const episode: EpisodicNode = {
-      uuid: generateUuid(),
-      group_id: input.group_id,
-      content: input.content,
-      role: input.role,
-      source_type: input.source_type ?? 'message',
-      reference_time: input.reference_time,
-      previous_episode_uuid: input.previous_episode_uuid ?? null,
-      created_at: nowIso(),
-    };
+    const result = await this.appendEpisodeWithOptions(input, false);
+    return result.episode;
+  }
+
+  async appendEpisode(input: CreateEpisodicNode): Promise<AppendEpisodeResult> {
+    return this.appendEpisodeWithOptions(input, true);
+  }
+
+  private async appendEpisodeWithOptions(
+    input: CreateEpisodicNode,
+    autoChain: boolean,
+  ): Promise<AppendEpisodeResult> {
+    const shouldAutoChain =
+      autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid');
+    const parsed = CreateEpisodicNodeSchema.parse(input);
+    const sourceDedupKey = this.sourceDedupKey(parsed);
+    const idempotencyDedupKey = this.idempotencyDedupKey(parsed);
 
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      return await session.executeWrite(async (tx) => {
+        const lockResult = await tx.run(
+          `MERGE (lock:EpisodeGroupLock {group_id: $group_id})
+           SET lock.sequence = coalesce(lock.sequence, 0) + 1,
+               lock.updated_at = $updated_at
+           RETURN lock.sequence AS sequence`,
+          { group_id: parsed.group_id, updated_at: nowIso() },
+        );
+        const sequenceValue = lockResult.records[0]?.get('sequence');
+        const appendSequence = neo4j.isInt(sequenceValue)
+          ? sequenceValue.toNumber()
+          : Number(sequenceValue ?? 0);
+
+        if (sourceDedupKey || idempotencyDedupKey) {
+          const existingResult = await tx.run(
+            `MATCH (ep:Episode)
+             WHERE ($source_dedup_key IS NOT NULL AND ep.source_dedup_key = $source_dedup_key)
+                OR ($idempotency_dedup_key IS NOT NULL AND ep.idempotency_dedup_key = $idempotency_dedup_key)
+             RETURN ep`,
+            {
+              source_dedup_key: sourceDedupKey,
+              idempotency_dedup_key: idempotencyDedupKey,
+            },
+          );
+          const existingEpisodes = new Map<string, EpisodicNode>();
+          for (const record of existingResult.records) {
+            const existing = this.recordToEpisode(record.get('ep').properties);
+            existingEpisodes.set(existing.uuid, existing);
+          }
+          if (existingEpisodes.size > 1) {
+            throw new Error(
+              'Episode idempotency identifiers resolve to different existing episodes',
+            );
+          }
+          const existing = existingEpisodes.values().next().value as EpisodicNode | undefined;
+          if (existing) return { episode: existing, created: false };
+        }
+
+        let previousEpisodeUuid = parsed.previous_episode_uuid;
+        if (shouldAutoChain) {
+          const previousResult = await tx.run(
+            `MATCH (ep:Episode {group_id: $group_id})
+             RETURN ep.uuid AS uuid
+             ORDER BY coalesce(ep.append_sequence, 0) DESC, ep.created_at DESC, ep.uuid DESC
+             LIMIT 1`,
+            { group_id: parsed.group_id },
+          );
+          previousEpisodeUuid =
+            (previousResult.records[0]?.get('uuid') as string | undefined) ?? null;
+        }
+
+        const createdAt = nowIso();
+        const episode: EpisodicNode = {
+          uuid: generateUuid(),
+          ...parsed,
+          previous_episode_uuid: previousEpisodeUuid,
+          created_at: createdAt,
+          updated_at: createdAt,
+        };
+
         await tx.run(
           `CREATE (ep:Episode {
 						uuid: $uuid,
@@ -489,9 +790,32 @@ export class Neo4jStorage implements IGraphStorage {
 						source_type: $source_type,
 						reference_time: $reference_time,
 						previous_episode_uuid: $previous_episode_uuid,
-						created_at: $created_at
+						created_at: $created_at,
+						updated_at: $updated_at,
+						source_message_id: $source_message_id,
+						idempotency_key: $idempotency_key,
+						conversation_id: $conversation_id,
+						sender_id: $sender_id,
+						sender_name: $sender_name,
+						episode_kind: $episode_kind,
+						quoted_message_id: $quoted_message_id,
+						trust_level: $trust_level,
+						confidence: $confidence,
+						review_status: $review_status,
+						source_workflow_id: $source_workflow_id,
+						source_execution_id: $source_execution_id,
+						attributes: $attributes,
+						append_sequence: $append_sequence,
+						source_dedup_key: $source_dedup_key,
+						idempotency_dedup_key: $idempotency_dedup_key
 					})`,
-          episode,
+          {
+            ...episode,
+            attributes: JSON.stringify(episode.attributes),
+            append_sequence: appendSequence,
+            source_dedup_key: sourceDedupKey,
+            idempotency_dedup_key: idempotencyDedupKey,
+          },
         );
 
         // Chain to previous episode
@@ -506,12 +830,12 @@ export class Neo4jStorage implements IGraphStorage {
             },
           );
         }
+
+        return { episode, created: true };
       });
     } finally {
       await session.close();
     }
-
-    return episode;
   }
 
   async getEpisode(uuid: string): Promise<EpisodicNode | null> {
@@ -528,6 +852,158 @@ export class Neo4jStorage implements IGraphStorage {
     }
   }
 
+  async getEpisodes(uuids: string[]): Promise<EpisodicNode[]> {
+    const uniqueUuids = [...new Set(uuids)];
+    if (uniqueUuids.length === 0) return [];
+    const session = this.getSession();
+    try {
+      const result = await session.executeRead((tx) =>
+        tx.run('MATCH (ep:Episode) WHERE ep.uuid IN $uuids RETURN ep', { uuids: uniqueUuids }),
+      );
+      return result.records.map((record) => this.recordToEpisode(record.get('ep').properties));
+    } finally {
+      await session.close();
+    }
+  }
+
+  async listEpisodes(groupId: string, options: EpisodeFilterOptions = {}): Promise<EpisodicNode[]> {
+    const { query, params } = this.buildEpisodeListQuery(groupId, options);
+
+    const session = this.getSession();
+    try {
+      const result = await session.executeRead((tx) => tx.run(query, params));
+      return result.records.map((record) => this.recordToEpisode(record.get('ep').properties));
+    } finally {
+      await session.close();
+    }
+  }
+
+  async updateEpisode(uuid: string, updates: UpdateEpisodeInput): Promise<EpisodicNode> {
+    const session = this.getSession();
+    try {
+      return await session.executeWrite(async (tx) => {
+        const existingResult = await tx.run('MATCH (ep:Episode {uuid: $uuid}) RETURN ep', { uuid });
+        if (existingResult.records.length === 0) throw new Error(`Episode not found: ${uuid}`);
+        const existing = this.recordToEpisode(existingResult.records[0].get('ep').properties);
+        await this.lockEpisodeGroup(tx, existing.group_id);
+
+        const updated = EpisodicNodeSchema.parse({
+          ...existing,
+          ...updates,
+          uuid: existing.uuid,
+          group_id: existing.group_id,
+          source_message_id: existing.source_message_id,
+          idempotency_key: existing.idempotency_key,
+          episode_kind: existing.episode_kind,
+          previous_episode_uuid: existing.previous_episode_uuid,
+          created_at: existing.created_at,
+          updated_at: nowIso(),
+        });
+        const result = await tx.run(
+          `MATCH (ep:Episode {uuid: $uuid})
+           SET ep.content = $content,
+               ep.sender_name = $sender_name,
+               ep.trust_level = $trust_level,
+               ep.confidence = $confidence,
+               ep.review_status = $review_status,
+               ep.attributes = $attributes,
+               ep.updated_at = $updated_at
+           RETURN ep`,
+          { ...updated, attributes: JSON.stringify(updated.attributes) },
+        );
+        return this.recordToEpisode(result.records[0].get('ep').properties);
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async deleteEpisode(
+    uuid: string,
+    options: DeleteEpisodeOptions = {},
+  ): Promise<DeleteEpisodeResult> {
+    const session = this.getSession();
+    try {
+      return await session.executeWrite((tx) => this.deleteEpisodeInTransaction(tx, uuid, options));
+    } finally {
+      await session.close();
+    }
+  }
+
+  async purgeEpisodes(
+    groupId: string,
+    filters: EpisodeFilterOptions,
+    options: PurgeEpisodesOptions,
+  ): Promise<PurgeEpisodesResult> {
+    if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 10000) {
+      throw new Error('Episode purge limit must be an integer between 1 and 10000');
+    }
+
+    const selectionOptions: EpisodeFilterOptions = {
+      ...filters,
+      offset: 0,
+      limit: options.limit + 1,
+    };
+    if (options.dry_run) {
+      const selected = await this.listEpisodes(groupId, selectionOptions);
+      const truncated = selected.length > options.limit;
+      const episodes = selected.slice(0, options.limit);
+      const episodeUuids = episodes.map((episode) => episode.uuid);
+      const linkedEdgeCount = await this.countEdgesLinkedToEpisodes(episodeUuids);
+      return {
+        matched_count: episodes.length,
+        deleted_count: 0,
+        truncated,
+        dry_run: true,
+        linked_edge_count: linkedEdgeCount,
+        updated_edge_count: 0,
+        deleted_edge_count: 0,
+        episode_uuids: episodeUuids,
+      };
+    }
+
+    const session = this.getSession();
+    try {
+      return await session.executeWrite(async (tx) => {
+        await this.lockEpisodeGroup(tx, groupId);
+        const { query, params } = this.buildEpisodeListQuery(groupId, selectionOptions);
+        const selectedResult = await tx.run(query, params);
+        const selected = selectedResult.records.map((record) =>
+          this.recordToEpisode(record.get('ep').properties),
+        );
+        const truncated = selected.length > options.limit;
+        const episodes = selected.slice(0, options.limit);
+        const episodeUuids = episodes.map((episode) => episode.uuid);
+        const linkedEdgeCount = await this.countEdgesLinkedToEpisodesInTransaction(
+          tx,
+          episodeUuids,
+        );
+        const results: DeleteEpisodeResult[] = [];
+        for (const uuid of episodeUuids) {
+          results.push(await this.deleteEpisodeInTransaction(tx, uuid, options, true));
+        }
+        return {
+          matched_count: episodes.length,
+          deleted_count: results.filter((result) => result.deleted).length,
+          truncated,
+          dry_run: false,
+          linked_edge_count: linkedEdgeCount,
+          updated_edge_count: results.reduce(
+            (total, result) => total + result.updated_edge_count,
+            0,
+          ),
+          deleted_edge_count: results.reduce(
+            (total, result) => total + result.deleted_edge_count,
+            0,
+          ),
+          episode_uuids: episodeUuids,
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
   async getRecentEpisodes(groupId: string, limit: number): Promise<EpisodicNode[]> {
     const session = this.getSession();
     try {
@@ -535,7 +1011,7 @@ export class Neo4jStorage implements IGraphStorage {
         return tx.run(
           `MATCH (ep:Episode {group_id: $groupId})
 					 RETURN ep
-					 ORDER BY ep.created_at DESC
+					 ORDER BY coalesce(ep.append_sequence, 0) DESC, ep.created_at DESC, ep.uuid DESC
 					 LIMIT $limit`,
           { groupId, limit: neo4j.int(limit) },
         );
@@ -550,13 +1026,12 @@ export class Neo4jStorage implements IGraphStorage {
     }
   }
 
-  async getEpisodeCount(groupId: string): Promise<number> {
+  async getEpisodeCount(groupId: string, filters: EpisodeFilterOptions = {}): Promise<number> {
+    const { where, params } = this.buildEpisodeFilter('ep', groupId, filters);
     const session = this.getSession();
     try {
       const result = await session.executeRead(async (tx) => {
-        return tx.run('MATCH (ep:Episode {group_id: $groupId}) RETURN count(ep) as cnt', {
-          groupId,
-        });
+        return tx.run(`MATCH (ep:Episode) WHERE ${where} RETURN count(ep) as cnt`, params);
       });
 
       return result.records[0]?.get('cnt').toNumber() ?? 0;
@@ -1049,7 +1524,7 @@ export class Neo4jStorage implements IGraphStorage {
     }
 
     return {
-      version: '1.0',
+      version: CURRENT_GRAPH_DATA_VERSION,
       exported_at: nowIso(),
       group_id: groupId,
       entities,
@@ -1058,7 +1533,8 @@ export class Neo4jStorage implements IGraphStorage {
     };
   }
 
-  async importGraph(data: GraphData): Promise<void> {
+  async importGraph(sourceData: ImportGraphData): Promise<void> {
+    const data = migrateGraphData(sourceData).data;
     const session = this.getSession();
     try {
       await session.executeWrite(async (tx) => {
@@ -1094,9 +1570,30 @@ export class Neo4jStorage implements IGraphStorage {
 							source_type: $source_type,
 							reference_time: $reference_time,
 							previous_episode_uuid: $previous_episode_uuid,
-							created_at: $created_at
+							created_at: $created_at,
+							updated_at: $updated_at,
+							source_message_id: $source_message_id,
+							idempotency_key: $idempotency_key,
+							conversation_id: $conversation_id,
+							sender_id: $sender_id,
+							sender_name: $sender_name,
+							episode_kind: $episode_kind,
+							quoted_message_id: $quoted_message_id,
+							trust_level: $trust_level,
+							confidence: $confidence,
+							review_status: $review_status,
+							source_workflow_id: $source_workflow_id,
+							source_execution_id: $source_execution_id,
+							attributes: $attributes,
+							source_dedup_key: $source_dedup_key,
+							idempotency_dedup_key: $idempotency_dedup_key
 						 }`,
-            episode,
+            {
+              ...episode,
+              attributes: JSON.stringify(episode.attributes),
+              source_dedup_key: this.sourceDedupKey(episode),
+              idempotency_dedup_key: this.idempotencyDedupKey(episode),
+            },
           );
         }
 
@@ -1143,6 +1640,90 @@ export class Neo4jStorage implements IGraphStorage {
           }
         }
       });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getMigrationStatus(): Promise<StorageMigrationStatus> {
+    const legacyEpisodeCount = await this.countLegacyEpisodes();
+    return {
+      backend: 'neo4j',
+      target_version: CURRENT_GRAPH_DATA_VERSION,
+      source_version: 'database',
+      migration_required: legacyEpisodeCount > 0,
+      legacy_episode_count: legacyEpisodeCount,
+      automatic_migration_completed: false,
+      backup: { created: false, verified: false, path: null },
+    };
+  }
+
+  async migrateStorageSchema(
+    options: StorageSchemaMigrationOptions,
+  ): Promise<StorageSchemaMigrationResult> {
+    const limit = Math.min(10000, Math.max(1, Math.floor(options.limit)));
+    const matchedCount = await this.countLegacyEpisodes();
+    if (options.dry_run || matchedCount === 0) {
+      return {
+        backend: 'neo4j',
+        dry_run: options.dry_run,
+        matched_count: matchedCount,
+        migrated_count: 0,
+        remaining_count: matchedCount,
+        backup_required: false,
+        additive_only: true,
+      };
+    }
+
+    const session = this.getSession();
+    let migratedCount = 0;
+    try {
+      migratedCount = await session.executeWrite(async (tx) => {
+        const result = await tx.run(
+          `MATCH (ep:Episode)
+           WHERE ep.episode_kind IS NULL
+              OR ep.trust_level IS NULL
+              OR ep.review_status IS NULL
+              OR ep.source_type IS NULL
+           WITH ep ORDER BY ep.uuid LIMIT $limit
+           SET ep.episode_kind = coalesce(ep.episode_kind, 'legacy'),
+               ep.trust_level = coalesce(ep.trust_level, 'unverified'),
+               ep.review_status = coalesce(ep.review_status, 'proposed'),
+               ep.source_type = coalesce(ep.source_type, 'message')
+           RETURN count(ep) AS migrated`,
+          { limit: neo4j.int(limit) },
+        );
+        return result.records[0]?.get('migrated').toNumber() ?? 0;
+      });
+    } finally {
+      await session.close();
+    }
+
+    return {
+      backend: 'neo4j',
+      dry_run: false,
+      matched_count: matchedCount,
+      migrated_count: migratedCount,
+      remaining_count: await this.countLegacyEpisodes(),
+      backup_required: false,
+      additive_only: true,
+    };
+  }
+
+  private async countLegacyEpisodes(): Promise<number> {
+    const session = this.getSession();
+    try {
+      const result = await session.executeRead(async (tx) =>
+        tx.run(
+          `MATCH (ep:Episode)
+           WHERE ep.episode_kind IS NULL
+              OR ep.trust_level IS NULL
+              OR ep.review_status IS NULL
+              OR ep.source_type IS NULL
+           RETURN count(ep) AS count`,
+        ),
+      );
+      return result.records[0]?.get('count').toNumber() ?? 0;
     } finally {
       await session.close();
     }
@@ -1283,7 +1864,7 @@ export class Neo4jStorage implements IGraphStorage {
   }
 
   private recordToEpisode(props: Record<string, unknown>): EpisodicNode {
-    return {
+    return EpisodicNodeSchema.parse({
       uuid: props.uuid as string,
       group_id: props.group_id as string,
       content: props.content as string,
@@ -1292,7 +1873,21 @@ export class Neo4jStorage implements IGraphStorage {
       reference_time: props.reference_time as string,
       previous_episode_uuid: (props.previous_episode_uuid as string | null) ?? null,
       created_at: props.created_at as string,
-    };
+      updated_at: (props.updated_at as string | null) ?? null,
+      source_message_id: (props.source_message_id as string | null) ?? null,
+      idempotency_key: (props.idempotency_key as string | null) ?? null,
+      conversation_id: (props.conversation_id as string | null) ?? null,
+      sender_id: (props.sender_id as string | null) ?? null,
+      sender_name: (props.sender_name as string | null) ?? null,
+      episode_kind: props.episode_kind,
+      quoted_message_id: (props.quoted_message_id as string | null) ?? null,
+      trust_level: props.trust_level,
+      confidence: (props.confidence as number | null) ?? null,
+      review_status: props.review_status,
+      source_workflow_id: (props.source_workflow_id as string | null) ?? null,
+      source_execution_id: (props.source_execution_id as string | null) ?? null,
+      attributes: this.parseJsonField(props.attributes, {}),
+    });
   }
 
   private parseJsonField(

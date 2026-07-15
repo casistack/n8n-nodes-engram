@@ -145,7 +145,7 @@ describe('EngramTrigger', () => {
 
     const sharedTime = '2026-03-21T12:00:00.000Z';
     const initialData: GraphData = {
-      version: '1.0',
+      version: '2.0',
       exported_at: sharedTime,
       group_id: 'group-a',
       entities: [
@@ -191,7 +191,7 @@ describe('EngramTrigger', () => {
     expect(firstResult![0].map((item) => item.json.uuid)).toEqual([makeUuid(1), makeUuid(2)]);
 
     const followUpData: GraphData = {
-      version: '1.0',
+      version: '2.0',
       exported_at: sharedTime,
       group_id: 'group-a',
       entities: [

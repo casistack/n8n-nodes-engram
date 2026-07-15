@@ -1,11 +1,17 @@
 import type { LlmClient } from './LlmClient';
-import { RELATIONSHIP_EXTRACTION_SYSTEM, relationshipExtractionUser } from './prompts';
+import {
+  RELATIONSHIP_EXTRACTION_SYSTEM,
+  relationshipExtractionSourcesUser,
+  relationshipExtractionUser,
+} from './prompts';
+import { formatExtractionSources, type ExtractionSource } from './ExtractionSource';
 
 export interface ExtractedRelationship {
   source_entity: string;
   target_entity: string;
   name: string;
   fact: string;
+  confidence: number | null;
 }
 
 interface RelationshipExtractionResult {
@@ -24,15 +30,36 @@ export class RelationshipExtractor {
     aiMessage: string,
     entityNames: string[],
   ): Promise<ExtractedRelationship[]> {
+    return this.extractWithPrompt(
+      relationshipExtractionUser(humanMessage, aiMessage, entityNames),
+      entityNames,
+      false,
+    );
+  }
+
+  async extractSources(
+    sources: ExtractionSource[],
+    entityNames: string[],
+    requireConfidence = false,
+  ): Promise<ExtractedRelationship[]> {
+    return this.extractWithPrompt(
+      relationshipExtractionSourcesUser(formatExtractionSources(sources), entityNames),
+      entityNames,
+      requireConfidence,
+    );
+  }
+
+  private async extractWithPrompt(
+    prompt: string,
+    entityNames: string[],
+    requireConfidence: boolean,
+  ): Promise<ExtractedRelationship[]> {
     if (entityNames.length < 2) return [];
 
     try {
       const result = await this.llm.chatJson<RelationshipExtractionResult>([
         { role: 'system', content: RELATIONSHIP_EXTRACTION_SYSTEM },
-        {
-          role: 'user',
-          content: relationshipExtractionUser(humanMessage, aiMessage, entityNames),
-        },
+        { role: 'user', content: prompt },
       ]);
 
       if (!result.relationships || !Array.isArray(result.relationships)) {
@@ -50,6 +77,11 @@ export class RelationshipExtractor {
             r.name.trim() !== '' &&
             typeof r.fact === 'string' &&
             r.fact.trim() !== '' &&
+            (!requireConfidence ||
+              (typeof r.confidence === 'number' &&
+                Number.isFinite(r.confidence) &&
+                r.confidence >= 0 &&
+                r.confidence <= 1)) &&
             r.source_entity.toLowerCase().trim() !== r.target_entity.toLowerCase().trim() &&
             entitySet.has(r.source_entity.toLowerCase().trim()) &&
             entitySet.has(r.target_entity.toLowerCase().trim()),
@@ -59,6 +91,13 @@ export class RelationshipExtractor {
           target_entity: r.target_entity.trim(),
           name: r.name.trim(),
           fact: r.fact.trim(),
+          confidence:
+            typeof r.confidence === 'number' &&
+            Number.isFinite(r.confidence) &&
+            r.confidence >= 0 &&
+            r.confidence <= 1
+              ? r.confidence
+              : null,
         }));
     } catch (error) {
       console.warn('Engram: Relationship extraction failed:', (error as Error).message);

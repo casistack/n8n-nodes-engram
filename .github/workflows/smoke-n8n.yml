@@ -18,7 +18,7 @@ jobs:
       - run: npm run build
       - name: Pack Engram
         run: npm pack
-      - name: Install into disposable n8n user folder
+      - name: Verify Engram package registration
         shell: bash
         run: |
           set -euo pipefail

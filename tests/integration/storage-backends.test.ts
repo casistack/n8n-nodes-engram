@@ -10,6 +10,7 @@
  */
 import { GraphologyStorage } from '../../src/storage/GraphologyStorage';
 import type { IGraphStorage } from '../../src/storage/IGraphStorage';
+import neo4j from 'neo4j-driver';
 
 /**
  * Runs the full IGraphStorage conformance suite against a storage backend.
@@ -275,6 +276,363 @@ function runStorageConformanceSuite(
 				expect(retrieved!.content).toBe('Hello world');
 			});
 
+			it('should append episodes with an atomic per-group chain', async () => {
+				const first = await storage.appendEpisode({
+					group_id: 'append-chain',
+					content: 'First',
+					role: 'human',
+					episode_kind: 'active_human',
+					reference_time: new Date().toISOString(),
+				});
+				const second = await storage.appendEpisode({
+					group_id: 'append-chain',
+					content: 'Second',
+					role: 'ai',
+					episode_kind: 'assistant_reply',
+					reference_time: new Date().toISOString(),
+				});
+
+				expect(first.created).toBe(true);
+				expect(first.episode.previous_episode_uuid).toBeNull();
+				expect(second.created).toBe(true);
+				expect(second.episode.previous_episode_uuid).toBe(first.episode.uuid);
+			});
+
+			it('should preserve addEpisode explicit-chain compatibility', async () => {
+				await storage.addEpisode({
+					group_id: 'compatibility-chain',
+					content: 'First unchained episode',
+					role: 'human',
+					reference_time: new Date().toISOString(),
+				});
+				const second = await storage.addEpisode({
+					group_id: 'compatibility-chain',
+					content: 'Second unchained episode',
+					role: 'human',
+					reference_time: new Date().toISOString(),
+				});
+
+				expect(second.previous_episode_uuid).toBeNull();
+			});
+
+			it('should deduplicate retries by source message and episode kind', async () => {
+				const input = {
+					group_id: 'source-dedup',
+					content: 'Delivered once',
+					role: 'human' as const,
+					episode_kind: 'active_human' as const,
+					source_message_id: 'message-42',
+					reference_time: new Date().toISOString(),
+				};
+
+				const results = await Promise.all(
+					Array.from({ length: 8 }, () => storage.appendEpisode(input)),
+				);
+
+				expect(new Set(results.map((result) => result.episode.uuid)).size).toBe(1);
+				expect(results.filter((result) => result.created)).toHaveLength(1);
+				expect(await storage.getEpisodeCount('source-dedup')).toBe(1);
+
+				const differentKind = await storage.appendEpisode({
+					...input,
+					role: 'ai',
+					episode_kind: 'assistant_reply',
+				});
+				expect(differentKind.created).toBe(true);
+				expect(await storage.getEpisodeCount('source-dedup')).toBe(2);
+			});
+
+			it('should deduplicate caller idempotency keys within a group', async () => {
+				const first = await storage.appendEpisode({
+					group_id: 'key-dedup',
+					content: 'Original content',
+					role: 'human',
+					idempotency_key: 'request-7',
+					reference_time: new Date().toISOString(),
+				});
+				const retry = await storage.appendEpisode({
+					group_id: 'key-dedup',
+					content: 'Retry content must not overwrite the original',
+					role: 'human',
+					idempotency_key: 'request-7',
+					reference_time: new Date().toISOString(),
+				});
+
+				expect(first.created).toBe(true);
+				expect(retry.created).toBe(false);
+				expect(retry.episode.uuid).toBe(first.episode.uuid);
+				expect(retry.episode.content).toBe('Original content');
+
+				const otherGroup = await storage.appendEpisode({
+					group_id: 'other-key-dedup-group',
+					content: 'Same key in another group',
+					role: 'human',
+					idempotency_key: 'request-7',
+					reference_time: new Date().toISOString(),
+				});
+				expect(otherGroup.created).toBe(true);
+			});
+
+			it('should reject idempotency identifiers that resolve to different episodes', async () => {
+				await storage.appendEpisode({
+					group_id: 'dedup-conflict',
+					content: 'First',
+					role: 'human',
+					episode_kind: 'active_human',
+					source_message_id: 'source-a',
+					idempotency_key: 'key-a',
+					reference_time: new Date().toISOString(),
+				});
+				await storage.appendEpisode({
+					group_id: 'dedup-conflict',
+					content: 'Second',
+					role: 'human',
+					episode_kind: 'active_human',
+					source_message_id: 'source-b',
+					idempotency_key: 'key-b',
+					reference_time: new Date().toISOString(),
+				});
+
+				await expect(
+					storage.appendEpisode({
+						group_id: 'dedup-conflict',
+						content: 'Conflicting retry',
+						role: 'human',
+						episode_kind: 'active_human',
+						source_message_id: 'source-a',
+						idempotency_key: 'key-b',
+						reference_time: new Date().toISOString(),
+					}),
+				).rejects.toThrow('resolve to different existing episodes');
+			});
+
+			it('should serialize parallel distinct appends into one chain', async () => {
+				await Promise.all(
+					Array.from({ length: 12 }, (_, index) =>
+						storage.appendEpisode({
+							group_id: 'parallel-chain',
+							content: `Episode ${index}`,
+							role: 'human',
+							episode_kind: 'active_human',
+							source_message_id: `message-${index}`,
+							reference_time: new Date().toISOString(),
+						}),
+					),
+				);
+
+				const episodes = await storage.getRecentEpisodes('parallel-chain', 20);
+				expect(episodes).toHaveLength(12);
+				expect(episodes[0].previous_episode_uuid).toBeNull();
+				for (let index = 1; index < episodes.length; index++) {
+					expect(episodes[index].previous_episode_uuid).toBe(episodes[index - 1].uuid);
+				}
+			});
+
+			it('should list and count episodes with provenance filters and pagination', async () => {
+				for (let index = 0; index < 5; index++) {
+					await storage.appendEpisode({
+						group_id: 'filtered-episodes',
+						content: `Episode ${index}`,
+						role: index % 2 === 0 ? 'human' : 'system',
+						episode_kind: index % 2 === 0 ? 'active_human' : 'monitor_summary',
+						trust_level: index % 2 === 0 ? 'trusted' : 'unverified',
+						review_status: index < 3 ? 'accepted' : 'proposed',
+						sender_id: index % 2 === 0 ? 'human-1' : 'monitor-1',
+						sender_name: index % 2 === 0 ? 'Alice' : 'Monitor',
+						source_workflow_id: index % 2 === 0 ? 'chat-workflow' : 'monitor-workflow',
+						reference_time: new Date(Date.UTC(2026, 6, 1 + index)).toISOString(),
+					});
+				}
+
+				const page = await storage.listEpisodes('filtered-episodes', {
+					episode_kind: 'active_human',
+					trust_level: 'trusted',
+					sender_name: 'alice',
+					sort_by: 'reference_time',
+					sort_order: 'asc',
+					offset: 1,
+					limit: 1,
+				});
+
+				expect(page).toHaveLength(1);
+				expect(page[0].content).toBe('Episode 2');
+				expect(
+					await storage.getEpisodeCount('filtered-episodes', {
+						episode_kind: 'monitor_summary',
+						source_workflow_id: 'monitor-workflow',
+					}),
+				).toBe(2);
+			});
+
+			it('should batch-load unique episodes by UUID', async () => {
+				const first = await storage.appendEpisode({
+					group_id: 'episode-batch',
+					content: 'First',
+					role: 'human',
+					reference_time: new Date().toISOString(),
+				});
+				const second = await storage.appendEpisode({
+					group_id: 'episode-batch',
+					content: 'Second',
+					role: 'ai',
+					reference_time: new Date().toISOString(),
+				});
+
+				const episodes = await storage.getEpisodes([
+					second.episode.uuid,
+					first.episode.uuid,
+					second.episode.uuid,
+					'00000000-0000-4000-8000-000000000099',
+				]);
+
+				expect(new Set(episodes.map((episode) => episode.uuid))).toEqual(
+					new Set([first.episode.uuid, second.episode.uuid]),
+				);
+			});
+
+			it('should update mutable episode governance without changing identity fields', async () => {
+				const created = await storage.appendEpisode({
+					group_id: 'episode-update',
+					content: 'Original',
+					role: 'human',
+					episode_kind: 'active_human',
+					source_message_id: 'message-1',
+					trust_level: 'unverified',
+					reference_time: new Date().toISOString(),
+				});
+
+				const updated = await storage.updateEpisode(created.episode.uuid, {
+					content: 'Reviewed content',
+					sender_name: 'Alice',
+					trust_level: 'trusted',
+					confidence: 0.9,
+					review_status: 'accepted',
+					attributes: { reviewed_by: 'operator-1' },
+				});
+
+				expect(updated).toEqual(
+					expect.objectContaining({
+						content: 'Reviewed content',
+						trust_level: 'trusted',
+						confidence: 0.9,
+						review_status: 'accepted',
+						source_message_id: 'message-1',
+						episode_kind: 'active_human',
+					}),
+				);
+				expect(updated.updated_at).not.toBeNull();
+			});
+
+			it('should repair chains and unlink fact provenance when deleting an episode', async () => {
+				const first = await storage.appendEpisode({
+					group_id: 'delete-chain',
+					content: 'First',
+					role: 'human',
+					reference_time: new Date().toISOString(),
+				});
+				const middle = await storage.appendEpisode({
+					group_id: 'delete-chain',
+					content: 'Middle',
+					role: 'ai',
+					reference_time: new Date().toISOString(),
+				});
+				const last = await storage.appendEpisode({
+					group_id: 'delete-chain',
+					content: 'Last',
+					role: 'human',
+					reference_time: new Date().toISOString(),
+				});
+				const source = await storage.addEntity({ name: 'Alice', group_id: 'delete-chain' });
+				const target = await storage.addEntity({ name: 'London', group_id: 'delete-chain' });
+				const edge = await storage.addEdge({
+					group_id: 'delete-chain',
+					source_node_uuid: source.uuid,
+					target_node_uuid: target.uuid,
+					name: 'VISITED',
+					fact: 'Alice visited London',
+					episodes: [first.episode.uuid, middle.episode.uuid],
+				});
+
+				const result = await storage.deleteEpisode(middle.episode.uuid);
+				const repairedLast = await storage.getEpisode(last.episode.uuid);
+				const updatedEdge = await storage.getEdge(edge.uuid);
+
+				expect(result).toEqual(
+					expect.objectContaining({
+						deleted: true,
+						repaired_successor_count: 1,
+						linked_edge_count: 1,
+						updated_edge_count: 1,
+					}),
+				);
+				expect(repairedLast?.previous_episode_uuid).toBe(first.episode.uuid);
+				expect(updatedEdge?.episodes).toEqual([first.episode.uuid]);
+			});
+
+			it('should delete facts whose last evidence is removed when requested', async () => {
+				const episode = await storage.appendEpisode({
+					group_id: 'orphan-cleanup',
+					content: 'Only evidence',
+					role: 'human',
+					reference_time: new Date().toISOString(),
+				});
+				const source = await storage.addEntity({ name: 'Alice', group_id: 'orphan-cleanup' });
+				const target = await storage.addEntity({ name: 'Paris', group_id: 'orphan-cleanup' });
+				const edge = await storage.addEdge({
+					group_id: 'orphan-cleanup',
+					source_node_uuid: source.uuid,
+					target_node_uuid: target.uuid,
+					name: 'VISITED',
+					fact: 'Alice visited Paris',
+					episodes: [episode.episode.uuid],
+				});
+
+				const result = await storage.deleteEpisode(episode.episode.uuid, {
+					fact_cleanup: 'delete_orphaned',
+				});
+				expect(result.deleted_edge_count).toBe(1);
+				expect(await storage.getEdge(edge.uuid)).toBeNull();
+			});
+
+			it('should dry-run and execute bounded filtered episode purges', async () => {
+				for (let index = 0; index < 4; index++) {
+					await storage.appendEpisode({
+						group_id: 'purge-group',
+						content: `Monitor ${index}`,
+						role: 'system',
+						episode_kind: 'monitor_summary',
+						trust_level: 'unverified',
+						reference_time: new Date().toISOString(),
+					});
+				}
+				await storage.appendEpisode({
+					group_id: 'purge-group',
+					content: 'Keep human',
+					role: 'human',
+					episode_kind: 'active_human',
+					reference_time: new Date().toISOString(),
+				});
+
+				const dryRun = await storage.purgeEpisodes(
+					'purge-group',
+					{ episode_kind: 'monitor_summary' },
+					{ dry_run: true, limit: 2 },
+				);
+				expect(dryRun).toEqual(
+					expect.objectContaining({ matched_count: 2, deleted_count: 0, truncated: true }),
+				);
+				expect(await storage.getEpisodeCount('purge-group')).toBe(5);
+
+				const purge = await storage.purgeEpisodes(
+					'purge-group',
+					{ episode_kind: 'monitor_summary' },
+					{ limit: 10 },
+				);
+				expect(purge.deleted_count).toBe(4);
+				expect(purge.truncated).toBe(false);
+				expect(await storage.getEpisodeCount('purge-group')).toBe(1);
+			});
+
 			it('should get recent episodes in chronological order', async () => {
 				for (let i = 1; i <= 5; i++) {
 					await storage.addEpisode({
@@ -456,7 +814,7 @@ function runStorageConformanceSuite(
 				const exported = await storage.exportGraph('exp');
 				expect(exported.entities).toHaveLength(1);
 				expect(exported.episodes).toHaveLength(1);
-				expect(exported.version).toBe('1.0');
+				expect(exported.version).toBe('2.0');
 				expect(exported.group_id).toBe('exp');
 
 				// Clear and reimport
@@ -466,6 +824,65 @@ function runStorageConformanceSuite(
 				const reimported = await storage.getEntity(entity.uuid);
 				expect(reimported).not.toBeNull();
 				expect(reimported!.name).toBe('Export');
+			});
+
+			it('should migrate and round-trip legacy episode provenance', async () => {
+				const timestamp = '2026-06-21T12:00:00.000Z';
+				const firstUuid = '00000000-0000-4000-8000-000000000091';
+				const secondUuid = '00000000-0000-4000-8000-000000000092';
+				await storage.importGraph({
+					version: '1.0',
+					exported_at: timestamp,
+					group_id: 'legacy-roundtrip',
+					entities: [],
+					edges: [],
+					episodes: [
+						{
+							uuid: firstUuid,
+							group_id: 'legacy-roundtrip',
+							content: 'First legacy episode',
+							role: 'human',
+							reference_time: timestamp,
+							created_at: timestamp,
+						},
+						{
+							uuid: secondUuid,
+							group_id: 'legacy-roundtrip',
+							content: 'Second legacy episode',
+							role: 'ai',
+							reference_time: timestamp,
+							previous_episode_uuid: firstUuid,
+							created_at: timestamp,
+						},
+					],
+				});
+
+				const migrated = await storage.exportGraph('legacy-roundtrip');
+				expect(migrated.version).toBe('2.0');
+				expect(migrated.episodes).toHaveLength(2);
+				expect(migrated.episodes.find((episode) => episode.uuid === firstUuid)).toEqual(
+					expect.objectContaining({
+						episode_kind: 'legacy',
+						trust_level: 'unverified',
+						review_status: 'proposed',
+						previous_episode_uuid: null,
+					}),
+				);
+				expect(migrated.episodes.find((episode) => episode.uuid === secondUuid)).toEqual(
+					expect.objectContaining({
+						episode_kind: 'legacy',
+						trust_level: 'unverified',
+						review_status: 'proposed',
+						previous_episode_uuid: firstUuid,
+					}),
+				);
+
+				await storage.clearAll();
+				await storage.importGraph(migrated);
+				const restored = await storage.exportGraph('legacy-roundtrip');
+				expect([...restored.episodes].sort((a, b) => a.uuid.localeCompare(b.uuid))).toEqual(
+					[...migrated.episodes].sort((a, b) => a.uuid.localeCompare(b.uuid)),
+				);
 			});
 
 			it('should return accurate stats', async () => {
@@ -541,6 +958,84 @@ if (neo4jUri) {
 	runStorageConformanceSuite('Neo4jStorage (remote)', async () => {
 		const { Neo4jStorage } = await import('../../src/storage/Neo4jStorage');
 		return new Neo4jStorage(neo4jUri, neo4jUser, neo4jPassword, neo4jDatabase);
+	});
+
+	describe('Neo4jStorage schema migration', () => {
+		jest.setTimeout(30000);
+
+		it('should dry-run and apply additive legacy defaults in bounded batches', async () => {
+			const { Neo4jStorage } = await import('../../src/storage/Neo4jStorage');
+			const storage = new Neo4jStorage(neo4jUri, neo4jUser, neo4jPassword, neo4jDatabase);
+			await storage.initialize();
+			const driver = neo4j.driver(neo4jUri, neo4j.auth.basic(neo4jUser, neo4jPassword));
+			const session = driver.session({ database: neo4jDatabase });
+
+			try {
+				await session.run(
+					`CREATE (:Episode {
+						uuid: '00000000-0000-4000-8000-000000000201',
+						group_id: 'migration-test', content: 'First', role: 'human',
+						reference_time: '2026-06-21T12:00:00.000Z',
+						created_at: '2026-06-21T12:00:00.000Z'
+					}), (:Episode {
+						uuid: '00000000-0000-4000-8000-000000000202',
+						group_id: 'migration-test', content: 'Second', role: 'ai',
+						reference_time: '2026-06-21T12:01:00.000Z',
+						created_at: '2026-06-21T12:01:00.000Z'
+					})`,
+				);
+
+				expect(await storage.getMigrationStatus()).toEqual(
+					expect.objectContaining({
+						backend: 'neo4j',
+						migration_required: true,
+						legacy_episode_count: 2,
+					}),
+				);
+				expect(await storage.migrateStorageSchema({ dry_run: true, limit: 1 })).toEqual({
+					backend: 'neo4j',
+					dry_run: true,
+					matched_count: 2,
+					migrated_count: 0,
+					remaining_count: 2,
+					backup_required: false,
+					additive_only: true,
+				});
+
+				const firstBatch = await storage.migrateStorageSchema({ dry_run: false, limit: 1 });
+				expect(firstBatch).toEqual(
+					expect.objectContaining({
+						matched_count: 2,
+						migrated_count: 1,
+						remaining_count: 1,
+					}),
+				);
+				const secondBatch = await storage.migrateStorageSchema({ dry_run: false, limit: 10 });
+				expect(secondBatch).toEqual(
+					expect.objectContaining({ migrated_count: 1, remaining_count: 0 }),
+				);
+
+				const migrated = await session.run(
+					`MATCH (ep:Episode {group_id: 'migration-test'})
+					 RETURN ep.episode_kind AS kind, ep.trust_level AS trust,
+					        ep.review_status AS review, ep.source_type AS source_type`,
+				);
+				expect(migrated.records).toHaveLength(2);
+				for (const record of migrated.records) {
+					expect(record.toObject()).toEqual({
+						kind: 'legacy',
+						trust: 'unverified',
+						review: 'proposed',
+						source_type: 'message',
+					});
+				}
+			} finally {
+				await storage.clearAll();
+				await storage.close();
+				await session.close();
+				await driver.close();
+			}
+		});
 	});
 } else {
 	describe('Neo4jStorage (remote)', () => {

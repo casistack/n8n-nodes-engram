@@ -1,7 +1,28 @@
 import { BaseChatMessageHistory } from '@langchain/core/chat_history';
 import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
 import type { IGraphStorage } from '../storage/IGraphStorage';
-import type { EpisodicNode } from '../schemas';
+import type { CreateEpisodicNode, EpisodicNode } from '../schemas';
+
+export type EpisodeWriteMetadata = Partial<
+  Pick<
+    CreateEpisodicNode,
+    | 'source_type'
+    | 'source_message_id'
+    | 'idempotency_key'
+    | 'conversation_id'
+    | 'sender_id'
+    | 'sender_name'
+    | 'quoted_message_id'
+    | 'trust_level'
+    | 'confidence'
+    | 'review_status'
+    | 'source_workflow_id'
+    | 'source_execution_id'
+    | 'attributes'
+  >
+>;
+
+export type HumanEpisodeKind = 'active_human' | 'passive_human';
 
 /**
  * Chat message history backed by Engram's graph storage.
@@ -12,24 +33,27 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
 
   private storage: IGraphStorage;
   private groupId: string;
-  private lastEpisodeUuid: string | null = null;
   private contextWindow: number;
+  private metadata: EpisodeWriteMetadata;
+  private humanEpisodeKind: HumanEpisodeKind;
 
-  constructor(params: { storage: IGraphStorage; groupId: string; contextWindow?: number }) {
+  constructor(params: {
+    storage: IGraphStorage;
+    groupId: string;
+    contextWindow?: number;
+    metadata?: EpisodeWriteMetadata;
+    humanEpisodeKind?: HumanEpisodeKind;
+  }) {
     super();
     this.storage = params.storage;
     this.groupId = params.groupId;
     this.contextWindow = params.contextWindow ?? 10;
+    this.metadata = params.metadata ?? {};
+    this.humanEpisodeKind = params.humanEpisodeKind ?? 'active_human';
   }
 
   async getMessages(): Promise<BaseMessage[]> {
     const episodes = await this.storage.getRecentEpisodes(this.groupId, this.contextWindow);
-
-    // Track the last episode for chaining
-    if (episodes.length > 0) {
-      this.lastEpisodeUuid = episodes[episodes.length - 1].uuid;
-    }
-
     return episodes.map((ep) => this.episodeToMessage(ep));
   }
 
@@ -38,20 +62,32 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   }
 
   async addMessageAndGetEpisodeUuid(message: BaseMessage): Promise<string> {
+    return (await this.addMessageAndGetEpisode(message)).uuid;
+  }
+
+  async addMessageAndGetEpisode(
+    message: BaseMessage,
+    metadata: EpisodeWriteMetadata = {},
+  ): Promise<EpisodicNode> {
     const role = this.messageToRole(message);
     const content =
       typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
 
-    const episode = await this.storage.addEpisode({
+    const episodeKind =
+      role === 'human' ? this.humanEpisodeKind : role === 'ai' ? 'assistant_reply' : 'system';
+    const result = await this.storage.appendEpisode({
+      trust_level: 'standard',
+      review_status: 'accepted',
+      ...this.metadata,
+      ...metadata,
       group_id: this.groupId,
       content,
       role,
+      episode_kind: episodeKind,
       reference_time: new Date().toISOString(),
-      previous_episode_uuid: this.lastEpisodeUuid,
     });
 
-    this.lastEpisodeUuid = episode.uuid;
-    return episode.uuid;
+    return result.episode;
   }
 
   async addUserMessage(message: string): Promise<void> {
@@ -69,7 +105,6 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
 
   async clear(): Promise<void> {
     await this.storage.clearGroup(this.groupId);
-    this.lastEpisodeUuid = null;
   }
 
   private episodeToMessage(episode: EpisodicNode): BaseMessage {

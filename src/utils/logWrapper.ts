@@ -14,7 +14,6 @@ import { TextSplitter } from '@langchain/textsplitters';
 import type { BaseChatMemory } from '@langchain/classic/memory/chat_memory';
 import { BaseRetriever } from '@langchain/core/retrievers';
 import { BaseOutputParser, OutputParserException } from '@langchain/core/output_parsers';
-import { isObject } from 'lodash';
 import { logAiEvent, isToolsInstance, isBaseChatMemory, isBaseChatMessageHistory } from './helpers';
 
 const errorsMap: { [key: string]: { message: string; description: string } } = {
@@ -218,7 +217,8 @@ export function logWrapper(
         if (prop === 'parse' && 'parse' in target) {
           return async (text: string | Record<string, unknown>): Promise<unknown> => {
             connectionType = NodeConnectionType.AiOutputParser;
-            const stringifiedText = isObject(text) ? JSON.stringify(text) : text;
+            const stringifiedText =
+              typeof text === 'object' && text !== null ? JSON.stringify(text) : text;
             const { index } = executeFunctions.addInputData(connectionType, [
               [{ json: { action: 'parse', text: stringifiedText } }],
             ]);

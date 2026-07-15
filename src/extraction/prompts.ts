@@ -11,10 +11,11 @@ export const ENTITY_EXTRACTION_SYSTEM = [
   '- Each entity needs: name (string), entity_type (string), summary (one sentence description)',
   '- Use consistent naming: proper nouns as-is, concepts in lowercase',
   '- entity_type should be one of the allowed types provided',
+  '- confidence is required and must be a number from 0 to 1 indicating source support',
   '- Return ONLY valid JSON, no extra text',
   '',
   'Output format:',
-  '{"entities": [{"name": "Alice", "entity_type": "person", "summary": "A software engineer"}]}',
+  '{"entities": [{"name": "Alice", "entity_type": "person", "summary": "A software engineer", "confidence": 0.92}]}',
 ].join('\n');
 
 export function entityExtractionUser(
@@ -38,6 +39,25 @@ export function entityExtractionUser(
   return parts.join('\n');
 }
 
+export function entityExtractionSourcesUser(
+  formattedSources: string,
+  entityTypes: string[],
+  existingEntities: string[],
+): string {
+  const parts = [
+    'Extract entities only from the selected source records below.',
+    '',
+    'Allowed entity types: ' + entityTypes.join(', '),
+  ];
+
+  if (existingEntities.length > 0) {
+    parts.push('Already known entities (avoid duplicates): ' + existingEntities.join(', '));
+  }
+
+  parts.push('', formattedSources);
+  return parts.join('\n');
+}
+
 export const RELATIONSHIP_EXTRACTION_SYSTEM = [
   'You are a relationship extraction system. Extract facts and relationships between entities.',
   '',
@@ -47,10 +67,11 @@ export const RELATIONSHIP_EXTRACTION_SYSTEM = [
   '- name should be SCREAMING_SNAKE_CASE (e.g., WORKS_AT, LIVES_IN, KNOWS)',
   '- fact should be a natural language statement of the relationship',
   '- Only extract relationships where both entities exist in the provided list',
+  '- confidence is required and must be a number from 0 to 1 indicating source support',
   '- Return ONLY valid JSON, no extra text',
   '',
   'Output format:',
-  '{"relationships": [{"source_entity": "Alice", "target_entity": "Acme Corp", "name": "WORKS_AT", "fact": "Alice works at Acme Corp as a senior engineer"}]}',
+  '{"relationships": [{"source_entity": "Alice", "target_entity": "Acme Corp", "name": "WORKS_AT", "fact": "Alice works at Acme Corp as a senior engineer", "confidence": 0.94}]}',
 ].join('\n');
 
 export function relationshipExtractionUser(
@@ -67,6 +88,19 @@ export function relationshipExtractionUser(
     'AI: ' + aiMessage,
   ];
   return parts.join('\n');
+}
+
+export function relationshipExtractionSourcesUser(
+  formattedSources: string,
+  entities: string[],
+): string {
+  return [
+    'Extract relationships only from the selected source records below.',
+    '',
+    'Available entities: ' + entities.join(', '),
+    '',
+    formattedSources,
+  ].join('\n');
 }
 
 export const DEDUPLICATION_SYSTEM = [

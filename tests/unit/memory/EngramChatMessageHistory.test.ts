@@ -34,6 +34,20 @@ describe('EngramChatMessageHistory', () => {
 		expect(messages[0].content).toBe('Hello, who am I?');
 	});
 
+	it('should label human messages as passive when configured', async () => {
+		const passiveHistory = new EngramChatMessageHistory({
+			storage,
+			groupId: 'passive-session',
+			humanEpisodeKind: 'passive_human',
+		});
+
+		await passiveHistory.addUserMessage('Observed group message');
+		const episodes = await storage.listEpisodes('passive-session');
+
+		expect(episodes).toHaveLength(1);
+		expect(episodes[0].episode_kind).toBe('passive_human');
+	});
+
 	it('should add and retrieve an AI message', async () => {
 		await history.addAIChatMessage('You are Alice.');
 		const messages = await history.getMessages();
@@ -97,6 +111,28 @@ describe('EngramChatMessageHistory', () => {
 		expect(episodes).toHaveLength(2);
 		expect(episodes[0].previous_episode_uuid).toBeNull();
 		expect(episodes[1].previous_episode_uuid).toBe(episodes[0].uuid);
+	});
+
+	it('should chain concurrent history instances through storage-level append', async () => {
+		const concurrentHistory = new EngramChatMessageHistory({
+			storage,
+			groupId: 'test-session',
+			contextWindow: 10,
+		});
+
+		await Promise.all([
+			history.addUserMessage('First concurrent message'),
+			concurrentHistory.addAIChatMessage('Second concurrent message'),
+		]);
+
+		const episodes = await storage.getRecentEpisodes('test-session', 10);
+		expect(episodes).toHaveLength(2);
+		expect(episodes[0].previous_episode_uuid).toBeNull();
+		expect(episodes[1].previous_episode_uuid).toBe(episodes[0].uuid);
+		expect(episodes.map((episode) => episode.episode_kind)).toEqual([
+			'active_human',
+			'assistant_reply',
+		]);
 	});
 
 	it('should clear all messages for the group', async () => {

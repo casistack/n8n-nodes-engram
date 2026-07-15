@@ -29,7 +29,7 @@ export class EngramMemory implements INodeType {
     name: 'engramMemory',
     icon: 'file:engram.png',
     group: ['transform'],
-    version: [1],
+    version: [1, 2],
     description:
       'Knowledge graph memory for AI agents. Stores conversations as episodes and optionally extracts entities and relationships.',
     defaults: {
@@ -124,6 +124,290 @@ export class EngramMemory implements INodeType {
         default: 'disabled',
         description:
           'Whether to extract entities and relationships from conversations using an LLM. Requires Engram Extraction LLM credential.',
+      },
+      {
+        displayName: 'Store Human Episodes',
+        name: 'storeHumanEpisodes',
+        type: 'options',
+        options: [
+          { name: 'Enabled', value: 'enabled' },
+          { name: 'Disabled', value: 'disabled' },
+        ],
+        default: 'enabled',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Whether human messages should be persisted as episodes',
+      },
+      {
+        displayName: 'Human Episode Kind',
+        name: 'humanEpisodeKind',
+        type: 'options',
+        options: [
+          {
+            name: 'Active Human',
+            value: 'active_human',
+            description: 'A message sent directly to the agent in an active conversation',
+          },
+          {
+            name: 'Passive Human',
+            value: 'passive_human',
+            description: 'A human message observed or curated outside the active conversation',
+          },
+        ],
+        default: 'active_human',
+        displayOptions: { show: { '@version': [2] } },
+        description:
+          'Provenance kind applied to stored human episodes and human extraction sources',
+      },
+      {
+        displayName: 'Store AI Episodes',
+        name: 'storeAiEpisodes',
+        type: 'options',
+        options: [
+          { name: 'Enabled', value: 'enabled' },
+          { name: 'Disabled', value: 'disabled' },
+        ],
+        default: 'enabled',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Whether assistant replies should be persisted as episodes',
+      },
+      {
+        displayName: 'Extract from Human Messages',
+        name: 'extractHuman',
+        type: 'options',
+        options: [
+          { name: 'Enabled', value: 'enabled' },
+          { name: 'Disabled', value: 'disabled' },
+        ],
+        default: 'enabled',
+        displayOptions: {
+          show: { '@version': [2], enableExtraction: ['enabled'] },
+        },
+        description: 'Whether human message content is eligible for knowledge extraction',
+      },
+      {
+        displayName: 'Extract from AI Messages',
+        name: 'extractAi',
+        type: 'options',
+        options: [
+          { name: 'Disabled', value: 'disabled' },
+          { name: 'Enabled', value: 'enabled' },
+        ],
+        default: 'disabled',
+        displayOptions: {
+          show: { '@version': [2], enableExtraction: ['enabled'] },
+        },
+        description: 'Whether assistant reply content is eligible for knowledge extraction',
+      },
+      {
+        displayName: 'Extract from System and Tool Content',
+        name: 'extractSystemTool',
+        type: 'options',
+        options: [
+          { name: 'Disabled', value: 'disabled' },
+          { name: 'Enabled', value: 'enabled' },
+        ],
+        default: 'disabled',
+        displayOptions: {
+          show: { '@version': [2], enableExtraction: ['enabled'] },
+        },
+        description:
+          'Whether recognized system messages and tool outputs are eligible for knowledge extraction',
+      },
+      {
+        displayName: 'Auto-Accept Confidence',
+        name: 'autoAcceptConfidence',
+        type: 'number',
+        default: 0.85,
+        typeOptions: { minValue: 0, maxValue: 1, numberStepSize: 0.05 },
+        displayOptions: {
+          show: { '@version': [2], enableExtraction: ['enabled'] },
+        },
+        description: 'Facts at or above this confidence are accepted automatically',
+      },
+      {
+        displayName: 'Reject Below Confidence',
+        name: 'rejectBelowConfidence',
+        type: 'number',
+        default: 0.3,
+        typeOptions: { minValue: 0, maxValue: 1, numberStepSize: 0.05 },
+        displayOptions: {
+          show: { '@version': [2], enableExtraction: ['enabled'] },
+        },
+        description:
+          'Facts below this confidence are rejected; intermediate confidence remains proposed',
+      },
+      {
+        displayName: 'Memory Fact Policy',
+        name: 'memoryFactPolicy',
+        type: 'options',
+        options: [
+          {
+            name: 'Accepted Facts Only',
+            value: 'acceptedOnly',
+            description: 'Inject only accepted facts and manually created graph data',
+          },
+          {
+            name: 'All Facts (Legacy)',
+            value: 'all',
+            description: 'Allow proposed and rejected extraction records into memory context',
+          },
+        ],
+        default: 'acceptedOnly',
+        displayOptions: { show: { '@version': [2], enableExtraction: ['enabled'] } },
+        description: 'Which reviewed fact states may be injected into agent memory',
+      },
+      {
+        displayName: 'Context Token Budget',
+        name: 'contextTokenBudget',
+        type: 'number',
+        default: 2000,
+        typeOptions: { minValue: 100, maxValue: 32000 },
+        displayOptions: { show: { '@version': [2] } },
+        description:
+          'Approximate total token budget shared by entity, fact, provenance, and traversal context',
+      },
+      {
+        displayName: 'Retrieval Sender ID',
+        name: 'retrievalSenderId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Only retrieve facts supported by episodes from this sender',
+      },
+      {
+        displayName: 'Retrieval Episode Kind',
+        name: 'retrievalEpisodeKind',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Active Human', value: 'active_human' },
+          { name: 'Passive Human', value: 'passive_human' },
+          { name: 'Assistant Reply', value: 'assistant_reply' },
+          { name: 'Monitor Summary', value: 'monitor_summary' },
+          { name: 'Tool Output', value: 'tool_output' },
+          { name: 'System', value: 'system' },
+          { name: 'Legacy', value: 'legacy' },
+        ],
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Only retrieve facts supported by this episode kind',
+      },
+      {
+        displayName: 'Retrieval Trust Level',
+        name: 'retrievalTrustLevel',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Trusted', value: 'trusted' },
+          { name: 'Standard', value: 'standard' },
+          { name: 'Unverified', value: 'unverified' },
+          { name: 'Untrusted', value: 'untrusted' },
+        ],
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Only retrieve facts supported by episodes at this trust level',
+      },
+      {
+        displayName: 'Retrieval Source Workflow ID',
+        name: 'retrievalSourceWorkflowId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Only retrieve facts written by this source workflow',
+      },
+      {
+        displayName: 'Retrieval Source Execution ID',
+        name: 'retrievalSourceExecutionId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Only retrieve facts written by this source execution',
+      },
+      {
+        displayName: 'Retrieval Reference Time After',
+        name: 'retrievalReferenceAfter',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Only retrieve facts supported at or after this time',
+      },
+      {
+        displayName: 'Retrieval Reference Time Before',
+        name: 'retrievalReferenceBefore',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Only retrieve facts supported at or before this time',
+      },
+      {
+        displayName: 'Source Message ID',
+        name: 'sourceMessageId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Stable upstream message ID used to deduplicate retried deliveries',
+      },
+      {
+        displayName: 'Idempotency Key',
+        name: 'episodeIdempotencyKey',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Optional stable turn key used when no source message ID is available',
+      },
+      {
+        displayName: 'Conversation ID',
+        name: 'conversationId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Upstream conversation or thread ID. Defaults to the Engram session ID.',
+      },
+      {
+        displayName: 'Sender ID',
+        name: 'senderId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Stable identifier for the human sender',
+      },
+      {
+        displayName: 'Sender Name',
+        name: 'senderName',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Display name for the human sender',
+      },
+      {
+        displayName: 'Quoted Message ID',
+        name: 'quotedMessageId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Optional identifier of the message being quoted or replied to',
+      },
+      {
+        displayName: 'Episode Trust Level',
+        name: 'episodeTrustLevel',
+        type: 'options',
+        options: [
+          { name: 'Standard', value: 'standard' },
+          { name: 'Trusted', value: 'trusted' },
+          { name: 'Unverified', value: 'unverified' },
+          { name: 'Untrusted', value: 'untrusted' },
+        ],
+        default: 'standard',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Initial trust classification applied to stored human and AI episodes',
+      },
+      {
+        displayName: 'Episode Attributes',
+        name: 'episodeAttributes',
+        type: 'json',
+        default: '{}',
+        displayOptions: { show: { '@version': [2] } },
+        description: 'Additional source-specific episode metadata as a JSON object',
       },
       {
         // eslint-disable-next-line n8n-nodes-base/node-param-display-name-wrong-for-dynamic-options
@@ -397,6 +681,38 @@ export class EngramMemory implements INodeType {
     const minRelevanceScore = this.getNodeParameter('minRelevanceScore', itemIndex, 0.5) as number;
     const retentionType = this.getNodeParameter('retentionType', itemIndex, 'forever') as string;
     const retentionValue = this.getNodeParameter('retentionValue', itemIndex, 30) as number;
+    const nodeVersion = this.getNode().typeVersion ?? 1;
+    const usesGovernanceControls = nodeVersion >= 2;
+    const storeHumanEpisodes = usesGovernanceControls
+      ? (this.getNodeParameter('storeHumanEpisodes', itemIndex, 'enabled') as string) === 'enabled'
+      : true;
+    const humanEpisodeKind = usesGovernanceControls
+      ? (this.getNodeParameter('humanEpisodeKind', itemIndex, 'active_human') as
+          | 'active_human'
+          | 'passive_human')
+      : 'active_human';
+    const storeAiEpisodes = usesGovernanceControls
+      ? (this.getNodeParameter('storeAiEpisodes', itemIndex, 'enabled') as string) === 'enabled'
+      : true;
+    const extractHuman = usesGovernanceControls
+      ? (this.getNodeParameter('extractHuman', itemIndex, 'enabled') as string) === 'enabled'
+      : true;
+    const extractAi = usesGovernanceControls
+      ? (this.getNodeParameter('extractAi', itemIndex, 'disabled') as string) === 'enabled'
+      : true;
+    const extractSystemTool = usesGovernanceControls
+      ? (this.getNodeParameter('extractSystemTool', itemIndex, 'disabled') as string) === 'enabled'
+      : false;
+    const autoAcceptConfidence = usesGovernanceControls
+      ? (this.getNodeParameter('autoAcceptConfidence', itemIndex, 0.85) as number)
+      : undefined;
+    const rejectBelowConfidence = usesGovernanceControls
+      ? (this.getNodeParameter('rejectBelowConfidence', itemIndex, 0.3) as number)
+      : undefined;
+    const acceptedOnlyRetrieval = usesGovernanceControls
+      ? (this.getNodeParameter('memoryFactPolicy', itemIndex, 'acceptedOnly') as string) ===
+        'acceptedOnly'
+      : false;
 
     try {
       // Get or create storage instance
@@ -523,6 +839,96 @@ export class EngramMemory implements INodeType {
         embeddingConfig,
         enableTraversal,
         traversalHops,
+        storeHumanEpisodes,
+        humanEpisodeKind,
+        storeAiEpisodes,
+        extractHuman,
+        extractAi,
+        extractSystemTool,
+        acceptedOnlyRetrieval,
+        contextTokenBudget: usesGovernanceControls
+          ? (this.getNodeParameter('contextTokenBudget', itemIndex, 2000) as number)
+          : undefined,
+        includeProvenanceInContext: usesGovernanceControls,
+        retrievalFilters: usesGovernanceControls
+          ? {
+              sender_id:
+                (this.getNodeParameter('retrievalSenderId', itemIndex, '') as string).trim() ||
+                undefined,
+              episode_kind: ((this.getNodeParameter(
+                'retrievalEpisodeKind',
+                itemIndex,
+                '',
+              ) as string) || undefined) as
+                | 'active_human'
+                | 'passive_human'
+                | 'assistant_reply'
+                | 'monitor_summary'
+                | 'tool_output'
+                | 'system'
+                | 'legacy'
+                | undefined,
+              trust_level: ((this.getNodeParameter(
+                'retrievalTrustLevel',
+                itemIndex,
+                '',
+              ) as string) || undefined) as
+                | 'trusted'
+                | 'standard'
+                | 'unverified'
+                | 'untrusted'
+                | undefined,
+              source_workflow_id:
+                (
+                  this.getNodeParameter('retrievalSourceWorkflowId', itemIndex, '') as string
+                ).trim() || undefined,
+              source_execution_id:
+                (
+                  this.getNodeParameter('retrievalSourceExecutionId', itemIndex, '') as string
+                ).trim() || undefined,
+              reference_after:
+                (this.getNodeParameter('retrievalReferenceAfter', itemIndex, '') as string) ||
+                undefined,
+              reference_before:
+                (this.getNodeParameter('retrievalReferenceBefore', itemIndex, '') as string) ||
+                undefined,
+            }
+          : undefined,
+        requireExtractionConfidence: usesGovernanceControls,
+        extractionThresholdPolicy: usesGovernanceControls
+          ? {
+              autoAcceptThreshold: autoAcceptConfidence!,
+              rejectBelowThreshold: rejectBelowConfidence!,
+            }
+          : undefined,
+        episodeMetadata: usesGovernanceControls
+          ? {
+              source_message_id:
+                (this.getNodeParameter('sourceMessageId', itemIndex, '') as string).trim() || null,
+              idempotency_key:
+                (this.getNodeParameter('episodeIdempotencyKey', itemIndex, '') as string).trim() ||
+                null,
+              conversation_id:
+                (this.getNodeParameter('conversationId', itemIndex, '') as string).trim() ||
+                sessionId,
+              sender_id:
+                (this.getNodeParameter('senderId', itemIndex, '') as string).trim() || null,
+              sender_name:
+                (this.getNodeParameter('senderName', itemIndex, '') as string).trim() || null,
+              quoted_message_id:
+                (this.getNodeParameter('quotedMessageId', itemIndex, '') as string).trim() || null,
+              trust_level: this.getNodeParameter('episodeTrustLevel', itemIndex, 'standard') as
+                | 'trusted'
+                | 'standard'
+                | 'unverified'
+                | 'untrusted',
+              source_workflow_id: this.getWorkflow().id ?? null,
+              source_execution_id: this.getExecutionId(),
+              attributes: parseEpisodeAttributes(
+                this.getNodeParameter('episodeAttributes', itemIndex, '{}'),
+              ),
+            }
+          : undefined,
       });
 
       return {
@@ -541,5 +947,20 @@ export class EngramMemory implements INodeType {
         },
       );
     }
+  }
+}
+
+function parseEpisodeAttributes(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string' || value.trim() === '') return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
   }
 }

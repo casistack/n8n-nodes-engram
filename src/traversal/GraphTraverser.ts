@@ -14,6 +14,8 @@ export interface TraversalOptions {
   maxEntities?: number;
   /** Include expired edges in traversal (default: false) */
   includeExpiredEdges?: boolean;
+  entityFilter?: (entity: EntityNode) => boolean;
+  edgeFilter?: (edge: EntityEdge) => boolean;
 }
 
 export interface TraversalResult {
@@ -39,6 +41,8 @@ export class GraphTraverser {
     const maxHops = options?.maxHops ?? 2;
     const maxEntities = options?.maxEntities ?? 50;
     const includeExpired = options?.includeExpiredEdges ?? false;
+    const entityFilter = options?.entityFilter;
+    const edgeFilter = options?.edgeFilter;
 
     const visited = new Set<string>();
     const visitedEdges = new Set<string>();
@@ -50,7 +54,7 @@ export class GraphTraverser {
     // Initialize queue with seed entities
     for (const uuid of seedEntityUuids) {
       const entity = await storage.getEntity(uuid);
-      if (entity) {
+      if (entity && (!entityFilter || entityFilter(entity))) {
         queue.push({ uuid, hop: 0, viaEdge: null });
       }
     }
@@ -63,6 +67,7 @@ export class GraphTraverser {
 
       const entity = await storage.getEntity(item.uuid);
       if (!entity) continue;
+      if (entityFilter && !entityFilter(entity)) continue;
 
       collectedEntities.push(entity);
       paths.push({ entity, hop: item.hop, via_edge: item.viaEdge });
@@ -78,6 +83,7 @@ export class GraphTraverser {
 
         for (const edge of edges) {
           if (!includeExpired && edge.expired_at) continue;
+          if (edgeFilter && !edgeFilter(edge)) continue;
 
           const neighborUuid =
             edge.source_node_uuid === item.uuid ? edge.target_node_uuid : edge.source_node_uuid;

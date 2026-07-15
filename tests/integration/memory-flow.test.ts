@@ -415,7 +415,7 @@ describe('Memory Flow Integration', () => {
 			const exported = await storage.exportGraph('export-test');
 			expect(exported.entities).toHaveLength(1);
 			expect(exported.episodes).toHaveLength(1);
-			expect(exported.version).toBe('1.0');
+			expect(exported.version).toBe('2.0');
 
 			// Create fresh storage and import
 			const storage2 = new GraphologyStorage();

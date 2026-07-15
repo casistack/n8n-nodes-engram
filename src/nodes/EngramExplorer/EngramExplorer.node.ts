@@ -4,12 +4,14 @@ import {
   type INodeExecutionData,
   type ILoadOptionsFunctions,
   type INodePropertyOptions,
+  type INodeProperties,
   type INodeType,
   type INodeTypeDescription,
   NodeOperationError,
 } from 'n8n-workflow';
 
 import { createStorage } from '../../storage/StorageFactory';
+import type { EpisodeFilterOptions, UpdateEpisodeInput } from '../../storage/IGraphStorage';
 import { HybridSearchEngine } from '../../search/HybridSearchEngine';
 import { EmbeddingService } from '../../embeddings';
 import { nowIso } from '../../utils/temporal';
@@ -17,6 +19,25 @@ import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers'
 import { customStoragePathProperty } from '../../descriptions';
 import { GraphTraverser } from '../../traversal/GraphTraverser';
 import { EpisodeTraverser } from '../../traversal/EpisodeTraverser';
+import { ExtractionMetadataV2Schema, reviewExtractionMetadata } from '../../schemas';
+
+function episodeFilterStringProperties(): INodeProperties[] {
+  return [
+    ['Sender ID', 'episodeSenderId', 'Only return episodes from this sender ID'],
+    ['Sender Name', 'episodeSenderName', 'Only return episodes from this sender name'],
+    ['Conversation ID', 'episodeConversationId', 'Only return episodes in this conversation'],
+    ['Source Message ID', 'episodeSourceMessageId', 'Only return this source message'],
+    ['Source Workflow ID', 'episodeSourceWorkflowId', 'Only return episodes from this workflow'],
+    ['Source Execution ID', 'episodeSourceExecutionId', 'Only return episodes from this execution'],
+  ].map(([displayName, name, description]) => ({
+    displayName,
+    name,
+    type: 'string',
+    default: '',
+    displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+    description,
+  }));
+}
 
 export class EngramExplorer implements INodeType {
   description: INodeTypeDescription = {
@@ -180,6 +201,12 @@ export class EngramExplorer implements INodeType {
             action: 'Search relationships',
           },
           {
+            name: 'Review',
+            value: 'review',
+            description: 'Accept, reject, or return an extracted fact to proposed state',
+            action: 'Review a relationship fact',
+          },
+          {
             name: 'Update',
             value: 'update',
             description: 'Update an existing relationship',
@@ -219,6 +246,24 @@ export class EngramExplorer implements INodeType {
             value: 'getRecent',
             description: 'Get recent episodes',
             action: 'Get recent episodes',
+          },
+          {
+            name: 'List',
+            value: 'list',
+            description: 'List and filter episodes in a group',
+            action: 'List episodes',
+          },
+          {
+            name: 'Update',
+            value: 'update',
+            description: 'Update episode content or governance metadata',
+            action: 'Update an episode',
+          },
+          {
+            name: 'Delete',
+            value: 'delete',
+            description: 'Delete an episode and manage linked fact provenance',
+            action: 'Delete an episode',
           },
         ],
         default: 'getRecent',
@@ -280,7 +325,7 @@ export class EngramExplorer implements INodeType {
         required: true,
         displayOptions: {
           show: {
-            operation: ['get', 'delete', 'getForEntity', 'update'],
+            operation: ['get', 'delete', 'getForEntity', 'update', 'review'],
           },
         },
         description: 'The unique identifier of the entity, relationship, or episode',
@@ -522,6 +567,124 @@ export class EngramExplorer implements INodeType {
         placeholder: '2026-01-31T12:00:00.000Z',
         description: 'When this fact stopped being true',
       },
+      {
+        displayName: 'Fact Review Status',
+        name: 'factReviewFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Accepted', value: 'accepted' },
+          { name: 'Proposed', value: 'proposed' },
+          { name: 'Rejected', value: 'rejected' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts in this review state',
+      },
+      {
+        displayName: 'Source Sender ID',
+        name: 'factSenderIdFilter',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts supported by episodes from this sender',
+      },
+      {
+        displayName: 'Source Episode Kind',
+        name: 'factEpisodeKindFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Active Human', value: 'active_human' },
+          { name: 'Passive Human', value: 'passive_human' },
+          { name: 'Assistant Reply', value: 'assistant_reply' },
+          { name: 'Monitor Summary', value: 'monitor_summary' },
+          { name: 'Tool Output', value: 'tool_output' },
+          { name: 'System', value: 'system' },
+          { name: 'Legacy', value: 'legacy' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts supported by this episode kind',
+      },
+      {
+        displayName: 'Source Trust Level',
+        name: 'factTrustFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Trusted', value: 'trusted' },
+          { name: 'Standard', value: 'standard' },
+          { name: 'Unverified', value: 'unverified' },
+          { name: 'Untrusted', value: 'untrusted' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts supported at this trust level',
+      },
+      {
+        displayName: 'Source Workflow ID',
+        name: 'factSourceWorkflowFilter',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts supported by this source workflow',
+      },
+      {
+        displayName: 'Source Execution ID',
+        name: 'factSourceExecutionFilter',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts supported by this source execution',
+      },
+      {
+        displayName: 'Source Reference Time After',
+        name: 'factReferenceAfter',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts supported at or after this time',
+      },
+      {
+        displayName: 'Source Reference Time Before',
+        name: 'factReferenceBefore',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { resource: ['relationship'], operation: ['search'] } },
+        description: 'Only return facts supported at or before this time',
+      },
+      {
+        displayName: 'Review Status',
+        name: 'factReviewStatus',
+        type: 'options',
+        options: [
+          { name: 'Accepted', value: 'accepted' },
+          { name: 'Rejected', value: 'rejected' },
+          { name: 'Proposed', value: 'proposed' },
+        ],
+        default: 'accepted',
+        displayOptions: { show: { resource: ['relationship'], operation: ['review'] } },
+        description: 'New review state for the extracted fact',
+      },
+      {
+        displayName: 'Reviewed By',
+        name: 'factReviewedBy',
+        type: 'string',
+        default: '',
+        required: true,
+        displayOptions: { show: { resource: ['relationship'], operation: ['review'] } },
+        description: 'Operator or process identifier responsible for this review decision',
+      },
+      {
+        displayName: 'Confidence Override',
+        name: 'factConfidenceOverride',
+        type: 'string',
+        default: '',
+        placeholder: '0.9 or null',
+        displayOptions: { show: { resource: ['relationship'], operation: ['review'] } },
+        description: 'Optional confidence from 0 to 1, null to clear, or empty to preserve',
+      },
       // ===== Shared Optional Parameters =====
       // Attributes JSON (for create/update on both entities and relationships)
       {
@@ -561,7 +724,7 @@ export class EngramExplorer implements INodeType {
         },
         displayOptions: {
           show: {
-            resource: ['entity'],
+            resource: ['entity', 'episode'],
             operation: ['list'],
           },
         },
@@ -583,6 +746,60 @@ export class EngramExplorer implements INodeType {
         },
         description:
           'Minimum relevance score (0-1) for results. Higher values return only more relevant matches.',
+      },
+      {
+        displayName: 'Retrieval Diagnostics',
+        name: 'retrievalDiagnostics',
+        type: 'options',
+        options: [
+          { name: 'Disabled', value: 'disabled' },
+          { name: 'Enabled', value: 'enabled' },
+        ],
+        default: 'disabled',
+        displayOptions: {
+          show: {
+            operation: ['search'],
+            resource: ['entity', 'relationship'],
+          },
+        },
+        description:
+          'Return one aggregate record with bounded candidate decisions and a context-budget preview',
+      },
+      {
+        displayName: 'Diagnostics Candidate Limit',
+        name: 'diagnosticsCandidateLimit',
+        type: 'number',
+        default: 100,
+        typeOptions: {
+          minValue: 1,
+          maxValue: 250,
+        },
+        displayOptions: {
+          show: {
+            operation: ['search'],
+            resource: ['entity', 'relationship'],
+            retrievalDiagnostics: ['enabled'],
+          },
+        },
+        description: 'Maximum number of candidate decisions included in the audit trace',
+      },
+      {
+        displayName: 'Context Preview Token Budget',
+        name: 'diagnosticsContextTokenBudget',
+        type: 'number',
+        default: 1000,
+        typeOptions: {
+          minValue: 64,
+          maxValue: 100000,
+        },
+        displayOptions: {
+          show: {
+            operation: ['search'],
+            resource: ['entity', 'relationship'],
+            retrievalDiagnostics: ['enabled'],
+          },
+        },
+        description: 'Token budget used to demonstrate which complete context items would fit',
       },
       // ===== Temporal Parameters =====
       // From Date — for episode date range and relationship search
@@ -614,6 +831,215 @@ export class EngramExplorer implements INodeType {
           },
         },
         description: 'End of date range (ISO 8601)',
+      },
+      // ===== Episode Lifecycle Parameters =====
+      {
+        displayName: 'Role',
+        name: 'episodeRoleFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Human', value: 'human' },
+          { name: 'AI', value: 'ai' },
+          { name: 'System', value: 'system' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes with this message role',
+      },
+      {
+        displayName: 'Source Type',
+        name: 'episodeSourceTypeFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Message', value: 'message' },
+          { name: 'Document', value: 'document' },
+          { name: 'API', value: 'api' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes from this source type',
+      },
+      {
+        displayName: 'Episode Kind',
+        name: 'episodeKindFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Active Human', value: 'active_human' },
+          { name: 'Passive Human', value: 'passive_human' },
+          { name: 'Assistant Reply', value: 'assistant_reply' },
+          { name: 'Monitor Summary', value: 'monitor_summary' },
+          { name: 'Tool Output', value: 'tool_output' },
+          { name: 'System', value: 'system' },
+          { name: 'Legacy', value: 'legacy' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes with this provenance kind',
+      },
+      {
+        displayName: 'Trust Level',
+        name: 'episodeTrustFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Trusted', value: 'trusted' },
+          { name: 'Standard', value: 'standard' },
+          { name: 'Unverified', value: 'unverified' },
+          { name: 'Untrusted', value: 'untrusted' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes with this trust level',
+      },
+      {
+        displayName: 'Review Status',
+        name: 'episodeReviewFilter',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Proposed', value: 'proposed' },
+          { name: 'Accepted', value: 'accepted' },
+          { name: 'Rejected', value: 'rejected' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes with this review status',
+      },
+      ...episodeFilterStringProperties(),
+      {
+        displayName: 'Reference Time After',
+        name: 'episodeReferenceAfter',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes referenced at or after this time',
+      },
+      {
+        displayName: 'Reference Time Before',
+        name: 'episodeReferenceBefore',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes referenced at or before this time',
+      },
+      {
+        displayName: 'Created After',
+        name: 'episodeCreatedAfter',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes created at or after this time',
+      },
+      {
+        displayName: 'Created Before',
+        name: 'episodeCreatedBefore',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+        description: 'Only return episodes created at or before this time',
+      },
+      {
+        displayName: 'Sort By',
+        name: 'episodeSortBy',
+        type: 'options',
+        options: [
+          { name: 'Reference Time', value: 'reference_time' },
+          { name: 'Created At', value: 'created_at' },
+        ],
+        default: 'reference_time',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+      },
+      {
+        displayName: 'Sort Order',
+        name: 'episodeSortOrder',
+        type: 'options',
+        options: [
+          { name: 'Newest First', value: 'desc' },
+          { name: 'Oldest First', value: 'asc' },
+        ],
+        default: 'desc',
+        displayOptions: { show: { resource: ['episode'], operation: ['list'] } },
+      },
+      {
+        displayName: 'Content',
+        name: 'episodeContentUpdate',
+        type: 'string',
+        typeOptions: { rows: 4 },
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['update'] } },
+        description: 'Replacement content. Leave empty to keep the current content.',
+      },
+      {
+        displayName: 'Sender Name',
+        name: 'episodeSenderNameUpdate',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['update'] } },
+        description: 'Replacement sender name. Leave empty to keep the current value.',
+      },
+      {
+        displayName: 'Trust Level',
+        name: 'episodeTrustUpdate',
+        type: 'options',
+        options: [
+          { name: 'No Change', value: '' },
+          { name: 'Trusted', value: 'trusted' },
+          { name: 'Standard', value: 'standard' },
+          { name: 'Unverified', value: 'unverified' },
+          { name: 'Untrusted', value: 'untrusted' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['update'] } },
+      },
+      {
+        displayName: 'Review Status',
+        name: 'episodeReviewUpdate',
+        type: 'options',
+        options: [
+          { name: 'No Change', value: '' },
+          { name: 'Proposed', value: 'proposed' },
+          { name: 'Accepted', value: 'accepted' },
+          { name: 'Rejected', value: 'rejected' },
+        ],
+        default: '',
+        displayOptions: { show: { resource: ['episode'], operation: ['update'] } },
+      },
+      {
+        displayName: 'Confidence',
+        name: 'episodeConfidenceUpdate',
+        type: 'string',
+        default: '',
+        placeholder: '0.85 or null',
+        displayOptions: { show: { resource: ['episode'], operation: ['update'] } },
+        description: 'Set a value from 0 to 1, use null to clear it, or leave empty unchanged',
+      },
+      {
+        displayName: 'Repair Episode Chain',
+        name: 'repairEpisodeChain',
+        type: 'options',
+        options: [
+          { name: 'Enabled', value: 'enabled' },
+          { name: 'Disabled', value: 'disabled' },
+        ],
+        default: 'enabled',
+        displayOptions: { show: { resource: ['episode'], operation: ['delete'] } },
+        description: 'Reconnect successor episodes to the deleted episode predecessor',
+      },
+      {
+        displayName: 'Linked Fact Handling',
+        name: 'episodeFactCleanup',
+        type: 'options',
+        options: [
+          { name: 'Unlink Episode', value: 'unlink' },
+          { name: 'Preserve References', value: 'preserve' },
+          { name: 'Delete Orphaned Facts', value: 'delete_orphaned' },
+        ],
+        default: 'unlink',
+        displayOptions: { show: { resource: ['episode'], operation: ['delete'] } },
+        description: 'How facts linked to the deleted episode should be handled',
       },
       // Since Date — for relationship changelog
       {
@@ -954,6 +1380,8 @@ async function executeEntityOperation(
     const minScore = ctx.getNodeParameter('minRelevanceScore', i, 0) as number;
     const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
     const createdBefore = ctx.getNodeParameter('createdBefore', i, '') as string;
+    const diagnosticsEnabled =
+      (ctx.getNodeParameter('retrievalDiagnostics', i, 'disabled') as string) === 'enabled';
 
     if (!query) {
       throw new NodeOperationError(ctx.getNode(), 'Query is required', { itemIndex: i });
@@ -965,7 +1393,34 @@ async function executeEntityOperation(
       minScore,
       createdAfter: createdAfter || undefined,
       createdBefore: createdBefore || undefined,
+      includeDiagnostics: diagnosticsEnabled,
+      diagnosticsCandidateLimit: ctx.getNodeParameter(
+        'diagnosticsCandidateLimit',
+        i,
+        100,
+      ) as number,
     });
+    if (diagnosticsEnabled) {
+      const contextPreview = searchEngine.formatAsContextWithAudit(
+        { ...results, edges: [] },
+        ctx.getNodeParameter('diagnosticsContextTokenBudget', i, 1000) as number,
+        true,
+      );
+      returnData.push({
+        json: {
+          results: results.entities.map((result) => ({
+            ...result.entity,
+            _score: result.score,
+          })),
+          _retrieval_audit: {
+            ...results.audit,
+            context_budget: contextPreview.audit,
+          },
+          _context_preview: contextPreview.context,
+        },
+      });
+      return;
+    }
     for (const r of results.entities) {
       returnData.push({ json: { ...r.entity, _score: r.score } });
     }
@@ -1085,12 +1540,19 @@ async function executeRelationshipOperation(
     const validBefore = ctx.getNodeParameter('searchValidBefore', i, '') as string;
     const createdAfter = ctx.getNodeParameter('createdAfter', i, '') as string;
     const createdBefore = ctx.getNodeParameter('createdBefore', i, '') as string;
+    const diagnosticsEnabled =
+      (ctx.getNodeParameter('retrievalDiagnostics', i, 'disabled') as string) === 'enabled';
 
     if (!query) {
       throw new NodeOperationError(ctx.getNode(), 'Query is required', { itemIndex: i });
     }
 
     const searchEngine = await createExplorerSearchEngine(ctx, storage, i);
+    const reviewStatus = ctx.getNodeParameter('factReviewFilter', i, '') as
+      | 'proposed'
+      | 'accepted'
+      | 'rejected'
+      | '';
     const results = await searchEngine.search(query, groupId, {
       limit,
       minScore,
@@ -1098,7 +1560,65 @@ async function executeRelationshipOperation(
       validBefore: validBefore || undefined,
       createdAfter: createdAfter || undefined,
       createdBefore: createdBefore || undefined,
+      includeDiagnostics: diagnosticsEnabled,
+      diagnosticsCandidateLimit: ctx.getNodeParameter(
+        'diagnosticsCandidateLimit',
+        i,
+        100,
+      ) as number,
+      retrievalFilters: {
+        review_statuses: reviewStatus ? [reviewStatus] : undefined,
+        sender_id:
+          (ctx.getNodeParameter('factSenderIdFilter', i, '') as string).trim() || undefined,
+        episode_kind: ((ctx.getNodeParameter('factEpisodeKindFilter', i, '') as string) ||
+          undefined) as
+          | 'active_human'
+          | 'passive_human'
+          | 'assistant_reply'
+          | 'monitor_summary'
+          | 'tool_output'
+          | 'system'
+          | 'legacy'
+          | undefined,
+        trust_level: ((ctx.getNodeParameter('factTrustFilter', i, '') as string) || undefined) as
+          | 'trusted'
+          | 'standard'
+          | 'unverified'
+          | 'untrusted'
+          | undefined,
+        source_workflow_id:
+          (ctx.getNodeParameter('factSourceWorkflowFilter', i, '') as string).trim() || undefined,
+        source_execution_id:
+          (ctx.getNodeParameter('factSourceExecutionFilter', i, '') as string).trim() || undefined,
+        reference_after: (ctx.getNodeParameter('factReferenceAfter', i, '') as string) || undefined,
+        reference_before:
+          (ctx.getNodeParameter('factReferenceBefore', i, '') as string) || undefined,
+      },
     });
+    if (diagnosticsEnabled) {
+      const contextPreview = searchEngine.formatAsContextWithAudit(
+        { ...results, entities: [] },
+        ctx.getNodeParameter('diagnosticsContextTokenBudget', i, 1000) as number,
+        true,
+      );
+      returnData.push({
+        json: {
+          results: results.edges.map((result) => ({
+            ...result.edge,
+            _score: result.score,
+            _source: result.sourceEntity.name,
+            _target: result.targetEntity.name,
+            _provenance: result.provenance,
+          })),
+          _retrieval_audit: {
+            ...results.audit,
+            context_budget: contextPreview.audit,
+          },
+          _context_preview: contextPreview.context,
+        },
+      });
+      return;
+    }
     for (const r of results.edges) {
       returnData.push({
         json: {
@@ -1106,9 +1626,58 @@ async function executeRelationshipOperation(
           _score: r.score,
           _source: r.sourceEntity.name,
           _target: r.targetEntity.name,
+          _provenance: r.provenance,
         },
       });
     }
+  } else if (operation === 'review') {
+    const uuid = (ctx.getNodeParameter('uuid', i) as string).trim();
+    const reviewStatus = ctx.getNodeParameter('factReviewStatus', i, 'accepted') as
+      | 'proposed'
+      | 'accepted'
+      | 'rejected';
+    const reviewedBy = (ctx.getNodeParameter('factReviewedBy', i) as string).trim();
+    const confidenceRaw = (ctx.getNodeParameter('factConfidenceOverride', i, '') as string).trim();
+    if (!uuid) {
+      throw new NodeOperationError(ctx.getNode(), 'UUID is required', { itemIndex: i });
+    }
+    if (!reviewedBy) {
+      throw new NodeOperationError(ctx.getNode(), 'Reviewed By is required', { itemIndex: i });
+    }
+
+    const edge = await storage.getEdge(uuid);
+    if (!edge) {
+      throw new NodeOperationError(ctx.getNode(), `Relationship not found: ${uuid}`, {
+        itemIndex: i,
+      });
+    }
+    let confidence: number | null | undefined;
+    if (confidenceRaw === 'null') {
+      confidence = null;
+    } else if (confidenceRaw) {
+      confidence = Number(confidenceRaw);
+      if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+        throw new NodeOperationError(ctx.getNode(), 'Confidence must be between 0 and 1 or null', {
+          itemIndex: i,
+        });
+      }
+    }
+
+    const reviewedAt = nowIso();
+    const metadata = ExtractionMetadataV2Schema.parse({
+      ...reviewExtractionMetadata(
+        edge.attributes.engram_extraction,
+        reviewStatus,
+        reviewedBy,
+        reviewedAt,
+        confidence,
+      ),
+      episode_uuids: edge.episodes,
+    });
+    const updated = await storage.updateEdge(uuid, {
+      attributes: { ...edge.attributes, engram_extraction: metadata },
+    });
+    returnData.push({ json: updated });
   } else if (operation === 'getForEntity') {
     const uuid = ctx.getNodeParameter('uuid', i) as string;
     if (!uuid) {
@@ -1202,7 +1771,114 @@ async function executeEpisodeOperation(
     const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     const count = await storage.getEpisodeCount(groupId);
     returnData.push({ json: { group_id: groupId, episode_count: count } });
+  } else if (operation === 'list') {
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
+    if (!groupId) {
+      throw new NodeOperationError(ctx.getNode(), 'Group ID is required', { itemIndex: i });
+    }
+
+    const filters = buildEpisodeFilters(ctx, i);
+    filters.limit = ctx.getNodeParameter('limit', i, 10) as number;
+    filters.offset = ctx.getNodeParameter('offset', i, 0) as number;
+    filters.sort_by = ctx.getNodeParameter(
+      'episodeSortBy',
+      i,
+      'reference_time',
+    ) as EpisodeFilterOptions['sort_by'];
+    filters.sort_order = ctx.getNodeParameter(
+      'episodeSortOrder',
+      i,
+      'desc',
+    ) as EpisodeFilterOptions['sort_order'];
+
+    const episodes = await storage.listEpisodes(groupId, filters);
+    for (const episode of episodes) {
+      returnData.push({ json: episode });
+    }
+  } else if (operation === 'update') {
+    const uuid = (ctx.getNodeParameter('uuid', i) as string).trim();
+    if (!uuid) {
+      throw new NodeOperationError(ctx.getNode(), 'UUID is required', { itemIndex: i });
+    }
+
+    const updates: UpdateEpisodeInput = {};
+    const content = ctx.getNodeParameter('episodeContentUpdate', i, '') as string;
+    const senderName = ctx.getNodeParameter('episodeSenderNameUpdate', i, '') as string;
+    const trustLevel = ctx.getNodeParameter('episodeTrustUpdate', i, '') as string;
+    const reviewStatus = ctx.getNodeParameter('episodeReviewUpdate', i, '') as string;
+    const confidenceRaw = (ctx.getNodeParameter('episodeConfidenceUpdate', i, '') as string).trim();
+    const attributesRaw = ctx.getNodeParameter('attributes', i, '{}') as string | object;
+
+    if (content) updates.content = content;
+    if (senderName) updates.sender_name = senderName;
+    if (trustLevel) updates.trust_level = trustLevel as UpdateEpisodeInput['trust_level'];
+    if (reviewStatus) updates.review_status = reviewStatus as UpdateEpisodeInput['review_status'];
+    if (confidenceRaw === 'null') {
+      updates.confidence = null;
+    } else if (confidenceRaw) {
+      const confidence = Number(confidenceRaw);
+      if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+        throw new NodeOperationError(ctx.getNode(), 'Confidence must be between 0 and 1 or null', {
+          itemIndex: i,
+        });
+      }
+      updates.confidence = confidence;
+    }
+
+    const attributes = parseAttributes(attributesRaw);
+    if (Object.keys(attributes).length > 0) updates.attributes = attributes;
+    if (Object.keys(updates).length === 0) {
+      throw new NodeOperationError(ctx.getNode(), 'Provide at least one episode field to update', {
+        itemIndex: i,
+      });
+    }
+
+    const episode = await storage.updateEpisode(uuid, updates);
+    returnData.push({ json: episode });
+  } else if (operation === 'delete') {
+    const uuid = (ctx.getNodeParameter('uuid', i) as string).trim();
+    if (!uuid) {
+      throw new NodeOperationError(ctx.getNode(), 'UUID is required', { itemIndex: i });
+    }
+
+    const result = await storage.deleteEpisode(uuid, {
+      repair_chain:
+        (ctx.getNodeParameter('repairEpisodeChain', i, 'enabled') as string) === 'enabled',
+      fact_cleanup: ctx.getNodeParameter('episodeFactCleanup', i, 'unlink') as
+        | 'preserve'
+        | 'unlink'
+        | 'delete_orphaned',
+    });
+    returnData.push({ json: { ...result } });
   }
+}
+
+function buildEpisodeFilters(ctx: IExecuteFunctions, i: number): EpisodeFilterOptions {
+  const filters: EpisodeFilterOptions = {};
+  const values = {
+    role: ctx.getNodeParameter('episodeRoleFilter', i, '') as string,
+    source_type: ctx.getNodeParameter('episodeSourceTypeFilter', i, '') as string,
+    episode_kind: ctx.getNodeParameter('episodeKindFilter', i, '') as string,
+    trust_level: ctx.getNodeParameter('episodeTrustFilter', i, '') as string,
+    review_status: ctx.getNodeParameter('episodeReviewFilter', i, '') as string,
+    sender_id: (ctx.getNodeParameter('episodeSenderId', i, '') as string).trim(),
+    sender_name: (ctx.getNodeParameter('episodeSenderName', i, '') as string).trim(),
+    conversation_id: (ctx.getNodeParameter('episodeConversationId', i, '') as string).trim(),
+    source_message_id: (ctx.getNodeParameter('episodeSourceMessageId', i, '') as string).trim(),
+    source_workflow_id: (ctx.getNodeParameter('episodeSourceWorkflowId', i, '') as string).trim(),
+    source_execution_id: (ctx.getNodeParameter('episodeSourceExecutionId', i, '') as string).trim(),
+    reference_after: ctx.getNodeParameter('episodeReferenceAfter', i, '') as string,
+    reference_before: ctx.getNodeParameter('episodeReferenceBefore', i, '') as string,
+    created_after: ctx.getNodeParameter('episodeCreatedAfter', i, '') as string,
+    created_before: ctx.getNodeParameter('episodeCreatedBefore', i, '') as string,
+  };
+
+  for (const [key, value] of Object.entries(values)) {
+    if (value) {
+      (filters as Record<string, unknown>)[key] = value;
+    }
+  }
+  return filters;
 }
 
 async function executeTraversalOperation(

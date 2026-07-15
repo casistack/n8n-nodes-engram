@@ -1,6 +1,7 @@
 import { MultiDirectedGraph } from 'graphology';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { generateUuid } from '../utils/uuid';
 import { nowIso, isOlderThanDays, isWithinDateRange } from '../utils/temporal';
 import { MinisearchProvider } from '../search/MinisearchProvider';
@@ -15,6 +16,16 @@ import type {
   EdgeSearchOptions,
   VectorSearchOptions,
   RetentionPolicy,
+  AppendEpisodeResult,
+  EpisodeFilterOptions,
+  UpdateEpisodeInput,
+  DeleteEpisodeOptions,
+  DeleteEpisodeResult,
+  PurgeEpisodesOptions,
+  PurgeEpisodesResult,
+  StorageMigrationStatus,
+  StorageSchemaMigrationOptions,
+  StorageSchemaMigrationResult,
 } from './IGraphStorage';
 import type {
   EntityNode,
@@ -24,7 +35,14 @@ import type {
   EpisodicNode,
   CreateEpisodicNode,
   GraphData,
+  ImportGraphData,
   GraphStats,
+} from '../schemas';
+import {
+  CURRENT_GRAPH_DATA_VERSION,
+  CreateEpisodicNodeSchema,
+  EpisodicNodeSchema,
+  migrateGraphData,
 } from '../schemas';
 
 type NodeType = 'entity' | 'episode';
@@ -41,6 +59,7 @@ interface GraphEdgeAttributes {
 
 const PERSIST_LOCK_TIMEOUT_MS = 5000;
 const PERSIST_LOCK_STALE_MS = 30000;
+const EMBEDDED_BACKUP_SUFFIX = '.pre-schema-2.0.backup.json';
 
 export class GraphologyStorage implements IGraphStorage {
   private graph: MultiDirectedGraph<GraphNodeAttributes, GraphEdgeAttributes>;
@@ -49,6 +68,16 @@ export class GraphologyStorage implements IGraphStorage {
   private initialized = false;
   private episodeOrder = new Map<string, number>();
   private nextOrder = 0;
+  private mutationTail: Promise<void> = Promise.resolve();
+  private migrationStatus: StorageMigrationStatus = {
+    backend: 'embedded',
+    target_version: CURRENT_GRAPH_DATA_VERSION,
+    source_version: 'new',
+    migration_required: false,
+    legacy_episode_count: 0,
+    automatic_migration_completed: false,
+    backup: { created: false, verified: false, path: null },
+  };
 
   constructor(persistPath?: string) {
     this.graph = new MultiDirectedGraph<GraphNodeAttributes, GraphEdgeAttributes>();
@@ -74,9 +103,7 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async close(): Promise<void> {
-    if (this.persistPath) {
-      await this.saveToDisk();
-    }
+    await this.mutationTail;
   }
 
   // ===== Entity Operations =====
@@ -95,15 +122,16 @@ export class GraphologyStorage implements IGraphStorage {
       updated_at: now,
     };
 
-    this.graph.addNode(entity.uuid, { type: 'entity', data: entity });
-    this.searchProvider.indexEntity(entity.uuid, {
-      name: entity.name,
-      summary: entity.summary,
-      entity_type: entity.entity_type,
-    });
-    await this.persistIfConfigured();
+    return this.runMutation(() => {
+      this.graph.addNode(entity.uuid, { type: 'entity', data: entity });
+      this.searchProvider.indexEntity(entity.uuid, {
+        name: entity.name,
+        summary: entity.summary,
+        entity_type: entity.entity_type,
+      });
 
-    return entity;
+      return entity;
+    });
   }
 
   async getEntity(uuid: string): Promise<EntityNode | null> {
@@ -130,41 +158,43 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async updateEntity(uuid: string, updates: Partial<EntityNode>): Promise<EntityNode> {
-    const existing = await this.getEntity(uuid);
-    if (!existing) throw new Error(`Entity not found: ${uuid}`);
+    return this.runMutation(() => {
+      const existing = this.getEpisodeOrEntity(uuid, 'entity') as EntityNode | null;
+      if (!existing) throw new Error(`Entity not found: ${uuid}`);
 
-    const updated: EntityNode = {
-      ...existing,
-      ...updates,
-      uuid: existing.uuid,
-      created_at: existing.created_at,
-      updated_at: nowIso(),
-    };
+      const updated: EntityNode = {
+        ...existing,
+        ...updates,
+        uuid: existing.uuid,
+        created_at: existing.created_at,
+        updated_at: nowIso(),
+      };
 
-    this.graph.setNodeAttribute(uuid, 'data', updated);
-    this.searchProvider.indexEntity(updated.uuid, {
-      name: updated.name,
-      summary: updated.summary,
-      entity_type: updated.entity_type,
+      this.graph.setNodeAttribute(uuid, 'data', updated);
+      this.searchProvider.indexEntity(updated.uuid, {
+        name: updated.name,
+        summary: updated.summary,
+        entity_type: updated.entity_type,
+      });
+
+      return updated;
     });
-    await this.persistIfConfigured();
-
-    return updated;
   }
 
   async deleteEntity(uuid: string): Promise<void> {
-    if (!this.graph.hasNode(uuid)) return;
+    await this.runMutation(() => {
+      if (!this.graph.hasNode(uuid)) return;
 
-    // Remove connected edges from search index before Graphology drops them
-    this.graph.forEachEdge(uuid, (edgeKey, attrs) => {
-      if (attrs.type === 'entity_edge') {
-        this.searchProvider.removeEdge(edgeKey);
-      }
+      // Remove connected edges from search index before Graphology drops them
+      this.graph.forEachEdge(uuid, (edgeKey, attrs) => {
+        if (attrs.type === 'entity_edge') {
+          this.searchProvider.removeEdge(edgeKey);
+        }
+      });
+
+      this.searchProvider.removeEntity(uuid);
+      this.graph.dropNode(uuid);
     });
-
-    this.searchProvider.removeEntity(uuid);
-    this.graph.dropNode(uuid);
-    await this.persistIfConfigured();
   }
 
   async listEntities(groupId: string, options?: ListOptions): Promise<EntityNode[]> {
@@ -211,25 +241,29 @@ export class GraphologyStorage implements IGraphStorage {
       updated_at: now,
     };
 
-    // Ensure source and target nodes exist
-    if (!this.graph.hasNode(edge.source_node_uuid) || !this.graph.hasNode(edge.target_node_uuid)) {
-      throw new Error(
-        `Cannot create edge: source (${edge.source_node_uuid}) or target (${edge.target_node_uuid}) node not found`,
-      );
-    }
+    return this.runMutation(() => {
+      // Ensure source and target nodes exist
+      if (
+        !this.graph.hasNode(edge.source_node_uuid) ||
+        !this.graph.hasNode(edge.target_node_uuid)
+      ) {
+        throw new Error(
+          `Cannot create edge: source (${edge.source_node_uuid}) or target (${edge.target_node_uuid}) node not found`,
+        );
+      }
 
-    this.graph.addEdgeWithKey(edge.uuid, edge.source_node_uuid, edge.target_node_uuid, {
-      type: 'entity_edge',
-      data: edge,
+      this.graph.addEdgeWithKey(edge.uuid, edge.source_node_uuid, edge.target_node_uuid, {
+        type: 'entity_edge',
+        data: edge,
+      });
+
+      this.searchProvider.indexEdge(edge.uuid, {
+        name: edge.name,
+        fact: edge.fact,
+      });
+
+      return edge;
     });
-
-    this.searchProvider.indexEdge(edge.uuid, {
-      name: edge.name,
-      fact: edge.fact,
-    });
-    await this.persistIfConfigured();
-
-    return edge;
   }
 
   async getEdge(uuid: string): Promise<EntityEdge | null> {
@@ -271,64 +305,140 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async updateEdge(uuid: string, updates: Partial<EntityEdge>): Promise<EntityEdge> {
-    const existing = await this.getEdge(uuid);
-    if (!existing) throw new Error(`Edge not found: ${uuid}`);
+    return this.runMutation(() => {
+      const existing = this.getEdgeInternal(uuid);
+      if (!existing) throw new Error(`Edge not found: ${uuid}`);
 
-    const updated: EntityEdge = {
-      ...existing,
-      ...updates,
-      uuid: existing.uuid,
-      source_node_uuid: existing.source_node_uuid,
-      target_node_uuid: existing.target_node_uuid,
-      created_at: existing.created_at,
-      updated_at: nowIso(),
-    };
+      const updated: EntityEdge = {
+        ...existing,
+        ...updates,
+        uuid: existing.uuid,
+        source_node_uuid: existing.source_node_uuid,
+        target_node_uuid: existing.target_node_uuid,
+        created_at: existing.created_at,
+        updated_at: nowIso(),
+      };
 
-    this.graph.setEdgeAttribute(uuid, 'data', updated);
-    this.searchProvider.indexEdge(updated.uuid, {
-      name: updated.name,
-      fact: updated.fact,
+      this.graph.setEdgeAttribute(uuid, 'data', updated);
+      this.searchProvider.indexEdge(updated.uuid, {
+        name: updated.name,
+        fact: updated.fact,
+      });
+
+      return updated;
     });
-    await this.persistIfConfigured();
-
-    return updated;
   }
 
   async deleteEdge(uuid: string): Promise<void> {
-    if (!this.graph.hasEdge(uuid)) return;
-    this.searchProvider.removeEdge(uuid);
-    this.graph.dropEdge(uuid);
-    await this.persistIfConfigured();
+    await this.runMutation(() => {
+      if (!this.graph.hasEdge(uuid)) return;
+      this.searchProvider.removeEdge(uuid);
+      this.graph.dropEdge(uuid);
+    });
   }
 
   // ===== Episode Operations =====
 
   async addEpisode(input: CreateEpisodicNode): Promise<EpisodicNode> {
-    const episode: EpisodicNode = {
-      uuid: generateUuid(),
-      group_id: input.group_id,
-      content: input.content,
-      role: input.role,
-      source_type: input.source_type ?? 'message',
-      reference_time: input.reference_time,
-      previous_episode_uuid: input.previous_episode_uuid ?? null,
-      created_at: nowIso(),
-    };
+    const result = await this.appendEpisodeWithOptions(input, false);
+    return result.episode;
+  }
 
-    this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
-    this.episodeOrder.set(episode.uuid, this.nextOrder++);
+  async appendEpisode(input: CreateEpisodicNode): Promise<AppendEpisodeResult> {
+    return this.appendEpisodeWithOptions(input, true);
+  }
 
-    // Chain to previous episode
-    if (episode.previous_episode_uuid && this.graph.hasNode(episode.previous_episode_uuid)) {
-      const chainKey = `next_${episode.previous_episode_uuid}_${episode.uuid}`;
-      this.graph.addEdgeWithKey(chainKey, episode.previous_episode_uuid, episode.uuid, {
-        type: 'next_episode',
-        data: null,
-      });
+  private async appendEpisodeWithOptions(
+    input: CreateEpisodicNode,
+    autoChain: boolean,
+  ): Promise<AppendEpisodeResult> {
+    const shouldAutoChain =
+      autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid');
+    const parsed = CreateEpisodicNodeSchema.parse(input);
+
+    return this.runMutation(() => {
+      const existing = this.findEpisodeByIdempotency(parsed);
+      if (existing) return { episode: existing, created: false };
+
+      const createdAt = nowIso();
+      const previousEpisodeUuid = shouldAutoChain
+        ? (this.findLatestEpisode(parsed.group_id)?.uuid ?? null)
+        : parsed.previous_episode_uuid;
+      const episode: EpisodicNode = {
+        uuid: generateUuid(),
+        ...parsed,
+        previous_episode_uuid: previousEpisodeUuid,
+        created_at: createdAt,
+        updated_at: createdAt,
+      };
+
+      this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
+      this.episodeOrder.set(episode.uuid, this.nextOrder++);
+
+      const previous = previousEpisodeUuid
+        ? this.getEpisodeOrEntity(previousEpisodeUuid, 'episode')
+        : null;
+      if (previous && previous.group_id === episode.group_id) {
+        const chainKey = `next_${previousEpisodeUuid}_${episode.uuid}`;
+        this.graph.addEdgeWithKey(chainKey, previousEpisodeUuid!, episode.uuid, {
+          type: 'next_episode',
+          data: null,
+        });
+      }
+
+      return { episode, created: true };
+    });
+  }
+
+  private findEpisodeByIdempotency(input: CreateEpisodicNode): EpisodicNode | null {
+    const matches: { source?: EpisodicNode; key?: EpisodicNode } = {};
+
+    this.graph.forEachNode((_key, attrs) => {
+      if (attrs.type !== 'episode') return;
+      const episode = attrs.data as EpisodicNode;
+      if (episode.group_id !== input.group_id) return;
+
+      if (
+        input.source_message_id &&
+        episode.source_message_id === input.source_message_id &&
+        episode.episode_kind === input.episode_kind
+      ) {
+        matches.source = episode;
+      }
+      if (input.idempotency_key && episode.idempotency_key === input.idempotency_key) {
+        matches.key = episode;
+      }
+    });
+
+    if (matches.source && matches.key && matches.source.uuid !== matches.key.uuid) {
+      throw new Error('Episode idempotency identifiers resolve to different existing episodes');
     }
 
-    await this.persistIfConfigured();
-    return episode;
+    return matches.source ?? matches.key ?? null;
+  }
+
+  private findLatestEpisode(groupId: string): EpisodicNode | null {
+    const episodes: EpisodicNode[] = [];
+    const referencedPredecessors = new Set<string>();
+
+    this.graph.forEachNode((_key, attrs) => {
+      if (attrs.type !== 'episode') return;
+      const episode = attrs.data as EpisodicNode;
+      if (episode.group_id !== groupId) return;
+      episodes.push(episode);
+      if (episode.previous_episode_uuid) {
+        referencedPredecessors.add(episode.previous_episode_uuid);
+      }
+    });
+
+    const tails = episodes.filter((episode) => !referencedPredecessors.has(episode.uuid));
+    const candidates = tails.length > 0 ? tails : episodes;
+    candidates.sort((a, b) => {
+      const timeDiff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return (this.episodeOrder.get(b.uuid) ?? 0) - (this.episodeOrder.get(a.uuid) ?? 0);
+    });
+    return candidates[0] ?? null;
   }
 
   async getEpisode(uuid: string): Promise<EpisodicNode | null> {
@@ -336,6 +446,103 @@ export class GraphologyStorage implements IGraphStorage {
     const attrs = this.graph.getNodeAttributes(uuid);
     if (attrs.type !== 'episode') return null;
     return attrs.data as EpisodicNode;
+  }
+
+  async getEpisodes(uuids: string[]): Promise<EpisodicNode[]> {
+    const episodes: EpisodicNode[] = [];
+    for (const uuid of [...new Set(uuids)]) {
+      const episode = await this.getEpisode(uuid);
+      if (episode) episodes.push(episode);
+    }
+    return episodes;
+  }
+
+  async listEpisodes(groupId: string, options: EpisodeFilterOptions = {}): Promise<EpisodicNode[]> {
+    return this.collectEpisodes(groupId, options);
+  }
+
+  async updateEpisode(uuid: string, updates: UpdateEpisodeInput): Promise<EpisodicNode> {
+    return this.runMutation(() => {
+      const existing = this.getEpisodeOrEntity(uuid, 'episode') as EpisodicNode | null;
+      if (!existing) throw new Error(`Episode not found: ${uuid}`);
+
+      const updated = EpisodicNodeSchema.parse({
+        ...existing,
+        ...updates,
+        uuid: existing.uuid,
+        group_id: existing.group_id,
+        source_message_id: existing.source_message_id,
+        idempotency_key: existing.idempotency_key,
+        episode_kind: existing.episode_kind,
+        previous_episode_uuid: existing.previous_episode_uuid,
+        created_at: existing.created_at,
+        updated_at: nowIso(),
+      });
+      this.graph.setNodeAttribute(uuid, 'data', updated);
+      return updated;
+    });
+  }
+
+  async deleteEpisode(
+    uuid: string,
+    options: DeleteEpisodeOptions = {},
+  ): Promise<DeleteEpisodeResult> {
+    return this.runMutation(() => this.deleteEpisodeInternal(uuid, options));
+  }
+
+  async purgeEpisodes(
+    groupId: string,
+    filters: EpisodeFilterOptions,
+    options: PurgeEpisodesOptions,
+  ): Promise<PurgeEpisodesResult> {
+    if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 10000) {
+      throw new Error('Episode purge limit must be an integer between 1 and 10000');
+    }
+
+    const execute = (): PurgeEpisodesResult => {
+      const matches = this.collectEpisodes(groupId, {
+        ...filters,
+        offset: 0,
+        limit: options.limit + 1,
+      });
+      const truncated = matches.length > options.limit;
+      const selected = matches.slice(0, options.limit);
+      const linkedEdges = new Set<string>();
+      for (const episode of selected) {
+        this.graph.forEachEdge((_edgeKey, attrs) => {
+          if (attrs.type === 'entity_edge' && attrs.data?.episodes.includes(episode.uuid)) {
+            linkedEdges.add(attrs.data.uuid);
+          }
+        });
+      }
+
+      if (options.dry_run) {
+        return {
+          matched_count: selected.length,
+          deleted_count: 0,
+          truncated,
+          dry_run: true,
+          linked_edge_count: linkedEdges.size,
+          updated_edge_count: 0,
+          deleted_edge_count: 0,
+          episode_uuids: selected.map((episode) => episode.uuid),
+        };
+      }
+
+      const results = selected.map((episode) => this.deleteEpisodeInternal(episode.uuid, options));
+      return {
+        matched_count: selected.length,
+        deleted_count: results.filter((result) => result.deleted).length,
+        truncated,
+        dry_run: false,
+        linked_edge_count: linkedEdges.size,
+        updated_edge_count: results.reduce((total, result) => total + result.updated_edge_count, 0),
+        deleted_edge_count: results.reduce((total, result) => total + result.deleted_edge_count, 0),
+        episode_uuids: selected.map((episode) => episode.uuid),
+      };
+    };
+
+    return options.dry_run ? execute() : this.runMutation(execute);
   }
 
   async getRecentEpisodes(groupId: string, limit: number): Promise<EpisodicNode[]> {
@@ -358,14 +565,11 @@ export class GraphologyStorage implements IGraphStorage {
     return episodes.slice(0, limit).reverse();
   }
 
-  async getEpisodeCount(groupId: string): Promise<number> {
-    let count = 0;
-    this.graph.forEachNode((_key, attrs) => {
-      if (attrs.type !== 'episode') return;
-      const episode = attrs.data as EpisodicNode;
-      if (episode.group_id === groupId) count++;
-    });
-    return count;
+  async getEpisodeCount(groupId: string, filters: EpisodeFilterOptions = {}): Promise<number> {
+    const countFilters = { ...filters };
+    delete countFilters.limit;
+    delete countFilters.offset;
+    return this.collectEpisodes(groupId, countFilters).length;
   }
 
   async getEpisodesByDateRange(
@@ -388,6 +592,155 @@ export class GraphologyStorage implements IGraphStorage {
       (a, b) => new Date(a.reference_time).getTime() - new Date(b.reference_time).getTime(),
     );
     return limit ? episodes.slice(0, limit) : episodes;
+  }
+
+  private collectEpisodes(groupId: string, options: EpisodeFilterOptions): EpisodicNode[] {
+    const episodes: EpisodicNode[] = [];
+    this.graph.forEachNode((_key, attrs) => {
+      if (attrs.type !== 'episode') return;
+      const episode = attrs.data as EpisodicNode;
+      if (episode.group_id !== groupId || !this.matchesEpisodeFilters(episode, options)) return;
+      episodes.push(episode);
+    });
+
+    const sortBy = options.sort_by ?? 'created_at';
+    const direction = options.sort_order === 'asc' ? 1 : -1;
+    episodes.sort((a, b) => {
+      const timeDiff = new Date(a[sortBy]).getTime() - new Date(b[sortBy]).getTime();
+      if (timeDiff !== 0) return timeDiff * direction;
+      return (
+        ((this.episodeOrder.get(a.uuid) ?? 0) - (this.episodeOrder.get(b.uuid) ?? 0)) * direction
+      );
+    });
+
+    const offset = Math.max(0, options.offset ?? 0);
+    const limit = options.limit === undefined ? episodes.length : Math.max(0, options.limit);
+    return episodes.slice(offset, offset + limit);
+  }
+
+  private matchesEpisodeFilters(episode: EpisodicNode, options: EpisodeFilterOptions): boolean {
+    if (options.role && episode.role !== options.role) return false;
+    if (options.source_type && episode.source_type !== options.source_type) return false;
+    if (options.episode_kind && episode.episode_kind !== options.episode_kind) return false;
+    if (options.trust_level && episode.trust_level !== options.trust_level) return false;
+    if (options.review_status && episode.review_status !== options.review_status) return false;
+    if (options.sender_id && episode.sender_id !== options.sender_id) return false;
+    if (
+      options.sender_name &&
+      episode.sender_name?.toLocaleLowerCase() !== options.sender_name.toLocaleLowerCase()
+    )
+      return false;
+    if (options.conversation_id && episode.conversation_id !== options.conversation_id)
+      return false;
+    if (options.source_message_id && episode.source_message_id !== options.source_message_id)
+      return false;
+    if (options.source_workflow_id && episode.source_workflow_id !== options.source_workflow_id)
+      return false;
+    if (options.source_execution_id && episode.source_execution_id !== options.source_execution_id)
+      return false;
+    if (
+      (options.reference_after || options.reference_before) &&
+      !isWithinDateRange(episode.reference_time, options.reference_after, options.reference_before)
+    )
+      return false;
+    if (
+      (options.created_after || options.created_before) &&
+      !isWithinDateRange(episode.created_at, options.created_after, options.created_before)
+    )
+      return false;
+    return true;
+  }
+
+  private deleteEpisodeInternal(uuid: string, options: DeleteEpisodeOptions): DeleteEpisodeResult {
+    const episode = this.getEpisodeOrEntity(uuid, 'episode') as EpisodicNode | null;
+    if (!episode) {
+      return {
+        episode_uuid: uuid,
+        deleted: false,
+        repaired_successor_count: 0,
+        linked_edge_count: 0,
+        updated_edge_count: 0,
+        deleted_edge_count: 0,
+      };
+    }
+
+    const repairChain = options.repair_chain ?? true;
+    const cleanup = options.fact_cleanup ?? 'unlink';
+    const successors: EpisodicNode[] = [];
+    this.graph.forEachNode((_key, attrs) => {
+      if (attrs.type !== 'episode') return;
+      const candidate = attrs.data as EpisodicNode;
+      if (candidate.group_id === episode.group_id && candidate.previous_episode_uuid === uuid) {
+        successors.push(candidate);
+      }
+    });
+
+    const linkedEdgeKeys: string[] = [];
+    this.graph.forEachEdge((edgeKey, attrs) => {
+      if (attrs.type === 'entity_edge' && attrs.data?.episodes.includes(uuid)) {
+        linkedEdgeKeys.push(edgeKey);
+      }
+    });
+
+    let updatedEdgeCount = 0;
+    let deletedEdgeCount = 0;
+    if (cleanup !== 'preserve') {
+      for (const edgeKey of linkedEdgeKeys) {
+        const edge = this.getEdgeInternal(edgeKey);
+        if (!edge) continue;
+        const remainingEpisodes = edge.episodes.filter((episodeUuid) => episodeUuid !== uuid);
+        if (cleanup === 'delete_orphaned' && remainingEpisodes.length === 0) {
+          this.searchProvider.removeEdge(edgeKey);
+          this.graph.dropEdge(edgeKey);
+          deletedEdgeCount++;
+          continue;
+        }
+        const updatedEdge = {
+          ...edge,
+          episodes: remainingEpisodes,
+          updated_at: nowIso(),
+        };
+        this.graph.setEdgeAttribute(edgeKey, 'data', updatedEdge);
+        updatedEdgeCount++;
+      }
+    }
+
+    if (repairChain) {
+      for (const successor of successors) {
+        this.graph.setNodeAttribute(successor.uuid, 'data', {
+          ...successor,
+          previous_episode_uuid: episode.previous_episode_uuid,
+          updated_at: nowIso(),
+        });
+      }
+    }
+
+    this.graph.dropNode(uuid);
+    this.episodeOrder.delete(uuid);
+
+    if (repairChain && episode.previous_episode_uuid) {
+      const previous = this.getEpisodeOrEntity(episode.previous_episode_uuid, 'episode');
+      if (previous?.group_id === episode.group_id) {
+        for (const successor of successors) {
+          const chainKey = `next_${episode.previous_episode_uuid}_${successor.uuid}`;
+          if (!this.graph.hasEdge(chainKey)) {
+            this.graph.addEdgeWithKey(chainKey, episode.previous_episode_uuid, successor.uuid, {
+              type: 'next_episode',
+              data: null,
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      episode_uuid: uuid,
+      deleted: true,
+      repaired_successor_count: repairChain ? successors.length : 0,
+      linked_edge_count: linkedEdgeKeys.length,
+      updated_edge_count: updatedEdgeCount,
+      deleted_edge_count: deletedEdgeCount,
+    };
   }
 
   // ===== Changelog =====
@@ -604,49 +957,45 @@ export class GraphologyStorage implements IGraphStorage {
   // ===== Graph Management =====
 
   async clearGroup(groupId: string): Promise<void> {
-    const nodesToRemove: string[] = [];
+    await this.runMutation(() => {
+      const nodesToRemove: string[] = [];
 
-    this.graph.forEachNode((key, attrs) => {
-      const data = attrs.data;
-      if ('group_id' in data && data.group_id === groupId) {
-        nodesToRemove.push(key);
+      this.graph.forEachNode((key, attrs) => {
+        const data = attrs.data;
+        if ('group_id' in data && data.group_id === groupId) {
+          nodesToRemove.push(key);
+        }
+      });
+
+      // Also find edges belonging to this group
+      const edgesToRemove: string[] = [];
+      this.graph.forEachEdge((edgeKey, attrs) => {
+        if (attrs.type === 'entity_edge' && attrs.data) {
+          const edge = attrs.data as EntityEdge;
+          if (edge.group_id === groupId) {
+            edgesToRemove.push(edgeKey);
+          }
+        }
+      });
+
+      for (const edgeKey of edgesToRemove) {
+        this.searchProvider.removeEdge(edgeKey);
+        if (this.graph.hasEdge(edgeKey)) {
+          this.graph.dropEdge(edgeKey);
+        }
       }
-    });
 
-    // Also find edges belonging to this group
-    const edgesToRemove: string[] = [];
-    this.graph.forEachEdge((edgeKey, attrs) => {
-      if (attrs.type === 'entity_edge' && attrs.data) {
-        const edge = attrs.data as EntityEdge;
-        if (edge.group_id === groupId) {
-          edgesToRemove.push(edgeKey);
+      for (const key of nodesToRemove) {
+        this.searchProvider.removeEntity(key);
+        if (this.graph.hasNode(key)) {
+          this.graph.dropNode(key);
         }
       }
     });
-
-    for (const edgeKey of edgesToRemove) {
-      this.searchProvider.removeEdge(edgeKey);
-      if (this.graph.hasEdge(edgeKey)) {
-        this.graph.dropEdge(edgeKey);
-      }
-    }
-
-    for (const key of nodesToRemove) {
-      this.searchProvider.removeEntity(key);
-      if (this.graph.hasNode(key)) {
-        this.graph.dropNode(key);
-      }
-    }
-
-    await this.persistIfConfigured();
   }
 
   async clearAll(): Promise<void> {
-    this.graph.clear();
-    this.searchProvider.clear();
-    this.episodeOrder.clear();
-    this.nextOrder = 0;
-    await this.persistIfConfigured();
+    await this.runMutation(() => this.resetGraph());
   }
 
   async exportGraph(groupId?: string): Promise<GraphData> {
@@ -672,7 +1021,7 @@ export class GraphologyStorage implements IGraphStorage {
     });
 
     return {
-      version: '1.0',
+      version: CURRENT_GRAPH_DATA_VERSION,
       exported_at: nowIso(),
       group_id: groupId,
       entities,
@@ -681,66 +1030,30 @@ export class GraphologyStorage implements IGraphStorage {
     };
   }
 
-  async importGraph(data: GraphData): Promise<void> {
-    // Import entities first (nodes must exist before edges)
-    for (const entity of data.entities) {
-      if (!this.graph.hasNode(entity.uuid)) {
-        this.graph.addNode(entity.uuid, { type: 'entity', data: entity });
-        this.searchProvider.indexEntity(entity.uuid, {
-          name: entity.name,
-          summary: entity.summary,
-          entity_type: entity.entity_type,
-        });
-      }
-    }
+  async importGraph(data: ImportGraphData): Promise<void> {
+    const migrated = migrateGraphData(data).data;
+    await this.runMutation(() => this.mergeGraphData(migrated));
+  }
 
-    // Import episodes (sorted by created_at to restore order)
-    const sortedEpisodes = [...data.episodes].sort(
-      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-    );
-    for (const episode of sortedEpisodes) {
-      if (!this.graph.hasNode(episode.uuid)) {
-        this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
-        this.episodeOrder.set(episode.uuid, this.nextOrder++);
-      }
-    }
+  async getMigrationStatus(): Promise<StorageMigrationStatus> {
+    return {
+      ...this.migrationStatus,
+      backup: { ...this.migrationStatus.backup },
+    };
+  }
 
-    // Import edges
-    for (const edge of data.edges) {
-      if (
-        !this.graph.hasEdge(edge.uuid) &&
-        this.graph.hasNode(edge.source_node_uuid) &&
-        this.graph.hasNode(edge.target_node_uuid)
-      ) {
-        this.graph.addEdgeWithKey(edge.uuid, edge.source_node_uuid, edge.target_node_uuid, {
-          type: 'entity_edge',
-          data: edge,
-        });
-        this.searchProvider.indexEdge(edge.uuid, {
-          name: edge.name,
-          fact: edge.fact,
-        });
-      }
-    }
-
-    // Re-create episode chains
-    for (const episode of data.episodes) {
-      if (
-        episode.previous_episode_uuid &&
-        this.graph.hasNode(episode.previous_episode_uuid) &&
-        this.graph.hasNode(episode.uuid)
-      ) {
-        const chainKey = `next_${episode.previous_episode_uuid}_${episode.uuid}`;
-        if (!this.graph.hasEdge(chainKey)) {
-          this.graph.addEdgeWithKey(chainKey, episode.previous_episode_uuid, episode.uuid, {
-            type: 'next_episode',
-            data: null,
-          });
-        }
-      }
-    }
-
-    await this.persistIfConfigured();
+  async migrateStorageSchema(
+    options: StorageSchemaMigrationOptions,
+  ): Promise<StorageSchemaMigrationResult> {
+    return {
+      backend: 'embedded',
+      dry_run: options.dry_run,
+      matched_count: 0,
+      migrated_count: 0,
+      remaining_count: 0,
+      backup_required: false,
+      additive_only: false,
+    };
   }
 
   async getStats(groupId?: string): Promise<GraphStats> {
@@ -833,100 +1146,333 @@ export class GraphologyStorage implements IGraphStorage {
   async applyRetention(groupId: string, policy: RetentionPolicy): Promise<number> {
     if (policy.type === 'forever') return 0;
 
-    let removed = 0;
+    return this.runMutation(() => {
+      let removed = 0;
 
-    if (policy.type === 'days' && policy.value) {
-      const days = policy.value;
-      const episodesToRemove: string[] = [];
+      if (policy.type === 'days' && policy.value) {
+        const days = policy.value;
+        const episodesToRemove: string[] = [];
 
-      this.graph.forEachNode((key, attrs) => {
-        if (attrs.type !== 'episode') return;
-        const episode = attrs.data as EpisodicNode;
-        if (episode.group_id !== groupId) return;
-        if (isOlderThanDays(episode.created_at, days)) {
-          episodesToRemove.push(key);
-        }
-      });
+        this.graph.forEachNode((key, attrs) => {
+          if (attrs.type !== 'episode') return;
+          const episode = attrs.data as EpisodicNode;
+          if (episode.group_id !== groupId) return;
+          if (isOlderThanDays(episode.created_at, days)) {
+            episodesToRemove.push(key);
+          }
+        });
 
-      for (const key of episodesToRemove) {
-        if (this.graph.hasNode(key)) {
-          this.graph.dropNode(key);
-          removed++;
-        }
-      }
-    }
-
-    if (policy.type === 'max_episodes' && policy.value) {
-      const maxEpisodes = policy.value;
-      const episodes: { uuid: string; created_at: string }[] = [];
-
-      this.graph.forEachNode((_key, attrs) => {
-        if (attrs.type !== 'episode') return;
-        const episode = attrs.data as EpisodicNode;
-        if (episode.group_id !== groupId) return;
-        episodes.push({ uuid: episode.uuid, created_at: episode.created_at });
-      });
-
-      episodes.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-      const toRemove = episodes.slice(maxEpisodes);
-      for (const ep of toRemove) {
-        if (this.graph.hasNode(ep.uuid)) {
-          this.graph.dropNode(ep.uuid);
-          removed++;
+        for (const key of episodesToRemove) {
+          if (this.graph.hasNode(key)) {
+            this.graph.dropNode(key);
+            removed++;
+          }
         }
       }
-    }
 
-    if (removed > 0) {
-      await this.persistIfConfigured();
-    }
+      if (policy.type === 'max_episodes' && policy.value) {
+        const maxEpisodes = policy.value;
+        const episodes: { uuid: string; created_at: string }[] = [];
 
-    return removed;
+        this.graph.forEachNode((_key, attrs) => {
+          if (attrs.type !== 'episode') return;
+          const episode = attrs.data as EpisodicNode;
+          if (episode.group_id !== groupId) return;
+          episodes.push({ uuid: episode.uuid, created_at: episode.created_at });
+        });
+
+        episodes.sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        );
+
+        const toRemove = episodes.slice(maxEpisodes);
+        for (const ep of toRemove) {
+          if (this.graph.hasNode(ep.uuid)) {
+            this.graph.dropNode(ep.uuid);
+            removed++;
+          }
+        }
+      }
+
+      return removed;
+    });
   }
 
   // ===== Persistence =====
 
-  private async persistIfConfigured(): Promise<void> {
-    if (this.persistPath) {
-      await this.saveToDisk();
-    }
-  }
+  private async runMutation<T>(mutation: () => T | Promise<T>): Promise<T> {
+    const previousMutation = this.mutationTail;
+    let releaseQueue!: () => void;
+    this.mutationTail = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
 
-  private async saveToDisk(): Promise<void> {
-    if (!this.persistPath) return;
+    await previousMutation;
 
-    const data = await this.exportGraph();
-    const dir = path.dirname(this.persistPath);
-
-    await fs.promises.mkdir(dir, { recursive: true });
-
-    const payload = JSON.stringify(data, null, 2);
-    const tmpPath = `${this.persistPath}.${process.pid}.${Date.now()}.tmp`;
-    const releaseLock = await this.acquirePersistLock();
-
+    let releaseFileLock: () => Promise<void> = async () => {};
+    let rollbackData: GraphData | null = null;
     try {
-      await fs.promises.writeFile(tmpPath, payload, 'utf-8');
-      await fs.promises.rename(tmpPath, this.persistPath);
+      if (this.persistPath) {
+        releaseFileLock = await this.acquirePersistLock();
+        await this.refreshFromDiskUnderLock();
+      }
+
+      rollbackData = await this.exportGraph();
+      const result = await mutation();
+
+      if (this.persistPath) {
+        await this.writeSnapshotUnderLock();
+      }
+
+      return result;
     } catch (error) {
-      await fs.promises.rm(tmpPath, { force: true }).catch(() => {});
+      if (rollbackData) {
+        this.replaceGraphData(rollbackData);
+      }
       throw error;
     } finally {
-      await releaseLock();
+      try {
+        await releaseFileLock();
+      } finally {
+        releaseQueue();
+      }
     }
   }
 
   private async loadFromDisk(): Promise<void> {
     if (!this.persistPath || !fs.existsSync(this.persistPath)) return;
 
+    const releaseFileLock = await this.acquirePersistLock();
     try {
-      const raw = fs.readFileSync(this.persistPath, 'utf-8');
-      const data = JSON.parse(raw) as GraphData;
-      await this.importGraph(data);
-    } catch {
-      // If file is corrupted, start fresh
-      console.error(`Engram: Failed to load graph from ${this.persistPath}, starting fresh`);
+      const data = await this.readAndMigratePersistedDataUnderLock();
+      this.replaceGraphData(data);
+    } catch (error) {
+      throw new Error(
+        `Engram: Failed to load or migrate embedded storage at ${this.persistPath}: ${(error as Error).message}`,
+      );
+    } finally {
+      await releaseFileLock();
     }
+  }
+
+  private async refreshFromDiskUnderLock(): Promise<void> {
+    if (!this.persistPath || !fs.existsSync(this.persistPath)) return;
+
+    const data = await this.readAndMigratePersistedDataUnderLock();
+    this.replaceGraphData(data);
+  }
+
+  private async writeSnapshotUnderLock(): Promise<void> {
+    if (!this.persistPath) return;
+
+    await this.writeGraphDataAtomic(await this.exportGraph(), this.persistPath);
+  }
+
+  private async readAndMigratePersistedDataUnderLock(): Promise<GraphData> {
+    if (!this.persistPath) throw new Error('Embedded persistence path is not configured');
+    const raw = await fs.promises.readFile(this.persistPath, 'utf-8');
+    const migration = migrateGraphData(JSON.parse(raw));
+    const backupPath = `${this.persistPath}${EMBEDDED_BACKUP_SUFFIX}`;
+    const legacyEpisodeCount = Math.max(
+      migration.report.episode_defaults_applied.episode_kind,
+      migration.report.episode_defaults_applied.trust_level,
+      migration.report.episode_defaults_applied.review_status,
+    );
+
+    if (migration.report.migration_required) {
+      const backupCreated = await this.ensureVerifiedMigrationBackup(raw, backupPath);
+      await this.writeGraphDataAtomic(migration.data, this.persistPath);
+      this.migrationStatus = {
+        backend: 'embedded',
+        target_version: CURRENT_GRAPH_DATA_VERSION,
+        source_version: migration.report.source_version,
+        migration_required: false,
+        legacy_episode_count: legacyEpisodeCount,
+        automatic_migration_completed: true,
+        backup: {
+          created: backupCreated,
+          verified: true,
+          path: backupPath,
+        },
+      };
+      return migration.data;
+    }
+
+    const existingBackup = await this.inspectExistingBackup(backupPath, migration.data);
+    this.migrationStatus = {
+      backend: 'embedded',
+      target_version: CURRENT_GRAPH_DATA_VERSION,
+      source_version:
+        existingBackup?.verified && existingBackup.sourceVersion
+          ? existingBackup.sourceVersion
+          : migration.report.source_version,
+      migration_required: false,
+      legacy_episode_count: existingBackup?.verified ? existingBackup.legacyEpisodeCount : 0,
+      automatic_migration_completed: existingBackup?.verified ?? false,
+      backup: {
+        created: false,
+        verified: existingBackup?.verified ?? false,
+        path: existingBackup ? backupPath : null,
+      },
+    };
+    return migration.data;
+  }
+
+  private async ensureVerifiedMigrationBackup(raw: string, backupPath: string): Promise<boolean> {
+    let created = false;
+    if (fs.existsSync(backupPath)) {
+      const existing = await fs.promises.readFile(backupPath, 'utf-8');
+      if (this.contentChecksum(existing) !== this.contentChecksum(raw)) {
+        throw new Error(`Existing migration backup does not match source storage: ${backupPath}`);
+      }
+    } else {
+      await this.writeTextAtomic(raw, backupPath);
+      created = true;
+    }
+
+    const verified = await fs.promises.readFile(backupPath, 'utf-8');
+    migrateGraphData(JSON.parse(verified));
+    if (this.contentChecksum(verified) !== this.contentChecksum(raw)) {
+      throw new Error(`Migration backup verification failed: ${backupPath}`);
+    }
+    await fs.promises.chmod(backupPath, 0o600);
+    return created;
+  }
+
+  private async inspectExistingBackup(
+    backupPath: string,
+    currentData: GraphData,
+  ): Promise<{
+    sourceVersion: '1.0' | '2.0' | null;
+    legacyEpisodeCount: number;
+    verified: boolean;
+  } | null> {
+    if (!fs.existsSync(backupPath)) return null;
+    try {
+      const raw = await fs.promises.readFile(backupPath, 'utf-8');
+      const migration = migrateGraphData(JSON.parse(raw));
+      return {
+        sourceVersion: migration.report.source_version,
+        legacyEpisodeCount: Math.max(
+          migration.report.episode_defaults_applied.episode_kind,
+          migration.report.episode_defaults_applied.trust_level,
+          migration.report.episode_defaults_applied.review_status,
+        ),
+        verified:
+          this.contentChecksum(JSON.stringify(migration.data)) ===
+          this.contentChecksum(JSON.stringify(currentData)),
+      };
+    } catch {
+      return { sourceVersion: null, legacyEpisodeCount: 0, verified: false };
+    }
+  }
+
+  private async writeGraphDataAtomic(data: GraphData, targetPath: string): Promise<void> {
+    await this.writeTextAtomic(JSON.stringify(data, null, 2), targetPath);
+  }
+
+  private async writeTextAtomic(payload: string, targetPath: string): Promise<void> {
+    const dir = path.dirname(targetPath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const tmpPath = `${targetPath}.${process.pid}.${generateUuid()}.tmp`;
+
+    try {
+      await fs.promises.writeFile(tmpPath, payload, { encoding: 'utf-8', mode: 0o600 });
+      await fs.promises.rename(tmpPath, targetPath);
+      await fs.promises.chmod(targetPath, 0o600);
+    } catch (error) {
+      await fs.promises.rm(tmpPath, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+
+  private contentChecksum(content: string): string {
+    return createHash('sha256').update(content).digest('hex');
+  }
+
+  private replaceGraphData(data: GraphData): void {
+    this.resetGraph();
+    this.mergeGraphData(data);
+  }
+
+  private resetGraph(): void {
+    this.graph.clear();
+    this.searchProvider.clear();
+    this.episodeOrder.clear();
+    this.nextOrder = 0;
+  }
+
+  private mergeGraphData(data: GraphData): void {
+    // Import entities first because relationship edges require both endpoints.
+    for (const entity of data.entities) {
+      if (this.graph.hasNode(entity.uuid)) continue;
+      this.graph.addNode(entity.uuid, { type: 'entity', data: entity });
+      this.searchProvider.indexEntity(entity.uuid, {
+        name: entity.name,
+        summary: entity.summary,
+        entity_type: entity.entity_type,
+      });
+    }
+
+    const sortedEpisodes = [...data.episodes].sort((a, b) => {
+      const timeDiff = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      return timeDiff;
+    });
+    for (const episode of sortedEpisodes) {
+      if (this.graph.hasNode(episode.uuid)) continue;
+      this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
+      this.episodeOrder.set(episode.uuid, this.nextOrder++);
+    }
+
+    for (const edge of data.edges) {
+      if (
+        this.graph.hasEdge(edge.uuid) ||
+        !this.graph.hasNode(edge.source_node_uuid) ||
+        !this.graph.hasNode(edge.target_node_uuid)
+      ) {
+        continue;
+      }
+      this.graph.addEdgeWithKey(edge.uuid, edge.source_node_uuid, edge.target_node_uuid, {
+        type: 'entity_edge',
+        data: edge,
+      });
+      this.searchProvider.indexEdge(edge.uuid, {
+        name: edge.name,
+        fact: edge.fact,
+      });
+    }
+
+    for (const episode of data.episodes) {
+      const previousUuid = episode.previous_episode_uuid;
+      if (!previousUuid || !this.graph.hasNode(previousUuid) || !this.graph.hasNode(episode.uuid)) {
+        continue;
+      }
+      const previous = this.getEpisodeOrEntity(previousUuid, 'episode');
+      if (!previous || previous.group_id !== episode.group_id) continue;
+
+      const chainKey = `next_${previousUuid}_${episode.uuid}`;
+      if (!this.graph.hasEdge(chainKey)) {
+        this.graph.addEdgeWithKey(chainKey, previousUuid, episode.uuid, {
+          type: 'next_episode',
+          data: null,
+        });
+      }
+    }
+  }
+
+  private getEpisodeOrEntity(
+    uuid: string,
+    expectedType: NodeType,
+  ): EntityNode | EpisodicNode | null {
+    if (!this.graph.hasNode(uuid)) return null;
+    const attrs = this.graph.getNodeAttributes(uuid);
+    return attrs.type === expectedType ? attrs.data : null;
+  }
+
+  private getEdgeInternal(uuid: string): EntityEdge | null {
+    if (!this.graph.hasEdge(uuid)) return null;
+    const attrs = this.graph.getEdgeAttributes(uuid);
+    return attrs.type === 'entity_edge' ? (attrs.data as EntityEdge) : null;
   }
 
   private async acquirePersistLock(): Promise<() => Promise<void>> {

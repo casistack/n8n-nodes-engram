@@ -518,6 +518,274 @@ describe('GraphologyStorage', () => {
 			}
 		});
 
+		it('should back up, verify, and atomically migrate legacy snapshots during initialization', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-legacy-persist-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const backupPath = `${persistPath}.pre-schema-2.0.backup.json`;
+			const episodeUuid = '00000000-0000-4000-8000-000000000095';
+			const timestamp = '2026-06-21T12:00:00.000Z';
+
+			try {
+				const legacyPayload = JSON.stringify({
+						version: '1.0',
+						exported_at: timestamp,
+						entities: [],
+						edges: [],
+						episodes: [
+							{
+								uuid: episodeUuid,
+								group_id: 'legacy-persist',
+								content: 'Legacy persisted episode',
+								role: 'human',
+								reference_time: timestamp,
+								created_at: timestamp,
+							},
+						],
+					});
+				fs.writeFileSync(persistPath, legacyPayload, 'utf-8');
+
+				const persistentStorage = new GraphologyStorage(persistPath);
+				await persistentStorage.initialize();
+				expect(await persistentStorage.getEpisode(episodeUuid)).toEqual(
+					expect.objectContaining({
+						episode_kind: 'legacy',
+						trust_level: 'unverified',
+						review_status: 'proposed',
+					}),
+				);
+				expect(fs.readFileSync(backupPath, 'utf-8')).toBe(legacyPayload);
+				expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
+				expect(JSON.parse(fs.readFileSync(persistPath, 'utf-8')).version).toBe('2.0');
+				expect(await persistentStorage.getMigrationStatus()).toEqual(
+					expect.objectContaining({
+						source_version: '1.0',
+						automatic_migration_completed: true,
+						legacy_episode_count: 1,
+						backup: {
+							created: true,
+							verified: true,
+							path: backupPath,
+						},
+					}),
+				);
+				await persistentStorage.close();
+
+				const restartedStorage = new GraphologyStorage(persistPath);
+				await restartedStorage.initialize();
+				expect(await restartedStorage.getMigrationStatus()).toEqual(
+					expect.objectContaining({
+						source_version: '1.0',
+						automatic_migration_completed: true,
+						legacy_episode_count: 1,
+						backup: expect.objectContaining({ created: false, verified: true }),
+					}),
+				);
+				await restartedStorage.close();
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('should serialize concurrent automatic migration and create one backup', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-migration-race-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const timestamp = '2026-06-21T12:00:00.000Z';
+			fs.writeFileSync(
+				persistPath,
+				JSON.stringify({
+					version: '1.0',
+					exported_at: timestamp,
+					entities: [],
+					edges: [],
+					episodes: [],
+				}),
+				'utf-8',
+			);
+			const first = new GraphologyStorage(persistPath);
+			const second = new GraphologyStorage(persistPath);
+
+			try {
+				await Promise.all([first.initialize(), second.initialize()]);
+				expect(JSON.parse(fs.readFileSync(persistPath, 'utf-8')).version).toBe('2.0');
+				expect(
+					fs.readdirSync(tempDir).filter((file) => file.endsWith('.pre-schema-2.0.backup.json')),
+				).toHaveLength(1);
+				expect(fs.existsSync(`${persistPath}.lock`)).toBe(false);
+			} finally {
+				await Promise.all([first.close(), second.close()]);
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('should leave legacy storage untouched when an existing backup does not match', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-migration-conflict-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const backupPath = `${persistPath}.pre-schema-2.0.backup.json`;
+			const source = JSON.stringify({
+				version: '1.0',
+				exported_at: '2026-06-21T12:00:00.000Z',
+				entities: [],
+				edges: [],
+				episodes: [],
+			});
+			fs.writeFileSync(persistPath, source, 'utf-8');
+			fs.writeFileSync(
+				backupPath,
+				JSON.stringify({
+					version: '1.0',
+					exported_at: '2026-06-22T12:00:00.000Z',
+					entities: [],
+					edges: [],
+					episodes: [],
+				}),
+				'utf-8',
+			);
+
+			try {
+				const persistentStorage = new GraphologyStorage(persistPath);
+				await expect(persistentStorage.initialize()).rejects.toThrow(
+					'Existing migration backup does not match source storage',
+				);
+				expect(fs.readFileSync(persistPath, 'utf-8')).toBe(source);
+				expect(fs.existsSync(`${persistPath}.lock`)).toBe(false);
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('should fail closed without replacing a corrupt persisted graph', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-migration-corrupt-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const source = '{"version":"1.0","episodes":[';
+			fs.writeFileSync(persistPath, source, 'utf-8');
+
+			try {
+				const persistentStorage = new GraphologyStorage(persistPath);
+				await expect(persistentStorage.initialize()).rejects.toThrow(
+					'Failed to load or migrate embedded storage',
+				);
+				expect(fs.readFileSync(persistPath, 'utf-8')).toBe(source);
+				expect(fs.existsSync(`${persistPath}.pre-schema-2.0.backup.json`)).toBe(false);
+				expect(fs.existsSync(`${persistPath}.lock`)).toBe(false);
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('should not report an unrelated existing sidecar as a verified migration backup', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-migration-stale-backup-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const backupPath = `${persistPath}.pre-schema-2.0.backup.json`;
+			fs.writeFileSync(
+				persistPath,
+				JSON.stringify({
+					version: '2.0',
+					exported_at: '2026-07-15T12:00:00.000Z',
+					entities: [],
+					edges: [],
+					episodes: [],
+				}),
+				'utf-8',
+			);
+			fs.writeFileSync(
+				backupPath,
+				JSON.stringify({
+					version: '1.0',
+					exported_at: '2026-06-21T12:00:00.000Z',
+					entities: [],
+					edges: [],
+					episodes: [],
+				}),
+				'utf-8',
+			);
+
+			try {
+				const persistentStorage = new GraphologyStorage(persistPath);
+				await persistentStorage.initialize();
+				expect(await persistentStorage.getMigrationStatus()).toEqual(
+					expect.objectContaining({
+						source_version: '2.0',
+						automatic_migration_completed: false,
+						backup: { created: false, verified: false, path: backupPath },
+					}),
+				);
+				await persistentStorage.close();
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('should serialize mutations across storage instances without lost writes or forked chains', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-concurrent-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const firstStorage = new GraphologyStorage(persistPath);
+			const secondStorage = new GraphologyStorage(persistPath);
+
+			try {
+				await Promise.all([firstStorage.initialize(), secondStorage.initialize()]);
+
+				await Promise.all(
+					Array.from({ length: 12 }, (_, index) => {
+						const target = index % 2 === 0 ? firstStorage : secondStorage;
+						return target.appendEpisode({
+							group_id: 'shared-group',
+							content: `Concurrent episode ${index}`,
+							role: 'human',
+							episode_kind: 'active_human',
+							source_message_id: `message-${index}`,
+							reference_time: new Date().toISOString(),
+						});
+					}),
+				);
+
+				const retryInput = {
+					group_id: 'shared-group',
+					content: 'One retry-safe message',
+					role: 'human' as const,
+					episode_kind: 'active_human' as const,
+					source_message_id: 'retry-message',
+					reference_time: new Date().toISOString(),
+				};
+				const retryResults = await Promise.all([
+					firstStorage.appendEpisode(retryInput),
+					secondStorage.appendEpisode(retryInput),
+					firstStorage.appendEpisode(retryInput),
+					secondStorage.appendEpisode(retryInput),
+				]);
+				expect(new Set(retryResults.map((result) => result.episode.uuid)).size).toBe(1);
+				expect(retryResults.filter((result) => result.created)).toHaveLength(1);
+
+				await Promise.all(
+					Array.from({ length: 10 }, (_, index) => {
+						const target = index % 2 === 0 ? firstStorage : secondStorage;
+						return target.addEntity({
+							name: `Concurrent entity ${index}`,
+							group_id: 'shared-group',
+						});
+					}),
+				);
+
+				const reader = new GraphologyStorage(persistPath);
+				await reader.initialize();
+				const episodes = await reader.getRecentEpisodes('shared-group', 20);
+				const entities = await reader.listEntities('shared-group');
+
+				expect(episodes).toHaveLength(13);
+				expect(entities).toHaveLength(10);
+				expect(episodes[0].previous_episode_uuid).toBeNull();
+				for (let index = 1; index < episodes.length; index++) {
+					expect(episodes[index].previous_episode_uuid).toBe(episodes[index - 1].uuid);
+				}
+				expect(fs.existsSync(`${persistPath}.lock`)).toBe(false);
+				expect(fs.readdirSync(tempDir).filter((file) => file.endsWith('.tmp'))).toHaveLength(0);
+
+				await reader.close();
+				await Promise.all([firstStorage.close(), secondStorage.close()]);
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
 		it('should return correct stats', async () => {
 			await storage.addEntity({
 				name: 'Alice',

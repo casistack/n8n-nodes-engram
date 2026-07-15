@@ -185,4 +185,32 @@ describe('GraphTraverser', () => {
 
 		expect(result.entities).toHaveLength(0);
 	});
+
+	it('should apply edge filters before traversal enrichment', async () => {
+		const a = await storage.addEntity({ name: 'A', group_id: 'g1' });
+		const accepted = await storage.addEntity({ name: 'Accepted', group_id: 'g1' });
+		const rejected = await storage.addEntity({ name: 'Rejected', group_id: 'g1' });
+		await storage.addEdge({
+			group_id: 'g1',
+			source_node_uuid: a.uuid,
+			target_node_uuid: accepted.uuid,
+			name: 'ACCEPTED',
+			fact: 'Accepted traversal fact',
+		});
+		await storage.addEdge({
+			group_id: 'g1',
+			source_node_uuid: a.uuid,
+			target_node_uuid: rejected.uuid,
+			name: 'REJECTED',
+			fact: 'Rejected traversal fact',
+		});
+
+		const result = await traverser.traverse(storage, [a.uuid], {
+			maxHops: 1,
+			edgeFilter: (edge) => edge.name !== 'REJECTED',
+		});
+
+		expect(result.entities.map((entity) => entity.name).sort()).toEqual(['A', 'Accepted']);
+		expect(result.context).not.toContain('Rejected traversal fact');
+	});
 });

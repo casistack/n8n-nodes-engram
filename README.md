@@ -25,6 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
+  <a href="#upgrading-from-v04x">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -53,7 +54,7 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 | **2** | Storage Backends | Embedded (zero-setup) or Neo4j (production) |
 | **5** | Extraction Stages | Entity, dedup, relationships, contradictions, embeddings |
 | **3** | Search Modes | Full-text, vector, hybrid RRF fusion |
-| **253** | Tests | Unit + integration across 26 test suites |
+| **350** | Tests | Unit + integration across 35 test suites |
 
 ---
 
@@ -100,6 +101,49 @@ npm install n8n-nodes-engram
 
 ---
 
+## Upgrading from v0.4.x
+
+Version `0.5.0` adds episode provenance and governance fields. Storage migration and n8n node-version upgrades are separate steps.
+
+1. Create a current Engram export or storage/database backup before upgrading the package.
+2. Upgrade `n8n-nodes-engram`, restart n8n, and confirm the installed package version.
+3. Complete the storage-backend steps below.
+4. Run **Engram Admin > Monitoring > Diagnostics** and confirm that no storage migration remains.
+5. Upgrade selected Engram Memory nodes to v2 in an inactive workflow copy before changing production workflows.
+
+### Embedded Storage
+
+No migration node is required. On first initialization after the package upgrade, Engram:
+
+- migrates the embedded graph before opening it;
+- creates and verifies a backup ending in `.pre-schema-2.0.backup.json`;
+- replaces the graph atomically; and
+- leaves the original graph unchanged if backup verification or migration fails.
+
+After initialization, use **Engram Admin > Monitoring > Diagnostics** to verify the migration and backup status.
+
+### Neo4j Storage
+
+Neo4j migration is intentionally operator-controlled so Engram does not perform an unbounded database rewrite during startup.
+
+1. Add an **Engram Admin** node configured with the same Neo4j credentials as the production memory workflow.
+2. Select **Lifecycle > Migrate Storage Schema** and run **Dry Run**.
+3. Review the matched legacy episode count.
+4. Select **Migrate**, set **Confirm Migration** to **Confirmed**, and execute a bounded batch.
+5. Repeat until `remaining_count` is `0`, then confirm the result with **Monitoring > Diagnostics**.
+
+The Neo4j migration is additive and only fills missing governance fields with conservative defaults.
+
+### Engram Memory v2
+
+Installing `0.5.0` does not silently change saved Engram Memory nodes. Existing v1 nodes retain their previous behavior until explicitly upgraded through n8n's node upgrade action.
+
+- Keep **Human Episode Kind > Active Human** for direct agent conversations.
+- Select **Passive Human** for observed or curated human messages stored by passive ingestion workflows.
+- Validate the upgraded node in an inactive workflow copy before replacing the production workflow.
+
+---
+
 ## Quick Start
 
 ### Minimal Setup (No LLM Required)
@@ -140,12 +184,19 @@ On each conversation turn, Engram Memory:
 | --- | --- | --- |
 | Storage Backend | Embedded (Graphology) or Neo4j | Embedded |
 | Knowledge Extraction | LLM-powered entity extraction | Disabled |
+| Store Human Episodes | Persist human messages as episodes (v2) | Enabled |
+| Human Episode Kind | Classify human input as active or passive provenance (v2) | Active Human |
+| Store AI Episodes | Persist assistant replies as episodes (v2) | Enabled |
+| Extract from Human Messages | Allow human content to produce facts (v2) | Enabled |
+| Extract from AI Messages | Allow assistant content to produce facts (v2) | Disabled |
 | Semantic Search | Vector embeddings for hybrid search | Disabled |
 | Graph Traversal | BFS enrichment from matched entities | Disabled |
 | Context Window | Recent turns to include | 10 |
 | Max Facts per Query | Facts injected as context | 10 |
 | Min Relevance Score | Threshold for inclusion (0&ndash;1) | 0.5 |
 | Retention Policy | Episode lifecycle management | Forever |
+
+Existing saved Engram Memory nodes retain their original node version and behavior when the package is upgraded. Use n8n's node upgrade action on a workflow copy to adopt v2 controls. Passive ingestion workflows should select **Human Episode Kind > Passive Human**, while direct agent conversations should keep the default **Active Human** classification.
 
 ### Engram Explorer
 
@@ -154,8 +205,8 @@ On each conversation turn, Engram Memory:
 | Resource | Operations |
 | --- | --- |
 | **Entity** | Create, Get, Get by Name, List, Search, Update, Delete |
-| **Relationship** | Create, Get, Get Between, Get for Entity, Search, Update, Delete, Get Changelog |
-| **Episode** | Get, Get Recent, Get by Date Range, Get Count |
+| **Relationship** | Create, Get, Get Between, Get for Entity, Search, Review, Update, Delete, Get Changelog |
+| **Episode** | Get, Get Recent, Get by Date Range, Get Count, List, Update, Delete |
 | **Traversal** | BFS from Entity, BFS from Episodes |
 
 ### Engram Admin
@@ -165,7 +216,7 @@ On each conversation turn, Engram Memory:
 | Resource | Operations |
 | --- | --- |
 | **Monitoring** | Stats, List Groups, Group Stats, Embedding Coverage, Diagnostics |
-| **Lifecycle** | Apply Retention, Clear Group, Bulk Clear Groups, Clear All |
+| **Lifecycle** | Apply Retention, Purge Episodes, Migrate Storage Schema, Clear Group, Bulk Clear Groups, Clear All |
 | **Hygiene** | Orphaned Entities, Duplicate Entities, Expire Stale Edges, Rebuild Search Index, Backfill Embeddings |
 | **Portability** | Export, Import |
 | **Analysis** | Detect Communities |
@@ -180,9 +231,19 @@ Engram Admin includes a read-only **Monitoring > Diagnostics** operation for pro
 
 Use **Monitoring > Embedding Coverage** to check whether entities and facts have vectors before enabling hybrid search broadly. Use **Hygiene > Rebuild Search Index** to rebuild the embedded full-text index from stored graph data. Use **Hygiene > Backfill Embeddings** in dry-run mode first, then disable dry-run to fill missing embeddings with the configured embedding model.
 
+Explorer entity and relationship searches can optionally return retrieval diagnostics. The aggregate trace shows active filters, bounded candidate scores and decisions, rejection reasons, and which complete items fit the context preview budget. Diagnostics are disabled by default.
+
 ### Import, Export, and Backups
 
-Engram exports include count metadata and a SHA-256 checksum. Imports support **Dry Run** mode, optional maximum item limits, checksum verification, and dangling-edge warnings before writing data.
+Engram exports use graph format `2.0` and include count metadata and a SHA-256 checksum. Imports support **Dry Run** mode, optional maximum item limits, checksum verification before migration, migration reporting, and reference-integrity warnings before writing data. Existing `1.0` backups remain importable; episodes without provenance are classified as `legacy`, `unverified`, and `proposed` rather than being accepted automatically.
+
+Embedded storage upgrades automatically before the graph is opened. Engram creates and verifies an owner-readable backup beside the storage file, writes the migrated graph with atomic replacement, and stops without changing the source if backup verification or migration fails. The backup name ends with `.pre-schema-2.0.backup.json`, and **Monitoring > Diagnostics** reports its path and verification state.
+
+Neo4j remains available during an upgrade and does not perform an unbounded startup rewrite. Use **Lifecycle > Migrate Storage Schema** in **Dry Run** mode to inspect the remaining legacy episode count, then apply confirmed bounded batches until the remaining count reaches zero. The migration is additive: it only fills missing governance fields with conservative legacy defaults.
+
+For a staged restore, first run the import in **Dry Run** mode and review the source/target versions, default counts, and warnings. Keep the original export unchanged, then perform the write import only after the report matches expectations. Export the restored graph again to create a checksummed `2.0` backup.
+
+To remove historical monitor or tool pollution, use Explorer episode filters to inspect the affected source, kind, trust level, or date range. Then run Admin **Lifecycle > Purge Episodes** in dry-run mode before confirming the bounded purge.
 
 For production Neo4j deployments, see [`docs/production-neo4j.md`](docs/production-neo4j.md). Ready-to-import starter workflows are available in [`docs/workflows/`](docs/workflows/).
 

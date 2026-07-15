@@ -10,7 +10,13 @@ import {
 import { createHash } from 'crypto';
 
 import { createStorage } from '../../storage/StorageFactory';
-import { GraphDataSchema, type GraphData } from '../../schemas';
+import type { EpisodeFilterOptions } from '../../storage/IGraphStorage';
+import {
+  ImportGraphDataSchema,
+  migrateGraphData,
+  type GraphData,
+  type ImportGraphData,
+} from '../../schemas';
 import { nowIso } from '../../utils/temporal';
 import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
 import { customStoragePathProperty } from '../../descriptions';
@@ -174,6 +180,18 @@ export class EngramAdmin implements INodeType {
             description: 'Clear ALL data from the graph (destructive!)',
             action: 'Clear all data',
           },
+          {
+            name: 'Purge Episodes',
+            value: 'purgeEpisodes',
+            description: 'Preview or delete episodes matching provenance filters',
+            action: 'Purge episodes',
+          },
+          {
+            name: 'Migrate Storage Schema',
+            value: 'migrateStorageSchema',
+            description: 'Preview or apply bounded storage schema normalization',
+            action: 'Migrate storage schema',
+          },
         ],
         default: 'applyRetention',
       },
@@ -273,6 +291,7 @@ export class EngramAdmin implements INodeType {
               'duplicateEntities',
               'orphanedEntities',
               'detectCommunities',
+              'purgeEpisodes',
             ],
           },
         },
@@ -356,6 +375,200 @@ export class EngramAdmin implements INodeType {
           },
         },
         description: 'Number of days or maximum episodes to keep',
+      },
+      {
+        displayName: 'Migration Mode',
+        name: 'storageMigrationMode',
+        type: 'options',
+        options: [
+          { name: 'Dry Run', value: 'dryRun' },
+          { name: 'Migrate', value: 'migrate' },
+        ],
+        default: 'dryRun',
+        displayOptions: { show: { operation: ['migrateStorageSchema'] } },
+        description: 'Preview legacy records or add conservative defaults in a bounded write batch',
+      },
+      {
+        displayName: 'Migration Batch Limit',
+        name: 'storageMigrationLimit',
+        type: 'number',
+        default: 500,
+        typeOptions: { minValue: 1, maxValue: 10000 },
+        displayOptions: { show: { operation: ['migrateStorageSchema'] } },
+        description: 'Maximum number of legacy records to normalize in this execution',
+      },
+      {
+        displayName: 'Confirm Migration',
+        name: 'confirmStorageMigration',
+        type: 'options',
+        options: [
+          { name: 'Not Confirmed', value: 'notConfirmed' },
+          { name: 'Confirmed', value: 'confirmed' },
+        ],
+        default: 'notConfirmed',
+        displayOptions: {
+          show: {
+            operation: ['migrateStorageSchema'],
+            storageMigrationMode: ['migrate'],
+          },
+        },
+        description: 'Required before applying the bounded migration batch',
+      },
+      // --- Episode purge parameters ---
+      {
+        displayName: 'Episode Kind',
+        name: 'purgeEpisodeKind',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Active Human', value: 'active_human' },
+          { name: 'Passive Human', value: 'passive_human' },
+          { name: 'Assistant Reply', value: 'assistant_reply' },
+          { name: 'Monitor Summary', value: 'monitor_summary' },
+          { name: 'Tool Output', value: 'tool_output' },
+          { name: 'System', value: 'system' },
+          { name: 'Legacy', value: 'legacy' },
+        ],
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes with this provenance kind',
+      },
+      {
+        displayName: 'Trust Level',
+        name: 'purgeTrustLevel',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Trusted', value: 'trusted' },
+          { name: 'Standard', value: 'standard' },
+          { name: 'Unverified', value: 'unverified' },
+          { name: 'Untrusted', value: 'untrusted' },
+        ],
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes with this trust level',
+      },
+      {
+        displayName: 'Review Status',
+        name: 'purgeReviewStatus',
+        type: 'options',
+        options: [
+          { name: 'Any', value: '' },
+          { name: 'Proposed', value: 'proposed' },
+          { name: 'Accepted', value: 'accepted' },
+          { name: 'Rejected', value: 'rejected' },
+        ],
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes with this review status',
+      },
+      {
+        displayName: 'Sender ID',
+        name: 'purgeSenderId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes from this sender ID',
+      },
+      {
+        displayName: 'Conversation ID',
+        name: 'purgeConversationId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes from this conversation',
+      },
+      {
+        displayName: 'Source Workflow ID',
+        name: 'purgeSourceWorkflowId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes written by this workflow',
+      },
+      {
+        displayName: 'Source Execution ID',
+        name: 'purgeSourceExecutionId',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes written by this execution',
+      },
+      {
+        displayName: 'Reference Time After',
+        name: 'purgeReferenceAfter',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes referenced at or after this time',
+      },
+      {
+        displayName: 'Reference Time Before',
+        name: 'purgeReferenceBefore',
+        type: 'dateTime',
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Only match episodes referenced at or before this time',
+      },
+      {
+        displayName: 'Maximum Episodes',
+        name: 'purgeLimit',
+        type: 'number',
+        default: 100,
+        typeOptions: { minValue: 1, maxValue: 10000 },
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Maximum number of matching episodes to preview or delete in one execution',
+      },
+      {
+        displayName: 'Execution Mode',
+        name: 'purgeMode',
+        type: 'options',
+        options: [
+          { name: 'Dry Run', value: 'dryRun' },
+          { name: 'Delete', value: 'delete' },
+        ],
+        default: 'dryRun',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Preview matching episodes or permanently delete them',
+      },
+      {
+        displayName: 'Repair Episode Chain',
+        name: 'purgeRepairChain',
+        type: 'options',
+        options: [
+          { name: 'Enabled', value: 'enabled' },
+          { name: 'Disabled', value: 'disabled' },
+        ],
+        default: 'enabled',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Reconnect successor episodes to retained predecessors',
+      },
+      {
+        displayName: 'Linked Fact Handling',
+        name: 'purgeFactCleanup',
+        type: 'options',
+        options: [
+          { name: 'Unlink Episodes', value: 'unlink' },
+          { name: 'Preserve References', value: 'preserve' },
+          { name: 'Delete Orphaned Facts', value: 'delete_orphaned' },
+        ],
+        default: 'unlink',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'How facts linked to deleted episodes should be handled',
+      },
+      {
+        displayName: 'Confirm Episode Purge',
+        name: 'confirmEpisodePurge',
+        type: 'options',
+        options: [
+          { name: 'Not Confirmed', value: 'notConfirmed' },
+          { name: 'Confirmed', value: 'confirmed' },
+        ],
+        default: 'notConfirmed',
+        displayOptions: {
+          show: { operation: ['purgeEpisodes'], purgeMode: ['delete'] },
+        },
+        description: 'Must be confirmed before matching episodes are permanently deleted',
       },
       // --- Bulk clear parameters ---
       {
@@ -899,6 +1112,7 @@ async function executeMonitoring(
     const includeDeepChecks =
       (ctx.getNodeParameter('includeDeepChecks', i, 'disabled') as string) === 'enabled';
     const stats = await storage.getStats();
+    const migrationStatus = await storage.getMigrationStatus();
     const warnings: string[] = [];
 
     if (stats.group_ids.length === 0) {
@@ -914,6 +1128,7 @@ async function executeMonitoring(
       status: 'ok',
       storage_backend: diagnosticsContext.backend,
       initialized: true,
+      migration: migrationStatus,
       quick_checks: {
         group_count: stats.group_ids.length,
         entity_count: stats.entity_count,
@@ -1022,6 +1237,74 @@ async function executeLifecycle(
         episodes_removed: removed,
       },
     });
+  } else if (operation === 'migrateStorageSchema') {
+    const mode = ctx.getNodeParameter('storageMigrationMode', i, 'dryRun') as string;
+    const dryRun = mode !== 'migrate';
+    if (
+      !dryRun &&
+      (ctx.getNodeParameter('confirmStorageMigration', i, 'notConfirmed') as string) !== 'confirmed'
+    ) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Confirm Migration must be set to Confirmed before applying schema changes',
+        { itemIndex: i },
+      );
+    }
+
+    const result = await storage.migrateStorageSchema({
+      dry_run: dryRun,
+      limit: ctx.getNodeParameter('storageMigrationLimit', i, 500) as number,
+    });
+    returnData.push({
+      json: {
+        success: true,
+        operation: 'migrateStorageSchema',
+        ...result,
+      },
+    });
+  } else if (operation === 'purgeEpisodes') {
+    const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
+    if (!groupId) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Group ID is required for Purge Episodes operation',
+        { itemIndex: i },
+      );
+    }
+
+    const mode = ctx.getNodeParameter('purgeMode', i, 'dryRun') as string;
+    const dryRun = mode !== 'delete';
+    if (
+      !dryRun &&
+      (ctx.getNodeParameter('confirmEpisodePurge', i, 'notConfirmed') as string) !== 'confirmed'
+    ) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        'Confirm Episode Purge must be set to Confirmed before deleting episodes',
+        { itemIndex: i },
+      );
+    }
+
+    const filters = buildEpisodePurgeFilters(ctx, i);
+    const result = await storage.purgeEpisodes(groupId, filters, {
+      dry_run: dryRun,
+      limit: ctx.getNodeParameter('purgeLimit', i, 100) as number,
+      repair_chain:
+        (ctx.getNodeParameter('purgeRepairChain', i, 'enabled') as string) === 'enabled',
+      fact_cleanup: ctx.getNodeParameter('purgeFactCleanup', i, 'unlink') as
+        | 'preserve'
+        | 'unlink'
+        | 'delete_orphaned',
+    });
+
+    returnData.push({
+      json: {
+        success: true,
+        operation: 'purgeEpisodes',
+        group_id: groupId,
+        ...result,
+      },
+    });
   } else if (operation === 'clearGroup') {
     const groupId = (ctx.getNodeParameter('groupId', i) as string).trim();
     if (!groupId) {
@@ -1106,6 +1389,28 @@ async function executeLifecycle(
       json: { success: true, operation: 'clearAll' },
     });
   }
+}
+
+function buildEpisodePurgeFilters(ctx: IExecuteFunctions, i: number): EpisodeFilterOptions {
+  const filters: EpisodeFilterOptions = {};
+  const values = {
+    episode_kind: ctx.getNodeParameter('purgeEpisodeKind', i, '') as string,
+    trust_level: ctx.getNodeParameter('purgeTrustLevel', i, '') as string,
+    review_status: ctx.getNodeParameter('purgeReviewStatus', i, '') as string,
+    sender_id: (ctx.getNodeParameter('purgeSenderId', i, '') as string).trim(),
+    conversation_id: (ctx.getNodeParameter('purgeConversationId', i, '') as string).trim(),
+    source_workflow_id: (ctx.getNodeParameter('purgeSourceWorkflowId', i, '') as string).trim(),
+    source_execution_id: (ctx.getNodeParameter('purgeSourceExecutionId', i, '') as string).trim(),
+    reference_after: ctx.getNodeParameter('purgeReferenceAfter', i, '') as string,
+    reference_before: ctx.getNodeParameter('purgeReferenceBefore', i, '') as string,
+  };
+
+  for (const [key, value] of Object.entries(values)) {
+    if (value) {
+      (filters as Record<string, unknown>)[key] = value;
+    }
+  }
+  return filters;
 }
 
 // =============================================
@@ -1452,7 +1757,7 @@ async function executePortability(
     const importData = ctx.getNodeParameter('importData', i) as unknown;
     const importMode = ctx.getNodeParameter('importMode', i, 'import') as string;
     const maxImportItems = ctx.getNodeParameter('maxImportItems', i, 0) as number;
-    const parsed = GraphDataSchema.safeParse(importData);
+    const parsed = ImportGraphDataSchema.safeParse(importData);
 
     if (!parsed.success) {
       const firstIssue = parsed.error.issues[0];
@@ -1463,8 +1768,8 @@ async function executePortability(
       });
     }
 
-    const graphData: GraphData = parsed.data;
-    const totalItems = countGraphItems(graphData);
+    const sourceGraphData = parsed.data;
+    const totalItems = countGraphItems(sourceGraphData);
 
     if (maxImportItems > 0 && totalItems > maxImportItems) {
       throw new NodeOperationError(ctx.getNode(), 'Import exceeds configured safety limit', {
@@ -1473,8 +1778,8 @@ async function executePortability(
       });
     }
 
-    const checksum = graphData.metadata?.checksum_sha256;
-    if (checksum && checksum !== graphChecksum(graphData)) {
+    const checksum = sourceGraphData.metadata?.checksum_sha256;
+    if (checksum && checksum !== graphChecksum(importData as ImportGraphData)) {
       throw new NodeOperationError(ctx.getNode(), 'Import checksum verification failed', {
         itemIndex: i,
         description:
@@ -1482,10 +1787,8 @@ async function executePortability(
       });
     }
 
-    const entityUuids = new Set(graphData.entities.map((entity) => entity.uuid));
-    const danglingEdges = graphData.edges.filter(
-      (edge) => !entityUuids.has(edge.source_node_uuid) || !entityUuids.has(edge.target_node_uuid),
-    );
+    const migration = migrateGraphData(importData);
+    const graphData = migration.data;
 
     if (importMode !== 'dryRun') {
       await storage.importGraph(graphData);
@@ -1497,10 +1800,8 @@ async function executePortability(
         operation: 'import',
         mode: importMode,
         checksum_verified: Boolean(checksum),
-        warnings:
-          danglingEdges.length > 0
-            ? [`${danglingEdges.length} edge(s) reference entities missing from the import data.`]
-            : [],
+        migration: migration.report,
+        warnings: migration.report.warnings,
         imported: {
           entities: graphData.entities.length,
           edges: graphData.edges.length,
@@ -1512,11 +1813,11 @@ async function executePortability(
   }
 }
 
-function countGraphItems(data: GraphData): number {
+function countGraphItems(data: GraphData | ImportGraphData): number {
   return data.entities.length + data.edges.length + data.episodes.length;
 }
 
-function graphChecksum(data: GraphData): string {
+function graphChecksum(data: GraphData | ImportGraphData): string {
   const checksumData = {
     version: data.version,
     exported_at: data.exported_at,

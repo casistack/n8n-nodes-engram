@@ -146,4 +146,277 @@ describe('EngramExplorer', () => {
     expect(result[0]).toHaveLength(1);
     expect(result[0][0].json.name).toBe('Bob');
   });
+
+  it('lists episodes using provenance filters and pagination', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    await storage.appendEpisode({
+      group_id: 'g1',
+      content: 'Trusted human message',
+      role: 'human',
+      reference_time: '2026-07-15T10:00:00.000Z',
+      episode_kind: 'active_human',
+      trust_level: 'trusted',
+      review_status: 'accepted',
+      sender_id: 'sender-1',
+    });
+    await storage.appendEpisode({
+      group_id: 'g1',
+      content: 'Monitor summary',
+      role: 'system',
+      reference_time: '2026-07-15T11:00:00.000Z',
+      episode_kind: 'monitor_summary',
+      trust_level: 'unverified',
+    });
+
+    const explorer = new EngramExplorer();
+    const context = createExecuteContext({
+      tempDir,
+      parameters: {
+        resource: 'episode',
+        operation: 'list',
+        groupId: 'g1',
+        episodeKindFilter: 'active_human',
+        episodeTrustFilter: 'trusted',
+        limit: 10,
+        offset: 0,
+      },
+    });
+
+    const result = await explorer.execute.call(context);
+
+    expect(result[0]).toHaveLength(1);
+    expect(result[0][0].json).toEqual(
+      expect.objectContaining({
+        content: 'Trusted human message',
+        sender_id: 'sender-1',
+        review_status: 'accepted',
+      }),
+    );
+  });
+
+  it('updates episode governance fields without changing provenance identity', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const created = await storage.appendEpisode({
+      group_id: 'g1',
+      content: 'Candidate memory',
+      role: 'human',
+      reference_time: '2026-07-15T10:00:00.000Z',
+      episode_kind: 'passive_human',
+      source_message_id: 'message-1',
+      trust_level: 'unverified',
+    });
+
+    const explorer = new EngramExplorer();
+    const context = createExecuteContext({
+      tempDir,
+      parameters: {
+        resource: 'episode',
+        operation: 'update',
+        uuid: created.episode.uuid,
+        episodeTrustUpdate: 'trusted',
+        episodeReviewUpdate: 'accepted',
+        episodeConfidenceUpdate: '0.9',
+        attributes: { reviewer: 'operator' },
+      },
+    });
+
+    const result = await explorer.execute.call(context);
+
+    expect(result[0][0].json).toEqual(
+      expect.objectContaining({
+        uuid: created.episode.uuid,
+        source_message_id: 'message-1',
+        episode_kind: 'passive_human',
+        trust_level: 'trusted',
+        review_status: 'accepted',
+        confidence: 0.9,
+        attributes: { reviewer: 'operator' },
+      }),
+    );
+  });
+
+  it('deletes an episode through the lifecycle contract', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const created = await storage.appendEpisode({
+      group_id: 'g1',
+      content: 'Remove me',
+      role: 'system',
+      reference_time: '2026-07-15T10:00:00.000Z',
+      episode_kind: 'tool_output',
+    });
+
+    const explorer = new EngramExplorer();
+    const context = createExecuteContext({
+      tempDir,
+      parameters: {
+        resource: 'episode',
+        operation: 'delete',
+        uuid: created.episode.uuid,
+        repairEpisodeChain: 'enabled',
+        episodeFactCleanup: 'unlink',
+      },
+    });
+
+    const result = await explorer.execute.call(context);
+
+    expect(result[0][0].json).toEqual(
+      expect.objectContaining({
+        episode_uuid: created.episode.uuid,
+        deleted: true,
+      }),
+    );
+  });
+
+  it('records audited relationship review transitions', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const alice = await storage.addEntity({ name: 'Alice', group_id: 'g1' });
+    const acme = await storage.addEntity({ name: 'Acme', group_id: 'g1' });
+    const edge = await storage.addEdge({
+      group_id: 'g1',
+      source_node_uuid: alice.uuid,
+      target_node_uuid: acme.uuid,
+      name: 'WORKS_AT',
+      fact: 'Alice may work at Acme',
+      attributes: {
+        engram_extraction: {
+          version: 2,
+          source: 'llm',
+          confidence: 0.5,
+          review_status: 'proposed',
+          threshold_decision: 'pending_review',
+          extracted_at: '2026-07-15T10:00:00.000Z',
+          episode_uuids: [],
+        },
+      },
+    });
+
+    const explorer = new EngramExplorer();
+    const context = createExecuteContext({
+      tempDir,
+      parameters: {
+        resource: 'relationship',
+        operation: 'review',
+        uuid: edge.uuid,
+        factReviewStatus: 'accepted',
+        factReviewedBy: 'operator-1',
+        factConfidenceOverride: '0.9',
+      },
+    });
+
+    const result = await explorer.execute.call(context);
+    const metadata = (result[0][0].json.attributes as Record<string, unknown>)
+      .engram_extraction as Record<string, unknown>;
+    expect(metadata).toEqual(
+      expect.objectContaining({
+        review_status: 'accepted',
+        threshold_decision: 'manually_reviewed',
+        confidence: 0.9,
+        reviewed_by: 'operator-1',
+      }),
+    );
+    expect(metadata.reviewed_at).toEqual(expect.any(String));
+  });
+
+  it('filters relationship search by source provenance and returns the provenance trace', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const alice = await storage.addEntity({ name: 'Alice', group_id: 'g1' });
+    const acme = await storage.addEntity({ name: 'Acme', group_id: 'g1' });
+    const episode = await storage.appendEpisode({
+      group_id: 'g1',
+      content: 'I work at Acme',
+      role: 'human',
+      reference_time: '2026-07-15T10:00:00.000Z',
+      episode_kind: 'active_human',
+      sender_id: 'sender-1',
+      sender_name: 'Alice',
+      trust_level: 'trusted',
+      review_status: 'accepted',
+      source_workflow_id: 'workflow-chat',
+    });
+    await storage.addEdge({
+      group_id: 'g1',
+      source_node_uuid: alice.uuid,
+      target_node_uuid: acme.uuid,
+      name: 'WORKS_AT',
+      fact: 'Alice works at Acme',
+      episodes: [episode.episode.uuid],
+    });
+
+    const explorer = new EngramExplorer();
+    const context = createExecuteContext({
+      tempDir,
+      parameters: {
+        resource: 'relationship',
+        operation: 'search',
+        groupId: 'g1',
+        query: 'Alice works',
+        searchMode: 'text',
+        factSenderIdFilter: 'sender-1',
+        factEpisodeKindFilter: 'active_human',
+        factTrustFilter: 'trusted',
+        factSourceWorkflowFilter: 'workflow-chat',
+      },
+    });
+
+    const result = await explorer.execute.call(context);
+    expect(result[0]).toHaveLength(1);
+    expect(result[0][0].json._provenance).toEqual([
+      expect.objectContaining({
+        source_episode_uuid: episode.episode.uuid,
+        sender_id: 'sender-1',
+        sender_name: 'Alice',
+        episode_kind: 'active_human',
+        trust_level: 'trusted',
+        source_workflow_id: 'workflow-chat',
+      }),
+    ]);
+  });
+
+  it('returns an aggregate bounded retrieval audit only when diagnostics are enabled', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const alice = await storage.addEntity({ name: 'Alice', group_id: 'g1' });
+    const acme = await storage.addEntity({ name: 'Acme', group_id: 'g1' });
+    await storage.addEdge({
+      group_id: 'g1',
+      source_node_uuid: alice.uuid,
+      target_node_uuid: acme.uuid,
+      name: 'WORKS_AT',
+      fact: 'Alice works at Acme',
+    });
+
+    const explorer = new EngramExplorer();
+    const context = createExecuteContext({
+      tempDir,
+      parameters: {
+        resource: 'relationship',
+        operation: 'search',
+        groupId: 'g1',
+        query: 'Alice works',
+        searchMode: 'text',
+        retrievalDiagnostics: 'enabled',
+        diagnosticsCandidateLimit: 1,
+        diagnosticsContextTokenBudget: 128,
+      },
+    });
+
+    const result = await explorer.execute.call(context);
+    expect(result[0]).toHaveLength(1);
+    expect(result[0][0].json.results).toEqual([
+      expect.objectContaining({ fact: 'Alice works at Acme' }),
+    ]);
+    expect(result[0][0].json._retrieval_audit).toEqual(
+      expect.objectContaining({
+        normalized_query: 'Alice works',
+        candidate_limit: 1,
+        context_budget: expect.objectContaining({ total_token_budget: 128 }),
+      }),
+    );
+    expect(JSON.stringify(result[0][0].json)).not.toContain('test-key');
+  });
 });
