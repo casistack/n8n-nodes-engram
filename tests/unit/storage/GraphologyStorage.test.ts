@@ -518,6 +518,101 @@ describe('GraphologyStorage', () => {
 			}
 		});
 
+		it('should persist an episode batch with one snapshot and report phase diagnostics', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-batch-persist-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const persistentStorage = new GraphologyStorage(persistPath);
+			const writeSnapshot = jest.spyOn(
+				persistentStorage as unknown as { writeSnapshotUnderLock(): Promise<number> },
+				'writeSnapshotUnderLock',
+			);
+			const inputs = [
+				{
+					group_id: 'batch-group',
+					content: 'Human message',
+					role: 'human' as const,
+					episode_kind: 'active_human' as const,
+					source_message_id: 'human-message',
+					reference_time: '2026-07-18T10:00:00.000Z',
+				},
+				{
+					group_id: 'batch-group',
+					content: 'Assistant response',
+					role: 'ai' as const,
+					episode_kind: 'assistant_reply' as const,
+					source_message_id: 'assistant-message',
+					reference_time: '2026-07-18T10:00:01.000Z',
+				},
+			];
+
+			try {
+				await persistentStorage.initialize();
+				const results = await persistentStorage.appendEpisodes(inputs);
+
+				expect(results.map((result) => result.created)).toEqual([true, true]);
+				expect(results[1].episode.previous_episode_uuid).toBe(results[0].episode.uuid);
+				expect(writeSnapshot).toHaveBeenCalledTimes(1);
+
+				const diagnostics = persistentStorage.getLastMutationDiagnostics();
+				expect(diagnostics).toEqual(
+					expect.objectContaining({
+						operation: 'append_episodes',
+						item_count: 2,
+						persistence_enabled: true,
+						snapshot_written: true,
+						success: true,
+					}),
+				);
+				for (const phase of [
+					'queue_wait_ms',
+					'lock_wait_ms',
+					'disk_refresh_ms',
+					'rollback_export_ms',
+					'mutation_ms',
+					'snapshot_write_ms',
+					'rollback_restore_ms',
+					'total_ms',
+				] as const) {
+					expect(diagnostics?.[phase]).toBeGreaterThanOrEqual(0);
+				}
+				expect(diagnostics?.snapshot_bytes).toBeGreaterThan(0);
+
+				const retries = await persistentStorage.appendEpisodes(inputs);
+				expect(retries.map((result) => result.created)).toEqual([false, false]);
+				expect(writeSnapshot).toHaveBeenCalledTimes(1);
+				expect(persistentStorage.getLastMutationDiagnostics()).toEqual(
+					expect.objectContaining({
+						operation: 'append_episodes',
+						snapshot_written: false,
+						success: true,
+					}),
+				);
+			} finally {
+				await persistentStorage.close();
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('should not remove a lock file that is no longer owned by the releasing mutation', async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-lock-owner-'));
+			const persistPath = path.join(tempDir, 'engram.json');
+			const lockPath = `${persistPath}.lock`;
+			const persistentStorage = new GraphologyStorage(persistPath);
+			const lockManager = persistentStorage as unknown as {
+				acquirePersistLock(): Promise<() => Promise<void>>;
+			};
+
+			try {
+				const release = await lockManager.acquirePersistLock();
+				fs.writeFileSync(lockPath, 'replacement-owner\n99999\n', 'utf-8');
+				await release();
+
+				expect(fs.readFileSync(lockPath, 'utf-8').startsWith('replacement-owner')).toBe(true);
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
 		it('should back up, verify, and atomically migrate legacy snapshots during initialization', async () => {
 			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-legacy-persist-'));
 			const persistPath = path.join(tempDir, 'engram.json');
@@ -738,6 +833,30 @@ describe('GraphologyStorage', () => {
 					}),
 				);
 
+				await Promise.all(
+					Array.from({ length: 4 }, (_, index) => {
+						const target = index % 2 === 0 ? firstStorage : secondStorage;
+						return target.appendEpisodes([
+							{
+								group_id: 'shared-group',
+								content: `Concurrent batch human ${index}`,
+								role: 'human',
+								episode_kind: 'active_human',
+								source_message_id: `batch-human-${index}`,
+								reference_time: new Date().toISOString(),
+							},
+							{
+								group_id: 'shared-group',
+								content: `Concurrent batch assistant ${index}`,
+								role: 'ai',
+								episode_kind: 'assistant_reply',
+								source_message_id: `batch-assistant-${index}`,
+								reference_time: new Date().toISOString(),
+							},
+						]);
+					}),
+				);
+
 				const retryInput = {
 					group_id: 'shared-group',
 					content: 'One retry-safe message',
@@ -767,10 +886,10 @@ describe('GraphologyStorage', () => {
 
 				const reader = new GraphologyStorage(persistPath);
 				await reader.initialize();
-				const episodes = await reader.getRecentEpisodes('shared-group', 20);
+				const episodes = await reader.getRecentEpisodes('shared-group', 30);
 				const entities = await reader.listEntities('shared-group');
 
-				expect(episodes).toHaveLength(13);
+				expect(episodes).toHaveLength(21);
 				expect(entities).toHaveLength(10);
 				expect(episodes[0].previous_episode_uuid).toBeNull();
 				for (let index = 1; index < episodes.length; index++) {

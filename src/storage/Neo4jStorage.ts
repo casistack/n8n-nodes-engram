@@ -163,6 +163,14 @@ export class Neo4jStorage implements IGraphStorage {
       clauses.push(`${alias}.${property} ${operator} $filter_${optionKey}`);
       params[`filter_${optionKey}`] = value;
     }
+    if (options.hygiene_rule === 'empty_assistant_output') {
+      clauses.push(`${alias}.role = 'ai' AND ${alias}.content =~ '^\\s*(?:\\[\\s*\\])?\\s*$'`);
+    }
+    const contentContains = options.content_contains?.trim();
+    if (contentContains) {
+      clauses.push(`toLower(${alias}.content) CONTAINS toLower($filter_content_contains)`);
+      params.filter_content_contains = contentContains;
+    }
     return { where: clauses.join(' AND '), params };
   }
 
@@ -709,81 +717,129 @@ export class Neo4jStorage implements IGraphStorage {
     return this.appendEpisodeWithOptions(input, true);
   }
 
+  async appendEpisodes(inputs: CreateEpisodicNode[]): Promise<AppendEpisodeResult[]> {
+    return this.appendEpisodesWithOptions(inputs, true);
+  }
+
   private async appendEpisodeWithOptions(
     input: CreateEpisodicNode,
     autoChain: boolean,
   ): Promise<AppendEpisodeResult> {
-    const shouldAutoChain =
-      autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid');
-    const parsed = CreateEpisodicNodeSchema.parse(input);
-    const sourceDedupKey = this.sourceDedupKey(parsed);
-    const idempotencyDedupKey = this.idempotencyDedupKey(parsed);
+    return (await this.appendEpisodesWithOptions([input], autoChain))[0];
+  }
+
+  private async appendEpisodesWithOptions(
+    inputs: CreateEpisodicNode[],
+    autoChain: boolean,
+  ): Promise<AppendEpisodeResult[]> {
+    if (inputs.length === 0) return [];
+    if (inputs.length > 1000) throw new Error('Episode append batch cannot exceed 1000 episodes');
+
+    const groupId = inputs[0].group_id;
+    if (inputs.some((input) => input.group_id !== groupId)) {
+      throw new Error('Episode append batch must contain exactly one group ID');
+    }
+
+    const prepared = inputs.map((input) => ({
+      shouldAutoChain:
+        autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
+      parsed: CreateEpisodicNodeSchema.parse(input),
+    }));
 
     const session = this.getSession();
     try {
       return await session.executeWrite(async (tx) => {
         const lockResult = await tx.run(
           `MERGE (lock:EpisodeGroupLock {group_id: $group_id})
-           SET lock.sequence = coalesce(lock.sequence, 0) + 1,
+           SET lock.sequence = coalesce(lock.sequence, 0) + $batch_size,
                lock.updated_at = $updated_at
            RETURN lock.sequence AS sequence`,
-          { group_id: parsed.group_id, updated_at: nowIso() },
+          {
+            group_id: groupId,
+            batch_size: neo4j.int(prepared.length),
+            updated_at: nowIso(),
+          },
         );
         const sequenceValue = lockResult.records[0]?.get('sequence');
-        const appendSequence = neo4j.isInt(sequenceValue)
+        const finalSequence = neo4j.isInt(sequenceValue)
           ? sequenceValue.toNumber()
-          : Number(sequenceValue ?? 0);
+          : Number(sequenceValue ?? prepared.length);
+        const firstSequence = finalSequence - prepared.length + 1;
+        const results: AppendEpisodeResult[] = [];
 
-        if (sourceDedupKey || idempotencyDedupKey) {
-          const existingResult = await tx.run(
-            `MATCH (ep:Episode)
-             WHERE ($source_dedup_key IS NOT NULL AND ep.source_dedup_key = $source_dedup_key)
-                OR ($idempotency_dedup_key IS NOT NULL AND ep.idempotency_dedup_key = $idempotency_dedup_key)
-             RETURN ep`,
-            {
-              source_dedup_key: sourceDedupKey,
-              idempotency_dedup_key: idempotencyDedupKey,
-            },
+        for (const [index, item] of prepared.entries()) {
+          results.push(
+            await this.appendEpisodeInTransaction(
+              tx,
+              item.parsed,
+              item.shouldAutoChain,
+              firstSequence + index,
+            ),
           );
-          const existingEpisodes = new Map<string, EpisodicNode>();
-          for (const record of existingResult.records) {
-            const existing = this.recordToEpisode(record.get('ep').properties);
-            existingEpisodes.set(existing.uuid, existing);
-          }
-          if (existingEpisodes.size > 1) {
-            throw new Error(
-              'Episode idempotency identifiers resolve to different existing episodes',
-            );
-          }
-          const existing = existingEpisodes.values().next().value as EpisodicNode | undefined;
-          if (existing) return { episode: existing, created: false };
         }
+        return results;
+      });
+    } finally {
+      await session.close();
+    }
+  }
 
-        let previousEpisodeUuid = parsed.previous_episode_uuid;
-        if (shouldAutoChain) {
-          const previousResult = await tx.run(
-            `MATCH (ep:Episode {group_id: $group_id})
-             RETURN ep.uuid AS uuid
-             ORDER BY coalesce(ep.append_sequence, 0) DESC, ep.created_at DESC, ep.uuid DESC
-             LIMIT 1`,
-            { group_id: parsed.group_id },
-          );
-          previousEpisodeUuid =
-            (previousResult.records[0]?.get('uuid') as string | undefined) ?? null;
-        }
+  private async appendEpisodeInTransaction(
+    tx: ManagedTransaction,
+    parsed: ReturnType<typeof CreateEpisodicNodeSchema.parse>,
+    shouldAutoChain: boolean,
+    appendSequence: number,
+  ): Promise<AppendEpisodeResult> {
+    const sourceDedupKey = this.sourceDedupKey(parsed);
+    const idempotencyDedupKey = this.idempotencyDedupKey(parsed);
 
-        const createdAt = nowIso();
-        const episode: EpisodicNode = {
-          uuid: generateUuid(),
-          ...parsed,
-          previous_episode_uuid: previousEpisodeUuid,
-          created_at: createdAt,
-          updated_at: createdAt,
-        };
+    if (sourceDedupKey || idempotencyDedupKey) {
+      const existingResult = await tx.run(
+        `MATCH (ep:Episode)
+         WHERE ($source_dedup_key IS NOT NULL AND ep.source_dedup_key = $source_dedup_key)
+            OR ($idempotency_dedup_key IS NOT NULL AND ep.idempotency_dedup_key = $idempotency_dedup_key)
+         RETURN ep`,
+        {
+          source_dedup_key: sourceDedupKey,
+          idempotency_dedup_key: idempotencyDedupKey,
+        },
+      );
+      const existingEpisodes = new Map<string, EpisodicNode>();
+      for (const record of existingResult.records) {
+        const existing = this.recordToEpisode(record.get('ep').properties);
+        existingEpisodes.set(existing.uuid, existing);
+      }
+      if (existingEpisodes.size > 1) {
+        throw new Error('Episode idempotency identifiers resolve to different existing episodes');
+      }
+      const existing = existingEpisodes.values().next().value as EpisodicNode | undefined;
+      if (existing) return { episode: existing, created: false };
+    }
 
-        await tx.run(
-          `CREATE (ep:Episode {
-						uuid: $uuid,
+    let previousEpisodeUuid = parsed.previous_episode_uuid;
+    if (shouldAutoChain) {
+      const previousResult = await tx.run(
+        `MATCH (ep:Episode {group_id: $group_id})
+         RETURN ep.uuid AS uuid
+         ORDER BY coalesce(ep.append_sequence, 0) DESC, ep.created_at DESC, ep.uuid DESC
+         LIMIT 1`,
+        { group_id: parsed.group_id },
+      );
+      previousEpisodeUuid = (previousResult.records[0]?.get('uuid') as string | undefined) ?? null;
+    }
+
+    const createdAt = nowIso();
+    const episode: EpisodicNode = {
+      uuid: generateUuid(),
+      ...parsed,
+      previous_episode_uuid: previousEpisodeUuid,
+      created_at: createdAt,
+      updated_at: createdAt,
+    };
+
+    await tx.run(
+      `CREATE (ep:Episode {
+							uuid: $uuid,
 						group_id: $group_id,
 						content: $content,
 						role: $role,
@@ -808,34 +864,29 @@ export class Neo4jStorage implements IGraphStorage {
 						append_sequence: $append_sequence,
 						source_dedup_key: $source_dedup_key,
 						idempotency_dedup_key: $idempotency_dedup_key
-					})`,
-          {
-            ...episode,
-            attributes: JSON.stringify(episode.attributes),
-            append_sequence: appendSequence,
-            source_dedup_key: sourceDedupKey,
-            idempotency_dedup_key: idempotencyDedupKey,
-          },
-        );
+						})`,
+      {
+        ...episode,
+        attributes: JSON.stringify(episode.attributes),
+        append_sequence: appendSequence,
+        source_dedup_key: sourceDedupKey,
+        idempotency_dedup_key: idempotencyDedupKey,
+      },
+    );
 
-        // Chain to previous episode
-        if (episode.previous_episode_uuid) {
-          await tx.run(
-            `MATCH (prev:Episode {uuid: $prevUuid})
-						 MATCH (curr:Episode {uuid: $currUuid})
-						 CREATE (prev)-[:NEXT_EPISODE]->(curr)`,
-            {
-              prevUuid: episode.previous_episode_uuid,
-              currUuid: episode.uuid,
-            },
-          );
-        }
-
-        return { episode, created: true };
-      });
-    } finally {
-      await session.close();
+    if (episode.previous_episode_uuid) {
+      await tx.run(
+        `MATCH (prev:Episode {uuid: $prevUuid})
+							 MATCH (curr:Episode {uuid: $currUuid})
+							 CREATE (prev)-[:NEXT_EPISODE]->(curr)`,
+        {
+          prevUuid: episode.previous_episode_uuid,
+          currUuid: episode.uuid,
+        },
+      );
     }
+
+    return { episode, created: true };
   }
 
   async getEpisode(uuid: string): Promise<EpisodicNode | null> {

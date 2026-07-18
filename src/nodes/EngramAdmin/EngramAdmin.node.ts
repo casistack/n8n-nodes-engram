@@ -511,6 +511,27 @@ export class EngramAdmin implements INodeType {
         description: 'Only match episodes referenced at or before this time',
       },
       {
+        displayName: 'Malformed Content Rule',
+        name: 'purgeHygieneRule',
+        type: 'options',
+        options: [
+          { name: 'Any Content', value: '' },
+          { name: 'Empty Assistant Output', value: 'empty_assistant_output' },
+        ],
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description: 'Optionally match assistant episodes whose content is empty or an empty array',
+      },
+      {
+        displayName: 'Content Contains',
+        name: 'purgeContentContains',
+        type: 'string',
+        default: '',
+        displayOptions: { show: { operation: ['purgeEpisodes'] } },
+        description:
+          'Case-insensitive content fragment to match, such as a distinctive part of a historical synthetic instruction',
+      },
+      {
         displayName: 'Maximum Episodes',
         name: 'purgeLimit',
         type: 'number',
@@ -1143,11 +1164,18 @@ async function executeMonitoring(
     };
 
     if (diagnosticsContext.backend === 'embedded') {
+      const lastMutation = storage.getLastMutationDiagnostics?.() ?? null;
       diagnostics.embedded_storage = {
         workflow_id: diagnosticsContext.workflowId,
         persist_path: diagnosticsContext.persistPath,
         custom_storage_path_configured: diagnosticsContext.customStoragePathConfigured,
+        last_mutation: lastMutation as unknown as IDataObject,
       };
+      if (lastMutation && lastMutation.total_ms >= 5000) {
+        warnings.push(
+          `The last embedded mutation took ${lastMutation.total_ms} ms. Review its phase timings and storage size.`,
+        );
+      }
     } else if (diagnosticsContext.backend === 'neo4j') {
       diagnostics.neo4j = {
         database_configured: diagnosticsContext.databaseConfigured,
@@ -1403,6 +1431,8 @@ function buildEpisodePurgeFilters(ctx: IExecuteFunctions, i: number): EpisodeFil
     source_execution_id: (ctx.getNodeParameter('purgeSourceExecutionId', i, '') as string).trim(),
     reference_after: ctx.getNodeParameter('purgeReferenceAfter', i, '') as string,
     reference_before: ctx.getNodeParameter('purgeReferenceBefore', i, '') as string,
+    hygiene_rule: ctx.getNodeParameter('purgeHygieneRule', i, '') as string,
+    content_contains: (ctx.getNodeParameter('purgeContentContains', i, '') as string).trim(),
   };
 
   for (const [key, value] of Object.entries(values)) {

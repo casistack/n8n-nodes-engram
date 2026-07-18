@@ -26,6 +26,7 @@ import type {
   StorageMigrationStatus,
   StorageSchemaMigrationOptions,
   StorageSchemaMigrationResult,
+  StorageMutationDiagnostics,
 } from './IGraphStorage';
 import type {
   EntityNode,
@@ -38,6 +39,7 @@ import type {
   ImportGraphData,
   GraphStats,
 } from '../schemas';
+import { matchesEpisodeHygieneFilters } from './EpisodeHygiene';
 import {
   CURRENT_GRAPH_DATA_VERSION,
   CreateEpisodicNodeSchema,
@@ -57,9 +59,16 @@ interface GraphEdgeAttributes {
   data: EntityEdge | null;
 }
 
-const PERSIST_LOCK_TIMEOUT_MS = 5000;
+const PERSIST_LOCK_TIMEOUT_MS = 60000;
 const PERSIST_LOCK_STALE_MS = 30000;
+const PERSIST_LOCK_HEARTBEAT_MS = 5000;
 const EMBEDDED_BACKUP_SUFFIX = '.pre-schema-2.0.backup.json';
+
+interface MutationOptions<T> {
+  operation?: string;
+  itemCount?: number;
+  shouldWriteSnapshot?: (result: T) => boolean;
+}
 
 export class GraphologyStorage implements IGraphStorage {
   private graph: MultiDirectedGraph<GraphNodeAttributes, GraphEdgeAttributes>;
@@ -69,6 +78,7 @@ export class GraphologyStorage implements IGraphStorage {
   private episodeOrder = new Map<string, number>();
   private nextOrder = 0;
   private mutationTail: Promise<void> = Promise.resolve();
+  private lastMutationDiagnostics: StorageMutationDiagnostics | null = null;
   private migrationStatus: StorageMigrationStatus = {
     backend: 'embedded',
     target_version: CURRENT_GRAPH_DATA_VERSION,
@@ -104,6 +114,10 @@ export class GraphologyStorage implements IGraphStorage {
 
   async close(): Promise<void> {
     await this.mutationTail;
+  }
+
+  getLastMutationDiagnostics(): StorageMutationDiagnostics | null {
+    return this.lastMutationDiagnostics ? { ...this.lastMutationDiagnostics } : null;
   }
 
   // ===== Entity Operations =====
@@ -348,46 +362,82 @@ export class GraphologyStorage implements IGraphStorage {
     return this.appendEpisodeWithOptions(input, true);
   }
 
+  async appendEpisodes(inputs: CreateEpisodicNode[]): Promise<AppendEpisodeResult[]> {
+    return this.appendEpisodesWithOptions(inputs, true);
+  }
+
   private async appendEpisodeWithOptions(
     input: CreateEpisodicNode,
     autoChain: boolean,
   ): Promise<AppendEpisodeResult> {
-    const shouldAutoChain =
-      autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid');
-    const parsed = CreateEpisodicNodeSchema.parse(input);
+    return (await this.appendEpisodesWithOptions([input], autoChain))[0];
+  }
 
-    return this.runMutation(() => {
-      const existing = this.findEpisodeByIdempotency(parsed);
-      if (existing) return { episode: existing, created: false };
+  private async appendEpisodesWithOptions(
+    inputs: CreateEpisodicNode[],
+    autoChain: boolean,
+  ): Promise<AppendEpisodeResult[]> {
+    if (inputs.length === 0) return [];
+    if (inputs.length > 1000) throw new Error('Episode append batch cannot exceed 1000 episodes');
 
-      const createdAt = nowIso();
-      const previousEpisodeUuid = shouldAutoChain
-        ? (this.findLatestEpisode(parsed.group_id)?.uuid ?? null)
-        : parsed.previous_episode_uuid;
-      const episode: EpisodicNode = {
-        uuid: generateUuid(),
-        ...parsed,
-        previous_episode_uuid: previousEpisodeUuid,
-        created_at: createdAt,
-        updated_at: createdAt,
-      };
+    const groupId = inputs[0].group_id;
+    if (inputs.some((input) => input.group_id !== groupId)) {
+      throw new Error('Episode append batch must contain exactly one group ID');
+    }
 
-      this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
-      this.episodeOrder.set(episode.uuid, this.nextOrder++);
+    const prepared = inputs.map((input) => ({
+      shouldAutoChain:
+        autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
+      parsed: CreateEpisodicNodeSchema.parse(input),
+    }));
 
-      const previous = previousEpisodeUuid
-        ? this.getEpisodeOrEntity(previousEpisodeUuid, 'episode')
-        : null;
-      if (previous && previous.group_id === episode.group_id) {
-        const chainKey = `next_${previousEpisodeUuid}_${episode.uuid}`;
-        this.graph.addEdgeWithKey(chainKey, previousEpisodeUuid!, episode.uuid, {
-          type: 'next_episode',
-          data: null,
-        });
-      }
+    return this.runMutation(
+      () =>
+        prepared.map(({ parsed, shouldAutoChain }) =>
+          this.appendEpisodeInternal(parsed, shouldAutoChain),
+        ),
+      {
+        operation: inputs.length === 1 ? 'append_episode' : 'append_episodes',
+        itemCount: inputs.length,
+        shouldWriteSnapshot: (results) => results.some((result) => result.created),
+      },
+    );
+  }
 
-      return { episode, created: true };
-    });
+  private appendEpisodeInternal(
+    parsed: ReturnType<typeof CreateEpisodicNodeSchema.parse>,
+    shouldAutoChain: boolean,
+  ): AppendEpisodeResult {
+    const existing = this.findEpisodeByIdempotency(parsed);
+    if (existing) return { episode: existing, created: false };
+
+    const createdAt = nowIso();
+    const previousEpisodeUuid = shouldAutoChain
+      ? (this.findLatestEpisode(parsed.group_id)?.uuid ?? null)
+      : parsed.previous_episode_uuid;
+    const episode: EpisodicNode = {
+      uuid: generateUuid(),
+      ...parsed,
+      previous_episode_uuid: previousEpisodeUuid,
+      created_at: createdAt,
+      updated_at: createdAt,
+    };
+
+    this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
+    this.episodeOrder.set(episode.uuid, this.nextOrder++);
+
+    const previous = previousEpisodeUuid
+      ? this.getEpisodeOrEntity(previousEpisodeUuid, 'episode')
+      : null;
+    if (previous && previous.group_id === episode.group_id) {
+      const chainKey = `next_${previousEpisodeUuid}_${episode.uuid}`;
+      this.graph.addEdgeWithKey(chainKey, previousEpisodeUuid!, episode.uuid, {
+        type: 'next_episode',
+        data: null,
+      });
+    }
+
+    return { episode, created: true };
   }
 
   private findEpisodeByIdempotency(input: CreateEpisodicNode): EpisodicNode | null {
@@ -648,6 +698,7 @@ export class GraphologyStorage implements IGraphStorage {
       !isWithinDateRange(episode.created_at, options.created_after, options.created_before)
     )
       return false;
+    if (!matchesEpisodeHygieneFilters(episode, options)) return false;
     return true;
   }
 
@@ -1200,7 +1251,13 @@ export class GraphologyStorage implements IGraphStorage {
 
   // ===== Persistence =====
 
-  private async runMutation<T>(mutation: () => T | Promise<T>): Promise<T> {
+  private async runMutation<T>(
+    mutation: () => T | Promise<T>,
+    options: MutationOptions<T> = {},
+  ): Promise<T> {
+    const startedAt = nowIso();
+    const totalStarted = performance.now();
+    const queueStarted = performance.now();
     const previousMutation = this.mutationTail;
     let releaseQueue!: () => void;
     this.mutationTail = new Promise<void>((resolve) => {
@@ -1208,32 +1265,76 @@ export class GraphologyStorage implements IGraphStorage {
     });
 
     await previousMutation;
+    const queueWaitMs = performance.now() - queueStarted;
 
     let releaseFileLock: () => Promise<void> = async () => {};
     let rollbackData: GraphData | null = null;
+    let lockWaitMs = 0;
+    let diskRefreshMs = 0;
+    let rollbackExportMs = 0;
+    let mutationMs = 0;
+    let snapshotWriteMs = 0;
+    let rollbackRestoreMs = 0;
+    let snapshotBytes: number | null = null;
+    let snapshotWritten = false;
+    let success = false;
     try {
       if (this.persistPath) {
+        const lockStarted = performance.now();
         releaseFileLock = await this.acquirePersistLock();
+        lockWaitMs = performance.now() - lockStarted;
+        const refreshStarted = performance.now();
         await this.refreshFromDiskUnderLock();
+        diskRefreshMs = performance.now() - refreshStarted;
       }
 
+      const rollbackExportStarted = performance.now();
       rollbackData = await this.exportGraph();
-      const result = await mutation();
+      rollbackExportMs = performance.now() - rollbackExportStarted;
 
-      if (this.persistPath) {
-        await this.writeSnapshotUnderLock();
+      const mutationStarted = performance.now();
+      const result = await mutation();
+      mutationMs = performance.now() - mutationStarted;
+
+      const shouldWriteSnapshot = options.shouldWriteSnapshot?.(result) ?? true;
+      if (this.persistPath && shouldWriteSnapshot) {
+        const snapshotWriteStarted = performance.now();
+        snapshotBytes = await this.writeSnapshotUnderLock();
+        snapshotWriteMs = performance.now() - snapshotWriteStarted;
+        snapshotWritten = true;
       }
 
+      success = true;
       return result;
     } catch (error) {
       if (rollbackData) {
+        const rollbackRestoreStarted = performance.now();
         this.replaceGraphData(rollbackData);
+        rollbackRestoreMs = performance.now() - rollbackRestoreStarted;
       }
       throw error;
     } finally {
       try {
         await releaseFileLock();
       } finally {
+        const round = (value: number): number => Math.round(value * 1000) / 1000;
+        this.lastMutationDiagnostics = {
+          operation: options.operation ?? 'mutation',
+          started_at: startedAt,
+          success,
+          persistence_enabled: Boolean(this.persistPath),
+          snapshot_written: snapshotWritten,
+          item_count: options.itemCount ?? 1,
+          queue_wait_ms: round(queueWaitMs),
+          lock_wait_ms: round(lockWaitMs),
+          disk_refresh_ms: round(diskRefreshMs),
+          rollback_export_ms: round(rollbackExportMs),
+          mutation_ms: round(mutationMs),
+          snapshot_write_ms: round(snapshotWriteMs),
+          rollback_restore_ms: round(rollbackRestoreMs),
+          total_ms: round(performance.now() - totalStarted),
+          snapshot_bytes: snapshotBytes,
+        };
         releaseQueue();
       }
     }
@@ -1262,10 +1363,13 @@ export class GraphologyStorage implements IGraphStorage {
     this.replaceGraphData(data);
   }
 
-  private async writeSnapshotUnderLock(): Promise<void> {
-    if (!this.persistPath) return;
+  private async writeSnapshotUnderLock(): Promise<number> {
+    if (!this.persistPath) return 0;
 
-    await this.writeGraphDataAtomic(await this.exportGraph(), this.persistPath);
+    const data = await this.exportGraph();
+    const payload = JSON.stringify(data, null, 2);
+    await this.writeTextAtomic(payload, this.persistPath);
+    return Buffer.byteLength(payload, 'utf-8');
   }
 
   private async readAndMigratePersistedDataUnderLock(): Promise<GraphData> {
@@ -1483,11 +1587,33 @@ export class GraphologyStorage implements IGraphStorage {
 
     for (;;) {
       try {
+        const lockToken = generateUuid();
         const handle = await fs.promises.open(lockPath, 'wx');
-        await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, 'utf-8');
-        await handle.close();
+        try {
+          await handle.writeFile(
+            `${lockToken}\n${process.pid}\n${new Date().toISOString()}\n`,
+            'utf-8',
+          );
+        } catch (error) {
+          await handle.close().catch(() => {});
+          await fs.promises.rm(lockPath, { force: true }).catch(() => {});
+          throw error;
+        }
+        const heartbeat = setInterval(() => {
+          void handle.utimes(new Date(), new Date()).catch(() => {});
+        }, PERSIST_LOCK_HEARTBEAT_MS);
+        heartbeat.unref();
         return async () => {
-          await fs.promises.rm(lockPath, { force: true });
+          clearInterval(heartbeat);
+          await handle.close().catch(() => {});
+          try {
+            const activeToken = (await fs.promises.readFile(lockPath, 'utf-8')).split('\n')[0];
+            if (activeToken === lockToken) {
+              await fs.promises.rm(lockPath, { force: true });
+            }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
         };
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;

@@ -24,6 +24,11 @@ export type EpisodeWriteMetadata = Partial<
 
 export type HumanEpisodeKind = 'active_human' | 'passive_human';
 
+export interface EpisodeMessageWrite {
+  message: BaseMessage;
+  metadata?: EpisodeWriteMetadata;
+}
+
 /**
  * Chat message history backed by Engram's graph storage.
  * Stores each message as an EpisodicNode, chained via previous_episode_uuid.
@@ -69,13 +74,29 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     message: BaseMessage,
     metadata: EpisodeWriteMetadata = {},
   ): Promise<EpisodicNode> {
+    return (await this.addMessagesAndGetEpisodes([{ message, metadata }]))[0];
+  }
+
+  async addMessagesAndGetEpisodes(writes: EpisodeMessageWrite[]): Promise<EpisodicNode[]> {
+    if (writes.length === 0) return [];
+    const inputs = writes.map(({ message, metadata = {} }) =>
+      this.messageToEpisodeInput(message, metadata),
+    );
+    const results = await this.storage.appendEpisodes(inputs);
+    return results.map((result) => result.episode);
+  }
+
+  private messageToEpisodeInput(
+    message: BaseMessage,
+    metadata: EpisodeWriteMetadata,
+  ): CreateEpisodicNode {
     const role = this.messageToRole(message);
     const content =
       typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
 
     const episodeKind =
       role === 'human' ? this.humanEpisodeKind : role === 'ai' ? 'assistant_reply' : 'system';
-    const result = await this.storage.appendEpisode({
+    return {
       trust_level: 'standard',
       review_status: 'accepted',
       ...this.metadata,
@@ -85,9 +106,7 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
       role,
       episode_kind: episodeKind,
       reference_time: new Date().toISOString(),
-    });
-
-    return result.episode;
+    };
   }
 
   async addUserMessage(message: string): Promise<void> {

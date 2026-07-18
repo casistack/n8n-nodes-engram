@@ -76,6 +76,26 @@ export interface AppendEpisodeResult {
   created: boolean;
 }
 
+export type EpisodeHygieneRule = 'empty_assistant_output';
+
+export interface StorageMutationDiagnostics {
+  operation: string;
+  started_at: string;
+  success: boolean;
+  persistence_enabled: boolean;
+  snapshot_written: boolean;
+  item_count: number;
+  queue_wait_ms: number;
+  lock_wait_ms: number;
+  disk_refresh_ms: number;
+  rollback_export_ms: number;
+  mutation_ms: number;
+  snapshot_write_ms: number;
+  rollback_restore_ms: number;
+  total_ms: number;
+  snapshot_bytes: number | null;
+}
+
 export interface EpisodeFilterOptions {
   role?: EpisodeRole;
   source_type?: EpisodeSourceType;
@@ -92,6 +112,8 @@ export interface EpisodeFilterOptions {
   reference_before?: string;
   created_after?: string;
   created_before?: string;
+  hygiene_rule?: EpisodeHygieneRule;
+  content_contains?: string;
   limit?: number;
   offset?: number;
   sort_by?: 'reference_time' | 'created_at';
@@ -190,6 +212,7 @@ export interface IGraphStorage {
   // === Episode Operations ===
   addEpisode(episode: CreateEpisodicNode): Promise<EpisodicNode>;
   appendEpisode(episode: CreateEpisodicNode): Promise<AppendEpisodeResult>;
+  appendEpisodes(episodes: CreateEpisodicNode[]): Promise<AppendEpisodeResult[]>;
   getEpisode(uuid: string): Promise<EpisodicNode | null>;
   getEpisodes(uuids: string[]): Promise<EpisodicNode[]>;
   listEpisodes(groupId: string, options?: EpisodeFilterOptions): Promise<EpisodicNode[]>;
@@ -208,6 +231,7 @@ export interface IGraphStorage {
     to: string,
     limit?: number,
   ): Promise<EpisodicNode[]>;
+  getLastMutationDiagnostics?(): StorageMutationDiagnostics | null;
 
   // === Changelog ===
   getEdgeChangelog(

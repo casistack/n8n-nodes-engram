@@ -11,6 +11,7 @@ import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages
 import type { IGraphStorage } from '../storage/IGraphStorage';
 import {
   EngramChatMessageHistory,
+  type EpisodeMessageWrite,
   type EpisodeWriteMetadata,
   type HumanEpisodeKind,
 } from './EngramChatMessageHistory';
@@ -221,18 +222,26 @@ export class EngramChatMemory extends BaseChatMemory {
 
     const humanText = this.stringifyMessageValue(humanInput);
     const aiText = this.stringifyMessageValue(aiOutput);
-    const humanEpisode = this.storeHumanEpisodes
-      ? await this.engramHistory.addMessageAndGetEpisode(
-          new HumanMessage(humanInput),
-          this.metadataForEpisodeKind(this.humanEpisodeKind),
-        )
-      : null;
-    const aiEpisode = this.storeAiEpisodes
-      ? await this.engramHistory.addMessageAndGetEpisode(
-          new AIMessage(aiOutput),
-          this.metadataForEpisodeKind('assistant_reply'),
-        )
-      : null;
+    const writes: EpisodeMessageWrite[] = [];
+    const humanEpisodeIndex = this.storeHumanEpisodes ? writes.length : null;
+    if (this.storeHumanEpisodes) {
+      writes.push({
+        message: new HumanMessage(humanInput),
+        metadata: this.metadataForEpisodeKind(this.humanEpisodeKind),
+      });
+    }
+    const aiEpisodeIndex = this.storeAiEpisodes ? writes.length : null;
+    if (this.storeAiEpisodes) {
+      writes.push({
+        message: new AIMessage(aiOutput),
+        metadata: this.metadataForEpisodeKind('assistant_reply'),
+      });
+    }
+
+    const storedEpisodes = await this.engramHistory.addMessagesAndGetEpisodes(writes);
+    const humanEpisode =
+      humanEpisodeIndex === null ? null : (storedEpisodes[humanEpisodeIndex] ?? null);
+    const aiEpisode = aiEpisodeIndex === null ? null : (storedEpisodes[aiEpisodeIndex] ?? null);
 
     // If extraction is enabled, extract entities and relationships
     if (this.enableExtraction) {

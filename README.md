@@ -229,6 +229,8 @@ Existing saved Engram Memory nodes retain their original node version and behavi
 
 Engram Admin includes a read-only **Monitoring > Diagnostics** operation for production checks. By default it returns quick storage and graph counts only. Optional deep checks scan the full graph to report embedding coverage, expired/invalidated edges, dangling edges, and duplicate entity-name groups.
 
+For embedded storage, diagnostics also report the most recent mutation's queue wait, file-lock wait, disk refresh, rollback export, graph mutation, snapshot write, rollback restore, total duration, and snapshot size. These timings help distinguish lock contention from large-snapshot persistence costs.
+
 Use **Monitoring > Embedding Coverage** to check whether entities and facts have vectors before enabling hybrid search broadly. Use **Hygiene > Rebuild Search Index** to rebuild the embedded full-text index from stored graph data. Use **Hygiene > Backfill Embeddings** in dry-run mode first, then disable dry-run to fill missing embeddings with the configured embedding model.
 
 Explorer entity and relationship searches can optionally return retrieval diagnostics. The aggregate trace shows active filters, bounded candidate scores and decisions, rejection reasons, and which complete items fit the context preview budget. Diagnostics are disabled by default.
@@ -243,7 +245,7 @@ Neo4j remains available during an upgrade and does not perform an unbounded star
 
 For a staged restore, first run the import in **Dry Run** mode and review the source/target versions, default counts, and warnings. Keep the original export unchanged, then perform the write import only after the report matches expectations. Export the restored graph again to create a checksummed `2.0` backup.
 
-To remove historical monitor or tool pollution, use Explorer episode filters to inspect the affected source, kind, trust level, or date range. Then run Admin **Lifecycle > Purge Episodes** in dry-run mode before confirming the bounded purge.
+To remove historical monitor or tool pollution, use Explorer episode filters to inspect the affected source, kind, trust level, or date range. Admin **Lifecycle > Purge Episodes** can also match empty assistant output or a case-insensitive content fragment. Always run the bounded purge in dry-run mode and review the matched episodes before confirming deletion.
 
 For production Neo4j deployments, see [`docs/production-neo4j.md`](docs/production-neo4j.md). Ready-to-import starter workflows are available in [`docs/workflows/`](docs/workflows/).
 
@@ -342,6 +344,7 @@ Engram stores conversation data and extracted knowledge. You should understand w
 - Data is stored as a JSON file at `~/.n8n/storage/n8n-nodes-engram/{workflowId}-engram.json` by default
 - You can override the default with **Custom Storage Path** when using embedded storage
 - The file contains all entities, relationships, episodes, and embeddings in plain text
+- A normal human-and-assistant turn is committed as one atomic episode batch, preserving episode order while avoiding duplicate snapshot writes
 - Backups: copy the JSON file
 
 **Neo4j backend:**

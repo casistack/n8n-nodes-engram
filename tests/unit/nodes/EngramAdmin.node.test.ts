@@ -161,6 +161,68 @@ describe('EngramAdmin', () => {
     expect(await storage.getEpisodeCount('cleanup-group')).toBe(1);
   });
 
+  it('previews malformed assistant output and distinctive synthetic content without deleting it', async () => {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    await storage.appendEpisodes([
+      {
+        group_id: 'hygiene-group',
+        content: '[ ]',
+        role: 'ai',
+        reference_time: '2026-07-15T10:00:00.000Z',
+        episode_kind: 'assistant_reply',
+      },
+      {
+        group_id: 'hygiene-group',
+        content: 'Return only SYNTHETIC_RESPONSE_MARKER JSON.',
+        role: 'human',
+        reference_time: '2026-07-15T10:01:00.000Z',
+        episode_kind: 'legacy',
+      },
+      {
+        group_id: 'hygiene-group',
+        content: 'A valid assistant response',
+        role: 'ai',
+        reference_time: '2026-07-15T10:02:00.000Z',
+        episode_kind: 'assistant_reply',
+      },
+    ]);
+
+    const admin = new EngramAdmin();
+    const emptyAssistantPreview = await admin.execute.call(
+      createExecuteContext({
+        tempDir,
+        operation: 'purgeEpisodes',
+        parameters: {
+          groupId: 'hygiene-group',
+          purgeHygieneRule: 'empty_assistant_output',
+          purgeMode: 'dryRun',
+          purgeLimit: 10,
+        },
+      }),
+    );
+    expect(emptyAssistantPreview[0][0].json).toEqual(
+      expect.objectContaining({ dry_run: true, matched_count: 1, deleted_count: 0 }),
+    );
+
+    const syntheticContentPreview = await admin.execute.call(
+      createExecuteContext({
+        tempDir,
+        operation: 'purgeEpisodes',
+        parameters: {
+          groupId: 'hygiene-group',
+          purgeContentContains: 'synthetic_response_marker',
+          purgeMode: 'dryRun',
+          purgeLimit: 10,
+        },
+      }),
+    );
+    expect(syntheticContentPreview[0][0].json).toEqual(
+      expect.objectContaining({ dry_run: true, matched_count: 1, deleted_count: 0 }),
+    );
+    expect(await storage.getEpisodeCount('hygiene-group')).toBe(3);
+  });
+
   it('returns quick diagnostics without scanning the full graph by default', async () => {
     const admin = new EngramAdmin();
     const storage = createStorage({
@@ -207,6 +269,12 @@ describe('EngramAdmin', () => {
         workflow_id: 'wf-admin-test',
         persist_path: persistPath,
         custom_storage_path_configured: true,
+        last_mutation: expect.objectContaining({
+          operation: 'mutation',
+          persistence_enabled: true,
+          snapshot_written: true,
+          success: true,
+        }),
       }),
     );
     expect(result[0][0].json.migration).toEqual(

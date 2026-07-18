@@ -116,6 +116,18 @@ describe('EngramChatMemory', () => {
 	});
 
 	describe('saveContext', () => {
+		it('should persist a human and assistant turn with one ordered batch call', async () => {
+			const appendEpisodes = jest.spyOn(storage, 'appendEpisodes');
+
+			await memory.saveContext({ input: 'One write?' }, { output: 'One write.' });
+
+			expect(appendEpisodes).toHaveBeenCalledTimes(1);
+			expect(appendEpisodes.mock.calls[0][0]).toEqual([
+				expect.objectContaining({ role: 'human', content: 'One write?' }),
+				expect.objectContaining({ role: 'ai', content: 'One write.' }),
+			]);
+		});
+
 		it('should save human and AI messages as episodes', async () => {
 			await memory.saveContext(
 				{ input: 'What is TypeScript?' },

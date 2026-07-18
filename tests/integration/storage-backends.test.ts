@@ -298,6 +298,61 @@ function runStorageConformanceSuite(
 				expect(second.episode.previous_episode_uuid).toBe(first.episode.uuid);
 			});
 
+			it('should append and deduplicate an ordered episode batch atomically', async () => {
+				const referenceTime = new Date().toISOString();
+				const inputs = [
+					{
+						group_id: 'append-batch',
+						content: 'Human turn',
+						role: 'human' as const,
+						episode_kind: 'active_human' as const,
+						idempotency_key: 'batch-turn:human',
+						reference_time: referenceTime,
+					},
+					{
+						group_id: 'append-batch',
+						content: 'Assistant turn',
+						role: 'ai' as const,
+						episode_kind: 'assistant_reply' as const,
+						idempotency_key: 'batch-turn:assistant',
+						reference_time: referenceTime,
+					},
+				];
+
+				const created = await storage.appendEpisodes(inputs);
+				expect(created.map((result) => result.created)).toEqual([true, true]);
+				expect(created[0].episode.previous_episode_uuid).toBeNull();
+				expect(created[1].episode.previous_episode_uuid).toBe(created[0].episode.uuid);
+
+				const retried = await storage.appendEpisodes(inputs);
+				expect(retried.map((result) => result.created)).toEqual([false, false]);
+				expect(retried.map((result) => result.episode.uuid)).toEqual(
+					created.map((result) => result.episode.uuid),
+				);
+				expect(await storage.getEpisodeCount('append-batch')).toBe(2);
+			});
+
+			it('should reject cross-group batches before writing any episode', async () => {
+				await expect(
+					storage.appendEpisodes([
+						{
+							group_id: 'batch-group-a',
+							content: 'First',
+							role: 'human',
+							reference_time: new Date().toISOString(),
+						},
+						{
+							group_id: 'batch-group-b',
+							content: 'Second',
+							role: 'ai',
+							reference_time: new Date().toISOString(),
+						},
+					]),
+				).rejects.toThrow('exactly one group ID');
+				expect(await storage.getEpisodeCount('batch-group-a')).toBe(0);
+				expect(await storage.getEpisodeCount('batch-group-b')).toBe(0);
+			});
+
 			it('should preserve addEpisode explicit-chain compatibility', async () => {
 				await storage.addEpisode({
 					group_id: 'compatibility-chain',
@@ -406,6 +461,54 @@ function runStorageConformanceSuite(
 				).rejects.toThrow('resolve to different existing episodes');
 			});
 
+			it('should roll back every new episode when a later batch item fails', async () => {
+				await storage.appendEpisode({
+					group_id: 'batch-rollback',
+					content: 'Existing source',
+					role: 'human',
+					episode_kind: 'active_human',
+					source_message_id: 'source-a',
+					idempotency_key: 'key-a',
+					reference_time: new Date().toISOString(),
+				});
+				await storage.appendEpisode({
+					group_id: 'batch-rollback',
+					content: 'Existing key',
+					role: 'human',
+					episode_kind: 'active_human',
+					source_message_id: 'source-b',
+					idempotency_key: 'key-b',
+					reference_time: new Date().toISOString(),
+				});
+
+				await expect(
+					storage.appendEpisodes([
+						{
+							group_id: 'batch-rollback',
+							content: 'Must be rolled back',
+							role: 'ai',
+							episode_kind: 'assistant_reply',
+							idempotency_key: 'new-key',
+							reference_time: new Date().toISOString(),
+						},
+						{
+							group_id: 'batch-rollback',
+							content: 'Conflicting identifiers',
+							role: 'human',
+							episode_kind: 'active_human',
+							source_message_id: 'source-a',
+							idempotency_key: 'key-b',
+							reference_time: new Date().toISOString(),
+						},
+					]),
+				).rejects.toThrow('resolve to different existing episodes');
+
+				expect(await storage.getEpisodeCount('batch-rollback')).toBe(2);
+				expect(
+					await storage.listEpisodes('batch-rollback', { content_contains: 'rolled back' }),
+				).toEqual([]);
+			});
+
 			it('should serialize parallel distinct appends into one chain', async () => {
 				await Promise.all(
 					Array.from({ length: 12 }, (_, index) =>
@@ -462,6 +565,45 @@ function runStorageConformanceSuite(
 						source_workflow_id: 'monitor-workflow',
 					}),
 				).toBe(2);
+			});
+
+			it('should filter malformed assistant output and operator-specified content', async () => {
+				await storage.appendEpisodes([
+					{
+						group_id: 'episode-hygiene',
+						content: '[ ]',
+						role: 'ai',
+						episode_kind: 'assistant_reply',
+						reference_time: new Date().toISOString(),
+					},
+					{
+						group_id: 'episode-hygiene',
+						content: 'Return SYNTHETIC_RESPONSE_SCHEMA as JSON',
+						role: 'human',
+						episode_kind: 'legacy',
+						reference_time: new Date().toISOString(),
+					},
+					{
+						group_id: 'episode-hygiene',
+						content: '[]',
+						role: 'human',
+						episode_kind: 'active_human',
+						reference_time: new Date().toISOString(),
+					},
+				]);
+
+				const emptyAssistant = await storage.listEpisodes('episode-hygiene', {
+					hygiene_rule: 'empty_assistant_output',
+				});
+				expect(emptyAssistant).toHaveLength(1);
+				expect(emptyAssistant[0].role).toBe('ai');
+
+				const synthetic = await storage.listEpisodes('episode-hygiene', {
+					role: 'human',
+					content_contains: 'synthetic_response_schema',
+				});
+				expect(synthetic).toHaveLength(1);
+				expect(synthetic[0].content).toContain('SYNTHETIC_RESPONSE_SCHEMA');
 			});
 
 			it('should batch-load unique episodes by UUID', async () => {
