@@ -19,13 +19,13 @@
   <a href="https://github.com/casistack/n8n-nodes-engram/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License: AGPL-3.0" />
   </a>
-  <img src="https://img.shields.io/badge/node-%3E%3D18.10-brightgreen.svg" alt="Node.js" />
+  <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node.js" />
   <img src="https://img.shields.io/badge/n8n-community%20node-ff6d5a.svg" alt="n8n community node" />
 </p>
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-to-v060">Upgrade</a> &middot;
+  <a href="#upgrading-to-v070">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -101,9 +101,17 @@ npm install n8n-nodes-engram
 
 ---
 
-## Bounded Extraction and Durable Workers
+## Upgrading to v0.7.0
 
 These Memory v2 controls are optional. Existing workflows keep **Entity Resolution > Legacy**, **Knowledge Selection > Legacy**, **Extraction Execution > Synchronous** and **Graph Context Policy > Legacy**. Installing a newer package does not enable them or rewrite existing knowledge.
+
+### Back Up and Install v0.7.0
+
+1. Back up current workflows and n8n configuration. Preserve exact namespace keys and any existing alias mapping.
+2. **Embedded:** pause writers and preserve each producer workflow's graph file, storage directory and workflow-to-file mapping. Use a separate restored store for upgrade trials. Once durable work exists, use **Extraction Queue > Export Queue Backup** for portable queue-aware recovery.
+3. **Neo4j:** take a consistent database backup using your normal recovery procedure. Retain the same database and namespace identities. Graph writers coordinate through a shared store lock; validate concurrent write throughput during rollout.
+4. Install `n8n-nodes-engram@0.7.0`, restart n8n, refresh the editor and confirm the installed version. Node.js 20 or newer is required. Existing v2 stores load without a bulk migration or re-extraction; earlier provenance/schema upgrades remain separate.
+5. Run **Engram Admin > Monitoring > Diagnostics**. Saved Memory v1 nodes remain v1; upgrade selected nodes explicitly to **Memory v2** on an inactive workflow copy before enabling the new controls. Check that the copy points to the intended restored store.
 
 ### Activate Bounded Extraction First
 
