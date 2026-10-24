@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-to-v070">Upgrade</a> &middot;
+  <a href="#upgrading-to-v071">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -101,7 +101,23 @@ npm install n8n-nodes-engram
 
 ---
 
+## Upgrading to v0.7.1
+
+This patch fixes JSON-mode requests in bounded identity matching. It explicitly requests a valid JSON object and checks the trusted instruction before sending bounded extraction requests. Existing legacy extraction behavior and saved workflow defaults remain unchanged. No model, temperature or governance change is needed.
+
+1. Take fresh, consistent backups of your workflows and Engram stores. **Embedded:** preserve the original producer graph file and storage directory. **Neo4j:** use your normal consistent database backup. Keep existing namespace keys and alias mappings.
+2. Install `n8n-nodes-engram@0.7.1`, restart n8n, refresh the editor and confirm the installed version. Keep the existing Memory v2 bounded/quality/temperature settings. Node.js 20 or newer remains required. No schema migration, memory reset, purge, bulk re-extraction or queue activation is needed.
+3. Start with one conversation workflow. Test normal and tool-assisted turns, a durable preference, a temporary question and historical recall. Confirm explicit extraction success or documented deferral and inspect actual graph facts; overall workflow success alone is insufficient. Expand other namespaces only after this canary passes.
+
+Known JSON-instruction errors retain `kind=invalid_request` with fixed `reason=json_mode_instruction_missing` and `parameter=messages`. Deterministic HTTP 400 or authentication failures stop further equivalent comparisons in the extraction. Conversations remain saved while failed staged graph changes are discarded. No raw provider body is included in these diagnostics.
+
+For rollback, preserve legitimate messages written after the backup and follow the queue-aware backup/downgrade restrictions below when jobs exist. Prefer restoring the previous workflow settings while retaining current memory. Never overwrite newer conversations with an old snapshot as routine rollback. This patch does not repair old extracted facts or reclassify historical episodes. The [v0.7.0 controls and worker setup](#upgrading-to-v070) remain opt-in.
+
+---
+
 ## Upgrading to v0.7.0
+
+For bounded-mode installations, use v0.7.1 or newer for the JSON-mode comparison fix.
 
 These Memory v2 controls are optional. Existing workflows keep **Entity Resolution > Legacy**, **Knowledge Selection > Legacy**, **Extraction Execution > Synchronous** and **Graph Context Policy > Legacy**. Installing a newer package does not enable them or rewrite existing knowledge.
 
