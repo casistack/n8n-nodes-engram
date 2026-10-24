@@ -81,3 +81,8 @@ export * from './ExtractionQueue.schema';
 export * from './ExtractionPolicy.schema';
 
 export * from './StorageObservation.schema';
+export * from './AutomaticMemory.schema';
+export * from './AutomaticOperations.schema';
+export * from './AutomaticClaim.schema';
+export * from './AutomaticRuntime.schema';
+export * from './ExtractionBudget.schema';

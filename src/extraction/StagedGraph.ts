@@ -93,11 +93,11 @@ export class StagedGraph {
             .slice(options?.offset ?? 0, (options?.offset ?? 0) + (options?.limit ?? 100000)),
         ),
       getEdge: async (uuid) => this.clone(this.graph.edges.find((e) => e.uuid === uuid) ?? null),
-      getEdgesBetween: async (source, target) =>
+      getEdgesBetween: async (source, target, limit) =>
         this.clone(
-          this.graph.edges.filter(
-            (e) => e.source_node_uuid === source && e.target_node_uuid === target,
-          ),
+          this.graph.edges
+            .filter((e) => e.source_node_uuid === source && e.target_node_uuid === target)
+            .slice(0, limit),
         ),
       getEdgesForEntity: async (uuid) =>
         this.clone(

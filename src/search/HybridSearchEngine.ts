@@ -16,6 +16,7 @@ import {
 import { formatBudgetedItems, type BudgetedSectionResult } from './ContextBudget';
 import type { EntityEdge } from '../schemas';
 import type { SourceHydrationBudget } from '../schemas/ExtractionPolicy.schema';
+import type { AutomaticReadContext } from '../schemas/AutomaticRuntime.schema';
 
 export interface HybridSearchOptions {
   limit?: number;
@@ -32,6 +33,7 @@ export interface HybridSearchOptions {
   diagnosticsCandidateLimit?: number;
   captureMatchEvidence?: boolean;
   hydrationBudget?: SourceHydrationBudget;
+  automaticBudget?: AutomaticReadContext;
 }
 
 export interface HybridSearchResults {
@@ -248,7 +250,12 @@ export class HybridSearchEngine {
           retrievalFilters,
           options?.hydrationBudget,
         ),
-        this.governance.governEdges(edgeCandidates, retrievalFilters, options?.hydrationBudget),
+        this.governance.governEdges(
+          edgeCandidates,
+          retrievalFilters,
+          options?.hydrationBudget,
+          options?.automaticBudget,
+        ),
       ]);
       return { entities: entities.slice(0, limit), edges: edges.slice(0, limit) };
     }
@@ -263,6 +270,7 @@ export class HybridSearchEngine {
         edgeCandidates,
         retrievalFilters,
         options?.hydrationBudget,
+        options?.automaticBudget,
       ),
     ]);
     const entities = entityGovernance.results.slice(0, limit);
@@ -555,6 +563,7 @@ export class HybridSearchEngine {
     edges: EntityEdge[],
     filters: RetrievalFilters = {},
     budget?: SourceHydrationBudget,
+    automatic?: AutomaticReadContext,
   ): Promise<GovernedEdgeSearchResult[]> {
     const results = (
       await Promise.all(
@@ -568,7 +577,7 @@ export class HybridSearchEngine {
         }),
       )
     ).filter((result): result is EdgeSearchResult => result !== null);
-    return this.governance.governEdges(results, filters, budget);
+    return this.governance.governEdges(results, filters, budget, automatic);
   }
 
   private formatFactWithProvenance(result: GovernedEdgeSearchResult): string {

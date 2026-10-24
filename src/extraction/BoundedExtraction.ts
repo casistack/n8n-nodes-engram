@@ -20,6 +20,7 @@ import { LlmClient, type LlmClientConfig } from './LlmClient';
 import {
   ExtractionDiagnostics,
   ExtractionError,
+  ExtractionBudgetError,
   reportExtractionError,
 } from './ExtractionDiagnostics';
 import { RequestBudget } from './RequestBudget';
@@ -181,7 +182,7 @@ export async function boundedExtract(
   let phase: ExtractionStage = 'entities';
   try {
     if (Buffer.byteLength(JSON.stringify(selected)) > 64 * 1024)
-      throw new ExtractionError('budget_exhausted');
+      throw new ExtractionBudgetError('source_bytes');
     const existing = await storage.listEntities(group);
     budget.check();
     diagnostics.stageMetric('entity_dedup').candidates = existing.length;
@@ -273,6 +274,7 @@ export async function boundedExtract(
           const matches: EntityNode[] = [];
           for (const entity of shortlist) {
             if (fuzzyCalls >= policy.fuzzy_calls) {
+              diagnostics.budget('comparison_count');
               uncertain = true;
               deferReason = 'budget';
               break;

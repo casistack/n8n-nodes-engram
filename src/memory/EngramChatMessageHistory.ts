@@ -55,6 +55,10 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   private policy: ReturnType<typeof MemoryPolicySchema.parse>;
   private turnWriter?: (messages: BaseMessage[]) => Promise<MemoryDeliveryOutcome>;
   private deliveryOnly = false;
+  private excludedSourceId?: string;
+  excludeCurrentSource(uuid: string): void {
+    this.excludedSourceId = uuid;
+  }
 
   constructor(params: {
     storage: IGraphStorage;
@@ -97,11 +101,19 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     history: HistoryReadDiagnostics;
   }> {
     const filtering = this.policy.historyFilter !== 'off' || this.policy.finalTurnWrites;
-    const limit = filtering ? this.policy.maxHistoryScan + 1 : this.contextWindow;
+    const limit =
+      (filtering ? this.policy.maxHistoryScan + 1 : this.contextWindow) +
+      (this.excludedSourceId ? 1 : 0);
     // Detach immediately: mutations during later processing cannot change this read's evidence.
     const episodes = JSON.parse(
       JSON.stringify(await this.storage.getRecentEpisodes(this.groupId, limit)),
     ) as EpisodicNode[];
+    if (this.excludedSourceId) {
+      const index = episodes.findIndex((episode) => episode.uuid === this.excludedSourceId);
+      if (index >= 0) episodes.splice(index, 1);
+      if (!filtering && episodes.length > this.contextWindow)
+        episodes.splice(0, episodes.length - this.contextWindow);
+    }
     if (!filtering)
       return {
         messages: episodes.map((ep) => this.episodeToMessage(ep)),

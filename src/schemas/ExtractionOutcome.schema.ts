@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { StorageTotalsSchema } from './StorageObservation.schema';
+import { AutomaticReceiptSchema } from './AutomaticClaim.schema';
+import { ExtractionBudgetOutcomeSchema } from './ExtractionBudget.schema';
 
 export const ExtractionTemperatureSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('legacy') }),
@@ -128,5 +130,7 @@ export const ExtractionOutcomeSchema = z.object({
   error_count: z.number().int().nonnegative(),
   errors_truncated: z.boolean(),
   metrics: ExtractionMetricsSchema.optional(),
+  automatic: AutomaticReceiptSchema.optional(),
+  budget: ExtractionBudgetOutcomeSchema.optional(),
 });
 export type ExtractionOutcome = z.infer<typeof ExtractionOutcomeSchema>;

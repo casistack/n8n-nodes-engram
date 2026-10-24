@@ -1,4 +1,7 @@
 import { StorageAccumulator } from '../../storage/StorageDiagnostics';
+import { automaticAdminProperties, executeAutomaticAdmin } from '../../utils/automaticAdmin';
+import { automaticProfileProperty, readAutomaticPolicy } from '../../utils/automaticMemory';
+import { fingerprint } from '../../extraction/QueueState';
 import { existsSync, promises as fsPromises } from 'fs';
 import { dirname } from 'path';
 import { advancedExtractionProperties, readExtractionPolicy } from '../../utils/advancedExtraction';
@@ -37,6 +40,7 @@ import { LlmClient } from '../../extraction/LlmClient';
 import { EmbeddingService } from '../../embeddings';
 
 interface DiagnosticsContext {
+  storeIdentity?: string;
   backend: string;
   persistPath?: string;
   workflowId?: string;
@@ -50,7 +54,7 @@ export class EngramAdmin implements INodeType {
     name: 'engramAdmin',
     icon: 'file:engram-admin.png',
     group: ['transform'],
-    version: [1, 2],
+    version: [1, 2, 3],
     description: 'Manage and administer the Engram knowledge graph',
     defaults: {
       name: 'Engram Admin',
@@ -73,6 +77,11 @@ export class EngramAdmin implements INodeType {
       },
     ],
     properties: [
+      ...automaticAdminProperties,
+      {
+        ...automaticProfileProperty,
+        displayOptions: { show: { '@version': [3], resource: ['extractionQueue'] } },
+      },
       {
         displayName: 'Backend',
         name: 'backend',
@@ -91,6 +100,11 @@ export class EngramAdmin implements INodeType {
         type: 'options',
         noDataExpression: true,
         options: [
+          {
+            name: 'Automatic Memory',
+            value: 'automaticMemory',
+            description: 'Capture human memory and manage verified actor bindings',
+          },
           {
             name: 'Extraction Queue',
             value: 'extractionQueue',
@@ -158,7 +172,7 @@ export class EngramAdmin implements INodeType {
             action: 'Import paused extraction queue backup',
           },
         ],
-        displayOptions: { show: { resource: ['extractionQueue'], '@version': [2] } },
+        displayOptions: { show: { resource: ['extractionQueue'], '@version': [2, 3] } },
       },
       {
         displayName: 'Memory Workflow ID',
@@ -194,7 +208,7 @@ export class EngramAdmin implements INodeType {
         type: 'string',
         default: '',
         description: 'Nonsecret route identifier matching the Memory node',
-        displayOptions: { show: { resource: ['extractionQueue'] } },
+        displayOptions: { show: { resource: ['extractionQueue', 'automaticMemory'] } },
       },
       {
         displayName: 'Extraction Model',
@@ -202,7 +216,7 @@ export class EngramAdmin implements INodeType {
         type: 'string',
         default: '',
         description: 'Exact extraction model configured on the producer Memory node',
-        displayOptions: { show: { resource: ['extractionQueue'] } },
+        displayOptions: { show: { resource: ['extractionQueue', 'automaticMemory'] } },
       },
       {
         displayName: 'Extraction Temperature Mode',
@@ -215,7 +229,7 @@ export class EngramAdmin implements INodeType {
           { name: 'Custom', value: 'custom' },
         ],
         description: 'Match the producer generation setting',
-        displayOptions: { show: { resource: ['extractionQueue'] } },
+        displayOptions: { show: { resource: ['extractionQueue', 'automaticMemory'] } },
       },
       {
         displayName: 'Extraction Temperature',
@@ -224,7 +238,10 @@ export class EngramAdmin implements INodeType {
         default: 0,
         description: 'Custom extraction temperature matching the producer',
         displayOptions: {
-          show: { resource: ['extractionQueue'], queueTemperatureMode: ['custom'] },
+          show: {
+            resource: ['extractionQueue', 'automaticMemory'],
+            queueTemperatureMode: ['custom'],
+          },
         },
       },
       {
@@ -233,7 +250,7 @@ export class EngramAdmin implements INodeType {
         type: 'string',
         default: 'person, organization, location, concept, event',
         description: 'Comma-separated types matching the producer',
-        displayOptions: { show: { resource: ['extractionQueue'] } },
+        displayOptions: { show: { resource: ['extractionQueue', 'automaticMemory'] } },
       },
       {
         displayName: 'Auto-Accept Confidence',
@@ -242,7 +259,7 @@ export class EngramAdmin implements INodeType {
         default: 0.85,
         typeOptions: { minValue: 0, maxValue: 1 },
         description: 'Confidence threshold matching the producer',
-        displayOptions: { show: { resource: ['extractionQueue'] } },
+        displayOptions: { show: { resource: ['extractionQueue', 'automaticMemory'] } },
       },
       {
         displayName: 'Reject Below Confidence',
@@ -251,7 +268,7 @@ export class EngramAdmin implements INodeType {
         default: 0.3,
         typeOptions: { minValue: 0, maxValue: 1 },
         description: 'Rejection threshold matching the producer',
-        displayOptions: { show: { resource: ['extractionQueue'] } },
+        displayOptions: { show: { resource: ['extractionQueue', 'automaticMemory'] } },
       },
       {
         displayName: 'Worker Embeddings',
@@ -263,7 +280,7 @@ export class EngramAdmin implements INodeType {
           { name: 'Enabled', value: 'enabled' },
         ],
         description: 'Match the producer embedding configuration',
-        displayOptions: { show: { resource: ['extractionQueue'] } },
+        displayOptions: { show: { resource: ['extractionQueue', 'automaticMemory'] } },
       },
       {
         displayName: 'Embedding Model',
@@ -271,11 +288,15 @@ export class EngramAdmin implements INodeType {
         type: 'string',
         default: '',
         description: 'Embedding model matching the producer',
-        displayOptions: { show: { resource: ['extractionQueue'], queueEmbeddings: ['enabled'] } },
+        displayOptions: {
+          show: { resource: ['extractionQueue', 'automaticMemory'], queueEmbeddings: ['enabled'] },
+        },
       },
       ...advancedExtractionProperties.map((property) => ({
         ...property,
-        displayOptions: { show: { resource: ['extractionQueue'], '@version': [2] } },
+        displayOptions: {
+          show: { resource: ['extractionQueue', 'automaticMemory'], '@version': [2, 3] },
+        },
         ...(property.name === 'advancedExtractionPolicy' ? { default: 'bounded' } : {}),
       })),
       {
@@ -368,7 +389,7 @@ export class EngramAdmin implements INodeType {
         description:
           'Explicitly permit whole-store or group clearing to erase extraction ownership and fence outstanding work after reviewing the preview',
         displayOptions: {
-          show: { operation: ['clearGroup', 'bulkClearGroups', 'clearAll'], '@version': [2] },
+          show: { operation: ['clearGroup', 'bulkClearGroups', 'clearAll'], '@version': [2, 3] },
         },
       },
       // ===== Operations per resource =====
@@ -1151,16 +1172,25 @@ export class EngramAdmin implements INodeType {
         database: credentials.database as string,
       });
       diagnosticsContext = {
+        storeIdentity: fingerprint({
+          backend,
+          uri: credentials.uri,
+          database: credentials.database ?? 'neo4j',
+        }),
         backend,
         databaseConfigured: Boolean((credentials.database as string | undefined)?.trim()),
       };
     } else {
       const workflowId =
-        resource === 'extractionQueue'
-          ? (this.getNodeParameter('queueStorageWorkflowId', 0, '') as string).trim()
-          : (this.getWorkflow().id ?? 'default');
+        resource === 'automaticMemory'
+          ? (this.getNodeParameter('automaticWorkflowId', 0, '') as string)
+          : resource === 'extractionQueue'
+            ? (this.getNodeParameter('queueStorageWorkflowId', 0, '') as string).trim()
+            : (this.getWorkflow().id ?? 'default');
       if (resource === 'extractionQueue' && !workflowId)
         throw new Error('Memory Workflow ID is required for an embedded worker');
+      if (resource === 'automaticMemory' && !workflowId.trim())
+        throw new Error('Memory Workflow ID is required for automatic memory administration');
       const customPath = this.getNodeParameter('customStoragePath', 0, '') as string;
       const persistPath = resolveStoragePath({
         customStoragePath: customPath,
@@ -1191,6 +1221,7 @@ export class EngramAdmin implements INodeType {
         persistPath,
       });
       diagnosticsContext = {
+        storeIdentity: fingerprint({ backend: 'embedded', persistPath }),
         backend,
         persistPath,
         workflowId,
@@ -1206,7 +1237,17 @@ export class EngramAdmin implements INodeType {
         try {
           const beforeLength = returnData.length;
 
-          if (resource === 'extractionQueue') {
+          if (resource === 'automaticMemory') {
+            returnData.push({
+              json: await executeAutomaticAdmin(
+                this,
+                storage,
+                operation,
+                i,
+                diagnosticsContext.storeIdentity!,
+              ),
+            });
+          } else if (resource === 'extractionQueue') {
             await executeExtractionQueue(this, storage, operation, i, returnData);
           } else if (resource === 'monitoring') {
             await executeMonitoring(this, storage, operation, i, returnData, diagnosticsContext);
@@ -2363,6 +2404,15 @@ async function executeExtractionQueue(
     );
     if (policy.mode !== 'bounded') throw new Error('Durable worker requires bounded extraction');
     settings = {
+      ...((ctx.getNode().typeVersion ?? 1) >= 3 &&
+      readAutomaticPolicy((name, fallback) => ctx.getNodeParameter(name, i, fallback as string))
+        .profileId !== 'existing'
+        ? {
+            automaticPolicy: readAutomaticPolicy((name, fallback) =>
+              ctx.getNodeParameter(name, i, fallback as string),
+            ),
+          }
+        : {}),
       llm: {
         apiKey: credentials.apiKey as string,
         baseUrl: credentials.baseUrl as string,

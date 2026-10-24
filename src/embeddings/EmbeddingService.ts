@@ -70,7 +70,14 @@ export class EmbeddingService {
       const controller = new AbortController();
       const abort = () => controller.abort();
       this.budget?.controller.signal.addEventListener('abort', abort, { once: true });
-      const timeout = setTimeout(abort, Math.min(remaining ?? this.timeoutMs, this.timeoutMs));
+      const timeout = setTimeout(
+        () => {
+          if (remaining !== undefined && remaining <= this.timeoutMs)
+            this.budget?.controller.abort();
+          abort();
+        },
+        Math.min(remaining ?? this.timeoutMs, this.timeoutMs),
+      );
 
       const metric = this.diagnostics?.beginRequest('embeddings');
       try {

@@ -18,8 +18,18 @@ import { StagedGraph } from './StagedGraph';
 import { boundedExtract } from './BoundedExtraction';
 import type { LlmClientConfig } from './LlmClient';
 import type { EmbeddingConfig } from '../embeddings';
-import { ExtractionDiagnostics, ExtractionError } from './ExtractionDiagnostics';
+import {
+  ExtractionDiagnostics,
+  ExtractionError,
+  ExtractionBudgetError,
+} from './ExtractionDiagnostics';
 import type { ExtractionSource } from './ExtractionSource';
+import type { AutomaticPolicy } from '../schemas/AutomaticMemory.schema';
+import {
+  planAutomaticClaims,
+  committedAutomaticReceipt,
+  failedAutomaticReceipt,
+} from './AutomaticClaims';
 
 export type ExtractionSettings = {
   llm: LlmClientConfig;
@@ -29,6 +39,7 @@ export type ExtractionSettings = {
   threshold?: ExtractionThresholdPolicy;
   signal?: AbortSignal;
   execution?: 'synchronous' | 'durable';
+  automaticPolicy?: AutomaticPolicy;
 };
 export function queueBinding(routeId: string, config: ExtractionSettings): QueueBinding {
   const safeRoute = (value: string) => {
@@ -54,6 +65,9 @@ export function queueBinding(routeId: string, config: ExtractionSettings): Queue
       policy: ExtractionPolicySchema.parse(config.policy),
       types: config.types,
       threshold: config.threshold ?? null,
+      ...(config.automaticPolicy && config.automaticPolicy.profileId !== 'existing'
+        ? { automaticPolicy: config.automaticPolicy }
+        : {}),
     }),
   };
 }
@@ -65,7 +79,7 @@ export async function prepareExtraction(
 ): Promise<StagedExtraction> {
   if (!storage.readExtractionSnapshot)
     throw new Error('Engram extraction: atomic_storage_required');
-  if (sources.length > 32) throw new ExtractionError('budget_exhausted');
+  if (sources.length > 32) throw new ExtractionBudgetError('source_count');
   const started = performance.now();
   const policy = ExtractionPolicySchema.parse(config.policy);
   const diagnostics = new ExtractionDiagnostics({
@@ -86,8 +100,8 @@ export async function prepareExtraction(
     }
   })();
   let remaining = Math.floor(policy.deadline_ms - (performance.now() - started));
-  if (config.signal?.aborted) throw new ExtractionError('cancelled');
-  if (remaining <= 0) throw new ExtractionError('budget_exhausted');
+  if (config.signal?.aborted) throw new ExtractionBudgetError('cancelled');
+  if (remaining <= 0) throw new ExtractionBudgetError('deadline');
   for (const source of sources) {
     const episode = snapshot.episodes.find((ep) => ep.uuid === source.episode_uuid);
     if (
@@ -97,6 +111,40 @@ export async function prepareExtraction(
       episode.episode_kind !== source.episode_kind
     )
       throw new Error('Engram queue: source_changed');
+  }
+  if (config.automaticPolicy && config.automaticPolicy.profileId !== 'existing') {
+    const endAutomatic = diagnostics.begin('entities');
+    const check = () => {
+      if (config.signal?.aborted) throw new ExtractionBudgetError('cancelled');
+      if (performance.now() - started >= policy.deadline_ms)
+        throw new ExtractionBudgetError('deadline');
+    };
+    try {
+      const result = planAutomaticClaims(
+        snapshot,
+        group,
+        sources.map((source) => source.episode_uuid!),
+        config.automaticPolicy,
+        diagnostics.finish(),
+        new Date().toISOString(),
+        check,
+      );
+      check();
+      endAutomatic();
+      diagnostics.success('entities');
+      diagnostics.success('relationships');
+      const measured = diagnostics.finish();
+      result.outcome = {
+        ...measured,
+        counts: result.outcome.counts,
+        automatic: result.outcome.automatic,
+        duration_scope: 'preparation',
+      };
+      return result;
+    } catch (error) {
+      endAutomatic(true);
+      throw error;
+    }
   }
   const staged = new StagedGraph(
     snapshot,
@@ -158,14 +206,15 @@ async function runBoundedExtractionCore(
     ] as const)
       plan.outcome.counts[key] = 0;
     plan.outcome.status = 'failed';
+    failedAutomaticReceipt(plan.outcome);
     return plan.outcome;
   }
   const applyStarted = performance.now();
   let applyDispatched = false;
   try {
-    if (config.signal?.aborted) throw new ExtractionError('cancelled');
+    if (config.signal?.aborted) throw new ExtractionBudgetError('cancelled');
     if (performance.now() - started >= ExtractionPolicySchema.parse(config.policy).deadline_ms)
-      throw new ExtractionError('budget_exhausted');
+      throw new ExtractionBudgetError('deadline');
     const metric = plan.outcome.metrics?.stages.find((item) => item.stage === 'persistence');
     if (metric) metric.operations++;
     applyDispatched = true;
@@ -185,6 +234,9 @@ async function runBoundedExtractionCore(
     if (outcome.errors.length < 20) outcome.errors.push({ stage: 'persistence', kind });
     else outcome.errors_truncated = true;
     outcome.status = 'failed';
+    if (error instanceof ExtractionBudgetError)
+      outcome.budget = { version: 1, reason: error.budgetReason };
+    failedAutomaticReceipt(outcome);
     outcome.duration_ms = performance.now() - started;
     const metric = outcome.metrics?.stages.find((item) => item.stage === 'persistence');
     if (metric && applyDispatched) {
@@ -199,6 +251,7 @@ async function runBoundedExtractionCore(
     return outcome;
   }
   const outcome = plan.outcome;
+  committedAutomaticReceipt(outcome, new Date().toISOString());
   outcome.duration_scope = 'end_to_end';
   outcome.duration_ms = performance.now() - started;
   const metric = outcome.metrics?.stages.find((item) => item.stage === 'persistence');

@@ -66,6 +66,26 @@ import {
   EpisodicNodeSchema,
   migrateGraphData,
 } from '../schemas';
+import { AutomaticBindingCommandSchema } from '../schemas/AutomaticOperations.schema';
+import type {
+  AutomaticBindingCommand,
+  AutomaticBindingRecord,
+} from '../schemas/AutomaticOperations.schema';
+import {
+  applyAutomaticBindingCommand,
+  assertAutomaticEntityDeleteAllowed,
+  assertAutomaticEpisodeBinding,
+  assertAutomaticEpisodeTrustedPath,
+  assertNoAutomaticBindingAttribute,
+  prepareAutomaticEntityUpdate,
+  prepareAutomaticEpisodeInput,
+  prepareAutomaticEpisodeUpdate,
+  prepareAutomaticImport,
+  protectAutomaticEpisode,
+  assertOwnedEpisodeReplay,
+  SOURCE_ENVELOPE_ATTRIBUTE,
+  WRITE_OWNER_ATTRIBUTE,
+} from './AutomaticIdentity';
 
 export class Neo4jStorage implements IGraphStorage {
   private driver: Driver;
@@ -193,6 +213,25 @@ export class Neo4jStorage implements IGraphStorage {
   extractionBackend(): 'neo4j' {
     return 'neo4j';
   }
+
+  async automaticBindingCommand(command: AutomaticBindingCommand): Promise<AutomaticBindingRecord> {
+    const parsed = AutomaticBindingCommandSchema.parse(command);
+    // Neo4j may retry the transaction callback, so mutation identity is fixed before it starts.
+    const bindingId = parsed.action === 'create' ? generateUuid() : parsed.bindingId;
+    const at = nowIso();
+    const session = this.getSession();
+    try {
+      return await this.executeWrite(session, async (tx) => {
+        const before = await this.graphInTransaction(tx);
+        const after = JSON.parse(JSON.stringify(before)) as GraphData;
+        const record = applyAutomaticBindingCommand(after, parsed, bindingId, at);
+        await this.writeExtractionDiff(tx, before, after);
+        return record;
+      });
+    } finally {
+      await session.close();
+    }
+  }
   supportsDurableExtraction(): boolean {
     return true;
   }
@@ -300,6 +339,25 @@ export class Neo4jStorage implements IGraphStorage {
     binding: QueueBinding,
     limits: QueueLimits,
   ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
+    return this.appendEpisodesWithExtractionInternal(inputs, eligible, binding, limits, false);
+  }
+
+  async appendAutomaticEpisodesWithExtraction(
+    inputs: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
+    return this.appendEpisodesWithExtractionInternal(inputs, eligible, binding, limits, true);
+  }
+
+  private async appendEpisodesWithExtractionInternal(
+    inputs: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+    allowTrustedAutomatic: boolean,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
     if (
       !inputs.length ||
       inputs.length > 1000 ||
@@ -309,18 +367,37 @@ export class Neo4jStorage implements IGraphStorage {
       )
     )
       throw new Error('Engram queue: invalid_batch');
+    for (const input of inputs) assertAutomaticEpisodeTrustedPath(input, allowTrustedAutomatic);
     const invocation = generateUuid();
     const prepared = inputs.map((input, index) => ({
       uuid: generateUuid(),
-      parsed: CreateEpisodicNodeSchema.parse({
-        ...input,
-        idempotency_key: input.idempotency_key ?? `queue-write:${invocation}:${index}`,
-      }),
+      parsed: CreateEpisodicNodeSchema.parse(
+        allowTrustedAutomatic
+          ? prepareAutomaticEpisodeInput({
+              ...input,
+              idempotency_key: input.idempotency_key ?? `queue-write:${invocation}:${index}`,
+            })
+          : {
+              ...input,
+              idempotency_key: input.idempotency_key ?? `queue-write:${invocation}:${index}`,
+            },
+      ),
       auto: !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
     }));
     const session = this.getSession();
     try {
       return await this.executeWrite(session, async (tx) => {
+        if (
+          allowTrustedAutomatic &&
+          prepared.some(
+            ({ parsed }) =>
+              Object.prototype.hasOwnProperty.call(parsed.attributes, SOURCE_ENVELOPE_ATTRIBUTE) ||
+              Object.prototype.hasOwnProperty.call(parsed.attributes, WRITE_OWNER_ATTRIBUTE),
+          )
+        ) {
+          const graph = await this.graphInTransaction(tx);
+          for (const item of prepared) assertAutomaticEpisodeBinding(graph, item.parsed);
+        }
         await this.lockEpisodeGroup(tx, inputs[0].group_id);
         const sequenceResult = await tx.run(
           `MATCH (lock:EpisodeGroupLock {group_id:$group})
@@ -348,7 +425,9 @@ export class Neo4jStorage implements IGraphStorage {
         return {
           results: results.map((item) => ({
             ...item,
-            episode: after.episodes.find((ep) => ep.uuid === item.episode.uuid)!,
+            episode: protectAutomaticEpisode(
+              after.episodes.find((ep) => ep.uuid === item.episode.uuid)!,
+            ),
           })),
           jobs: refs,
           queue: queueStats(after, inputs[0].group_id),
@@ -385,11 +464,12 @@ export class Neo4jStorage implements IGraphStorage {
       await this.executeWrite(session, async (tx) => {
         const existing = await this.graphInTransaction(tx);
         const incoming = prepareQueueImport(input, existing, nowIso());
+        const safeIncoming = prepareAutomaticImport(incoming, existing);
         const after = {
           ...existing,
-          entities: [...existing.entities, ...incoming.entities],
-          edges: [...existing.edges, ...incoming.edges],
-          episodes: [...existing.episodes, ...incoming.episodes],
+          entities: [...existing.entities, ...safeIncoming.entities],
+          edges: [...existing.edges, ...safeIncoming.edges],
+          episodes: [...existing.episodes, ...safeIncoming.episodes],
         };
         await this.writeExtractionDiff(tx, existing, after);
         for (const ep of incoming.episodes) {
@@ -652,6 +732,7 @@ export class Neo4jStorage implements IGraphStorage {
   // ===== Entity Operations =====
 
   async addEntity(input: CreateEntityNode): Promise<EntityNode> {
+    assertNoAutomaticBindingAttribute(input.attributes);
     const now = nowIso();
     const entity: EntityNode = {
       uuid: generateUuid(),
@@ -731,51 +812,50 @@ export class Neo4jStorage implements IGraphStorage {
   }
 
   async updateEntity(uuid: string, updates: Partial<EntityNode>): Promise<EntityNode> {
+    if (updates.name_embedding && updates.name_embedding.length > 0) {
+      await this.ensureVectorIndex(updates.name_embedding.length);
+    }
     const session = this.getSession();
     try {
-      const setClauses: string[] = ['e.updated_at = $updated_at'];
-      const params: Record<string, unknown> = {
-        uuid,
-        updated_at: nowIso(),
-      };
+      return await this.executeWrite(session, async (tx) => {
+        const existingResult = await tx.run('MATCH (e:Entity {uuid:$uuid}) RETURN e', { uuid });
+        if (existingResult.records.length === 0) throw new Error(`Entity not found: ${uuid}`);
+        const existing = this.recordToEntity(existingResult.records[0].get('e').properties);
+        const safeUpdates = prepareAutomaticEntityUpdate(existing, updates);
+        const setClauses: string[] = ['e.updated_at = $updated_at'];
+        const params: Record<string, unknown> = {
+          uuid,
+          updated_at: nowIso(),
+        };
 
-      if (updates.name !== undefined) {
-        setClauses.push('e.name = $name');
-        params.name = updates.name;
-      }
-      if (updates.summary !== undefined) {
-        setClauses.push('e.summary = $summary');
-        params.summary = updates.summary;
-      }
-      if (updates.entity_type !== undefined) {
-        setClauses.push('e.entity_type = $entity_type');
-        params.entity_type = updates.entity_type;
-      }
-      if (updates.attributes !== undefined) {
-        setClauses.push('e.attributes = $attributes');
-        params.attributes = JSON.stringify(updates.attributes);
-      }
-      if (updates.name_embedding !== undefined) {
-        setClauses.push('e.name_embedding = $name_embedding');
-        params.name_embedding = updates.name_embedding;
-        // Lazily create vector index when first embedding is stored
-        if (updates.name_embedding && updates.name_embedding.length > 0) {
-          await this.ensureVectorIndex(updates.name_embedding.length);
+        if (safeUpdates.name !== undefined) {
+          setClauses.push('e.name = $name');
+          params.name = safeUpdates.name;
         }
-      }
+        if (safeUpdates.summary !== undefined) {
+          setClauses.push('e.summary = $summary');
+          params.summary = safeUpdates.summary;
+        }
+        if (safeUpdates.entity_type !== undefined) {
+          setClauses.push('e.entity_type = $entity_type');
+          params.entity_type = safeUpdates.entity_type;
+        }
+        if (safeUpdates.attributes !== undefined) {
+          setClauses.push('e.attributes = $attributes');
+          params.attributes = JSON.stringify(safeUpdates.attributes);
+        }
+        if (safeUpdates.name_embedding !== undefined) {
+          setClauses.push('e.name_embedding = $name_embedding');
+          params.name_embedding = safeUpdates.name_embedding;
+        }
 
-      const result = await this.executeWrite(session, async (tx) => {
-        return tx.run(
+        const result = await tx.run(
           `MATCH (e:Entity {uuid: $uuid}) SET ${setClauses.join(', ')} RETURN e`,
           params,
         );
+        if (result.records.length === 0) throw new Error(`Entity not found: ${uuid}`);
+        return this.recordToEntity(result.records[0].get('e').properties);
       });
-
-      if (result.records.length === 0) {
-        throw new Error(`Entity not found: ${uuid}`);
-      }
-
-      return this.recordToEntity(result.records[0].get('e').properties);
     } finally {
       await session.close();
     }
@@ -785,6 +865,12 @@ export class Neo4jStorage implements IGraphStorage {
     const session = this.getSession();
     try {
       await this.executeWrite(session, async (tx) => {
+        const existing = await tx.run('MATCH (e:Entity {uuid:$uuid}) RETURN e', { uuid });
+        if (existing.records.length > 0) {
+          assertAutomaticEntityDeleteAllowed(
+            this.recordToEntity(existing.records[0].get('e').properties),
+          );
+        }
         await tx.run('MATCH (e:Entity {uuid: $uuid}) DETACH DELETE e', { uuid });
       });
     } finally {
@@ -918,17 +1004,38 @@ export class Neo4jStorage implements IGraphStorage {
     }
   }
 
-  async getEdgesBetween(sourceUuid: string, targetUuid: string): Promise<EntityEdge[]> {
+  async getEdgesBetween(
+    sourceUuid: string,
+    targetUuid: string,
+    limit?: number,
+  ): Promise<EntityEdge[]> {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 129)) {
+      throw new Error('Edge limit must be an integer between 1 and 129');
+    }
     const session = this.getSession();
     try {
       const result = await session.executeRead(async (tx) => {
+        if (limit === undefined) {
+          return tx.run(
+            `MATCH (s:Entity {uuid: $sourceUuid})-[r:RELATES_TO]->(t:Entity {uuid: $targetUuid})
+             RETURN r
+             UNION
+             MATCH (s:Entity {uuid: $targetUuid})-[r:RELATES_TO]->(t:Entity {uuid: $sourceUuid})
+             RETURN r`,
+            { sourceUuid, targetUuid },
+          );
+        }
         return tx.run(
-          `MATCH (s:Entity {uuid: $sourceUuid})-[r:RELATES_TO]->(t:Entity {uuid: $targetUuid})
-					 RETURN r
-					 UNION
-					 MATCH (s:Entity {uuid: $targetUuid})-[r:RELATES_TO]->(t:Entity {uuid: $sourceUuid})
-					 RETURN r`,
-          { sourceUuid, targetUuid },
+          `CALL {
+             MATCH (s:Entity {uuid: $sourceUuid})-[r:RELATES_TO]->(t:Entity {uuid: $targetUuid})
+             RETURN r
+             UNION
+             MATCH (s:Entity {uuid: $targetUuid})-[r:RELATES_TO]->(t:Entity {uuid: $sourceUuid})
+             RETURN r
+           }
+           RETURN r
+           LIMIT $limit`,
+          { sourceUuid, targetUuid, limit: neo4j.int(limit) },
         );
       });
 
@@ -1048,6 +1155,10 @@ export class Neo4jStorage implements IGraphStorage {
     return this.appendEpisodesWithOptions(inputs, true);
   }
 
+  async appendAutomaticEpisodes(inputs: CreateEpisodicNode[]): Promise<AppendEpisodeResult[]> {
+    return this.appendEpisodesWithOptions(inputs, true, true);
+  }
+
   private async appendEpisodeWithOptions(
     input: CreateEpisodicNode,
     autoChain: boolean,
@@ -1058,10 +1169,12 @@ export class Neo4jStorage implements IGraphStorage {
   private async appendEpisodesWithOptions(
     inputs: CreateEpisodicNode[],
     autoChain: boolean,
+    allowTrustedAutomatic = false,
   ): Promise<AppendEpisodeResult[]> {
     if (inputs.length === 0) return [];
     if (inputs.length > 1000) throw new Error('Episode append batch cannot exceed 1000 episodes');
 
+    for (const input of inputs) assertAutomaticEpisodeTrustedPath(input, allowTrustedAutomatic);
     if (inputs.some((ep) => ep.attributes?.[QUEUE_ATTRIBUTE] !== undefined))
       throw new Error('Engram queue: reserved_attribute');
     const groupId = inputs[0].group_id;
@@ -1070,14 +1183,28 @@ export class Neo4jStorage implements IGraphStorage {
     }
 
     const prepared = inputs.map((input) => ({
+      uuid: generateUuid(),
       shouldAutoChain:
         autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
-      parsed: CreateEpisodicNodeSchema.parse(input),
+      parsed: CreateEpisodicNodeSchema.parse(
+        allowTrustedAutomatic ? prepareAutomaticEpisodeInput(input) : input,
+      ),
     }));
 
     const session = this.getSession();
     try {
       return await this.executeWrite(session, async (tx) => {
+        if (
+          allowTrustedAutomatic &&
+          prepared.some(
+            ({ parsed }) =>
+              Object.prototype.hasOwnProperty.call(parsed.attributes, SOURCE_ENVELOPE_ATTRIBUTE) ||
+              Object.prototype.hasOwnProperty.call(parsed.attributes, WRITE_OWNER_ATTRIBUTE),
+          )
+        ) {
+          const graph = await this.graphInTransaction(tx);
+          for (const item of prepared) assertAutomaticEpisodeBinding(graph, item.parsed);
+        }
         const lockResult = await tx.run(
           `MERGE (lock:EpisodeGroupLock {group_id: $group_id})
            SET lock.sequence = coalesce(lock.sequence, 0) + $batch_size,
@@ -1103,6 +1230,7 @@ export class Neo4jStorage implements IGraphStorage {
               item.parsed,
               item.shouldAutoChain,
               firstSequence + index,
+              item.uuid,
             ),
           );
         }
@@ -1145,7 +1273,10 @@ export class Neo4jStorage implements IGraphStorage {
         throw new Error('Episode idempotency identifiers resolve to different existing episodes');
       }
       const existing = existingEpisodes.values().next().value as EpisodicNode | undefined;
-      if (existing) return { episode: existing, created: false };
+      if (existing) {
+        assertOwnedEpisodeReplay(existing, parsed);
+        return { episode: protectAutomaticEpisode(existing), created: false };
+      }
     }
 
     let previousEpisodeUuid = parsed.previous_episode_uuid;
@@ -1161,13 +1292,13 @@ export class Neo4jStorage implements IGraphStorage {
     }
 
     const createdAt = nowIso();
-    const episode: EpisodicNode = {
+    const episode = protectAutomaticEpisode({
       uuid: preparedUuid ?? generateUuid(),
       ...parsed,
       previous_episode_uuid: previousEpisodeUuid,
       created_at: createdAt,
       updated_at: createdAt,
-    };
+    });
 
     await tx.run(
       `CREATE (ep:Episode {
@@ -1271,11 +1402,12 @@ export class Neo4jStorage implements IGraphStorage {
         assertNoQueueMutation([existing]);
         if (updates.attributes?.[QUEUE_ATTRIBUTE] !== undefined)
           throw new Error('Engram queue: reserved_attribute');
+        const safeUpdates = prepareAutomaticEpisodeUpdate(existing, updates);
         await this.lockEpisodeGroup(tx, existing.group_id);
 
         const updated = EpisodicNodeSchema.parse({
           ...existing,
-          ...updates,
+          ...safeUpdates,
           uuid: existing.uuid,
           group_id: existing.group_id,
           source_message_id: existing.source_message_id,
@@ -1960,12 +2092,14 @@ export class Neo4jStorage implements IGraphStorage {
     const session = this.getSession();
     try {
       await this.executeWrite(session, async (tx) => {
+        const existing = await this.graphInTransaction(tx);
+        const safeData = prepareAutomaticImport(data, existing);
         await tx.run(`MATCH (lock:EngramStoreLock {id:'extraction-v1'}) SET lock.epoch=$epoch`, {
           epoch: generateUuid(),
         });
         const existingQueueSources = await tx.run(
           'MATCH (ep:Episode) WHERE ep.uuid IN $ids RETURN ep',
-          { ids: data.episodes.map((ep) => ep.uuid) },
+          { ids: safeData.episodes.map((ep) => ep.uuid) },
         );
         assertNoQueueMutation(
           existingQueueSources.records.map((record) =>
@@ -1973,7 +2107,7 @@ export class Neo4jStorage implements IGraphStorage {
           ),
         );
         // Import entities
-        for (const entity of data.entities) {
+        for (const entity of safeData.entities) {
           await tx.run(
             `MERGE (e:Entity {uuid: $uuid})
 						 SET e += {
@@ -1994,7 +2128,7 @@ export class Neo4jStorage implements IGraphStorage {
         }
 
         // Import episodes
-        for (const episode of data.episodes) {
+        for (const episode of safeData.episodes) {
           await tx.run(
             `MERGE (ep:Episode {uuid: $uuid})
 						 SET ep += {
@@ -2032,7 +2166,7 @@ export class Neo4jStorage implements IGraphStorage {
         }
 
         // Import edges
-        for (const edge of data.edges) {
+        for (const edge of safeData.edges) {
           await tx.run(
             `MATCH (source:Entity {uuid: $source_node_uuid})
 						 MATCH (target:Entity {uuid: $target_node_uuid})
@@ -2060,7 +2194,7 @@ export class Neo4jStorage implements IGraphStorage {
         }
 
         // Recreate episode chains
-        for (const episode of data.episodes) {
+        for (const episode of safeData.episodes) {
           if (episode.previous_episode_uuid) {
             await tx.run(
               `MATCH (prev:Episode {uuid: $prevUuid})

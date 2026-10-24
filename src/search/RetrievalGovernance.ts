@@ -8,6 +8,8 @@ import type {
 import { extractionMetadataFromAttributes } from '../schemas';
 import type { SourceHydrationBudget } from '../schemas/ExtractionPolicy.schema';
 import type { EdgeSearchResult, EntitySearchResult, IGraphStorage } from '../storage/IGraphStorage';
+import { automaticClaimVisible } from './AutomaticRetrieval';
+import type { AutomaticReadContext } from '../schemas/AutomaticRuntime.schema';
 
 export interface RetrievalFilters {
   sender_id?: string;
@@ -92,6 +94,12 @@ export class RetrievalGovernance {
     const governed: EntitySearchResult[] = [];
     const decisions: RetrievalCandidateDecision[] = [];
     for (const result of results) {
+      if (Object.prototype.hasOwnProperty.call(result.entity.attributes, 'engram_literal_v1')) {
+        decisions.push(
+          this.decision(result.entity.uuid, 'entity', result.score, false, 'attributed_value_only'),
+        );
+        continue;
+      }
       const metadata = metadataByEntity.get(result.entity.uuid) ?? null;
       const reviewStatus = metadata?.review_status ?? 'accepted';
       if (filters.review_statuses?.length && !filters.review_statuses.includes(reviewStatus)) {
@@ -133,15 +141,19 @@ export class RetrievalGovernance {
     results: EdgeSearchResult[],
     filters: RetrievalFilters = {},
     budget?: SourceHydrationBudget,
+    automatic?: AutomaticReadContext,
   ): Promise<GovernedEdgeSearchResult[]> {
-    return (await this.governEdgesWithDecisions(results, filters, budget)).results;
+    return (await this.governEdgesWithDecisions(results, filters, budget, automatic)).results;
   }
 
   async governEdgesWithDecisions(
     results: EdgeSearchResult[],
     filters: RetrievalFilters = {},
     budget?: SourceHydrationBudget,
+    automatic?: AutomaticReadContext,
   ): Promise<GovernedResult<GovernedEdgeSearchResult>> {
+    const automaticBudget = automatic?.sources ?? budget ?? { remaining: 512, deferred: 0 };
+    const automaticScans = automatic?.conflicts ?? { remaining: 128 };
     results = this.boundReferences(
       results,
       (result) => result.edge.episodes.length + this.referenceCount(result.edge.attributes),
@@ -156,6 +168,19 @@ export class RetrievalGovernance {
     const decisions: RetrievalCandidateDecision[] = [];
 
     for (const result of results) {
+      const automaticView = await automaticClaimVisible(
+        this.storage,
+        result.edge,
+        automaticBudget,
+        automaticScans,
+        automatic,
+      );
+      if (automaticView === 'hidden') {
+        decisions.push(
+          this.decision(result.edge.uuid, 'fact', result.score, false, 'automatic_claim_authority'),
+        );
+        continue;
+      }
       const factMetadata = extractionMetadataFromAttributes(result.edge.attributes);
       const factReviewStatus = factMetadata?.review_status ?? 'accepted';
       if (filters.review_statuses?.length && !filters.review_statuses.includes(factReviewStatus)) {
@@ -186,7 +211,20 @@ export class RetrievalGovernance {
               this.episodeProvenance(episode, factMetadata?.confidence ?? null, factReviewStatus),
             )
           : [this.unknownProvenance(factMetadata?.confidence ?? null, factReviewStatus)];
-      governed.push({ ...result, provenance });
+      governed.push({
+        ...result,
+        provenance,
+        ...(automaticView === 'historical_record'
+          ? {
+              edge: {
+                ...result.edge,
+                fact:
+                  result.edge.fact +
+                  ` [Historical recorded preference; recorded review=${factReviewStatus}; current identity and validity not established; not current personalization]`,
+              },
+            }
+          : {}),
+      });
       decisions.push(this.decision(result.edge.uuid, 'fact', result.score, true, 'included'));
     }
     return { results: governed, decisions };

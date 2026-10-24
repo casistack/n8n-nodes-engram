@@ -22,7 +22,7 @@ export const LegacyExtractionMetadataSchema = z.object({
 
 export const ExtractionMetadataV2Schema = z.object({
   version: z.literal(2),
-  source: ExtractionSourceSchema,
+  source: ExtractionSourceSchema.or(z.literal('policy')),
   confidence: z.number().min(0).max(1).nullable().default(null),
   review_status: EpisodeReviewStatusSchema.default('proposed'),
   threshold_decision: ExtractionThresholdDecisionSchema.default('pending_review'),

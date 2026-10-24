@@ -1,6 +1,7 @@
 import type { IGraphStorage } from '../storage/IGraphStorage';
 import { HybridSearchEngine } from './HybridSearchEngine';
 import { GraphTraverser } from '../traversal/GraphTraverser';
+import { AutomaticClaimMetadataSchema } from '../schemas/AutomaticClaim.schema';
 import type { RetrievalFilters } from './RetrievalGovernance';
 import {
   extractionMetadataFromAttributes,
@@ -36,6 +37,12 @@ export async function governedContext(
     throw new Error('Engram retrieval: as_of_requires_timestamp');
   const evidenceBudgets = GraphEvidenceBudgetsSchema.parse(options.evidenceBudgets);
   const hydration = { remaining: 512, deferred: 0 };
+  const automatic = {
+    mode: options.mode,
+    at: options.at,
+    conflicts: { remaining: 128 },
+    sources: hydration,
+  };
   const audit = {
     candidates: 0,
     returned: 0,
@@ -58,6 +65,7 @@ export async function governedContext(
     includeExpired: historical,
     captureMatchEvidence: true,
     hydrationBudget: hydration,
+    automaticBudget: automatic,
   });
   const combined = [...found.edges];
   if (options.traversal && found.entities.length) {
@@ -89,6 +97,7 @@ export async function governedContext(
           ...(options.acceptedOnly ? { review_statuses: ['accepted'] } : {}),
         },
         hydration,
+        automatic,
       )),
     );
   }
@@ -155,7 +164,14 @@ export async function governedContext(
       .join(' ')
       .split(hit.targetEntity.name.toLowerCase())
       .join(' ');
-    const relationText = withoutNames + ' ' + edge.name.toLowerCase().replace(/_/g, ' ');
+    const automaticClaim = AutomaticClaimMetadataSchema.safeParse(edge.attributes.engram_claim_v1);
+    const relationText =
+      withoutNames +
+      ' ' +
+      edge.name.toLowerCase().replace(/_/g, ' ') +
+      (automaticClaim.success
+        ? ' preference ' + automaticClaim.data.claim.literal.toLowerCase()
+        : '');
     const lexical = relationText
       .split(/\W+/)
       .some((token) => queryTokens.has(normalizeTerm(token)));

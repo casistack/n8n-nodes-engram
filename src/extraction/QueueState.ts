@@ -26,6 +26,8 @@ import {
 } from '../schemas';
 import type { AppendEpisodeResult } from '../storage/IGraphStorage';
 import { isDurableAssertion } from './AssertionEvidence';
+import { validateAutomaticPlan, committedAutomaticReceipt } from './AutomaticClaims';
+import { assertNoAutomaticBindingMutation } from '../storage/AutomaticIdentity';
 
 export const QUEUE_ATTRIBUTE = 'engram_extraction_queue_v1';
 const terminal = new Set(['completed', 'cancelled']);
@@ -234,6 +236,7 @@ export function applyPlan(graph: GraphData, input: StagedExtraction, queued = fa
   if (graphFingerprint(graph, plan.group_id) !== plan.graph_hash)
     throw new Error('Engram queue: graph_changed');
   if (Buffer.byteLength(canonical(plan)) > 512 * 1024) throw new Error('Engram queue: plan_size');
+  const automatic = validateAutomaticPlan(graph, plan);
   if (
     [...plan.entities, ...plan.edges].some(
       (item) => item.group_id !== plan.group_id || QUEUE_ATTRIBUTE in item.attributes,
@@ -246,6 +249,7 @@ export function applyPlan(graph: GraphData, input: StagedExtraction, queued = fa
     isNew: boolean,
     extra: string[] = [],
   ) => {
+    if (automatic) return; // Entire mutation was reconstructed from trusted stored sources above.
     const meta = extractionMetadataFromAttributes(item.attributes);
     if (isNew && (!meta || meta.source !== 'llm'))
       throw new Error('Engram queue: missing_extraction_metadata');
@@ -323,6 +327,10 @@ export function applyPlan(graph: GraphData, input: StagedExtraction, queued = fa
     const other = [...graph.entities, ...graph.episodes].find((e) => e.uuid === entity.uuid);
     if (other && other.group_id !== plan.group_id) throw new Error('Engram queue: cross_group');
     const index = graph.entities.findIndex((e) => e.uuid === entity.uuid);
+    assertNoAutomaticBindingMutation(
+      entity.attributes,
+      index >= 0 ? graph.entities[index].attributes : undefined,
+    );
     if (index >= 0 && graph.entities[index].created_at !== entity.created_at)
       throw new Error('Engram queue: immutable_identity');
     if (index >= 0) {
@@ -519,6 +527,7 @@ export function queueCommand(graph: GraphData, input: QueueCommand, now: string)
         validatePlanSources(result.plan, result);
         applyPlan(graph, result.plan, true);
         result.outcome = result.plan.outcome;
+        committedAutomaticReceipt(result.outcome, now);
         const persistence = result.outcome.stages.find((stage) => stage.stage === 'persistence')!;
         persistence.status = 'succeeded';
         delete persistence.reason;

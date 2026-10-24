@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-to-v071">Upgrade</a> &middot;
+  <a href="#upgrading-to-v072">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -98,6 +98,41 @@ Engram provides dedicated n8n nodes for AI memory, graph exploration, administra
 cd ~/.n8n
 npm install n8n-nodes-engram
 ```
+
+---
+
+## Upgrading to v0.7.2
+
+Existing saved workflows retain their defaults and node versions. Installing this release does not enable automatic acceptance, change namespaces, rewrite historical memory or start a queue worker. New **Memory v3** and **Admin v3** nodes default to **Memory Behaviour > Existing / Custom**.
+
+### Back Up and Activate
+
+1. Take fresh, consistent workflow and backend backups before installing `n8n-nodes-engram@0.7.2`. Preserve exact namespaces, verified alias mappings, storage paths and producer workflow IDs. Restart n8n, refresh the editor and confirm the package version.
+2. Start with an inactive copy of one direct-conversation workflow and a separate restored store. Upgrade only the selected Memory/Admin nodes to **v3**. Preserve the current extraction route, model and provider-default temperature setting.
+3. In **Admin > Automatic Memory > Create Verified Actor Binding**, select the exact memory namespace and producer workflow ID. Bind a trusted application's stable issuer/actor reference to an **existing, explicitly accepted subject UUID**. Supply the operator and review reason. A name, phone number, session key or model confidence alone does not create this binding. Reassignment and revocation require the current binding revision.
+4. Select a profile deliberately. **Conservative Automatic** accepts supported source-grounded preferences; **Explicit Requests Only** additionally requires trusted save intent or an unquoted leading `Remember this:`; **Review First** proposes supported preferences. Use **Preview Memory Policy** to inspect the versioned effective policy, configured limits and identity readiness. Worker readiness is a separate check.
+5. On Memory v3, retain **Bounded** resolution, enable knowledge extraction and **Final Turns**, persist human episodes, and disable extraction from AI/system/tool content. Map the verified actor issuer/reference and a stable **Current Turn ID** from trusted application input. Keep tool audits separate. Extraction credentials/model remain required configuration, although this first profile implementation uses deterministic preference parsing rather than model requests.
+6. Supply the complete **Raw Current Human Content**. If agent input adds a display label, explicitly attest **Application-Owned Display Wrapper** and provide exact UTF-16 human-region offsets. This attestation is only for application display metadata; never use it to hide quotes, reports, conditions or other human context. No arbitrary label stripping occurs.
+
+### Supported Automatic Memory
+
+Profile version 1 supports complete literal first-person preferences such as `I prefer concise explanations.`, `I like bullet points.`, `I do not like long explanations.` when the value belongs to the supported language, explanation, presentation or format vocabulary. Supported negative preferences retain their polarity. Ambiguous, quoted, hypothetical, sensitive and unsupported statements remain in the episode history without being promoted to accepted facts. Complex preferences, nickname identity merging and dated commitments are outside this profile version. No **Personal Assistant** profile is offered yet.
+
+Exact repeated claims reuse the logical fact; a conflicting supported claim requires review. Rejected/manual decisions remain protected. Claim receipts distinguish accepted, proposed, rejected, deferred, unchanged and not-selected results, with persistence and mutation state. Source-episode acceptance is separate from fact acceptance. New budget diagnostics use a separate versioned `budget` field; the existing error categories remain unchanged.
+
+Current personalization suppresses revoked bindings, unsupported evidence and unresolved opposite claims. Historical modes may return intact source-grounded preference records with an explicit historical qualification: their recorded review state does not establish current identity or validity. As-of retrieval excludes new claims recorded after the requested date. Literal value nodes are never presented independently as personal facts.
+
+For an acknowledgement based on actual saving, put **Admin > Automatic Memory > Capture Human Memory** before the agent. Pass its **sourceId** into Memory v3's **Captured Human Source ID**, using the same backend, exact namespace, actor, turn ID, policy and formatted input. The current source is excluded from history, and the subsequent writer saves the final assistant/audits without saving or extracting the human turn again. Only `facts_accepted` confirms accepted graph knowledge; `review_required`, `not_saved`, `queued` and `unconfirmed` do not. A synchronous retry with a saved source but no recoverable receipt remains unconfirmed. An ordinary agent response generated before memory saving must not promise durable acceptance.
+
+Budget/execution settings are separate from acceptance. The deadline is one extraction work budget, not memory expiry or the whole workflow timeout. Increasing it does not broaden accepted evidence. Durable mode still requires an explicitly deployed matching **Admin v3** worker, route and profile; queued work is not already indexed. Extraction retries never resend an external chat message.
+
+### Verify and Roll Back
+
+Before expanding rollout, verify normal and tool-assisted writes, a supported preference without a save command, a negative/uncertain preference, duplicate turns, and a temporary question. Check accepted graph records and provenance, then verify graph-only recall on the separate restored store with recent conversation excluded. Test historical recall separately. Review active and passive group writers independently.
+
+**Recovery boundary:** once new profiles write bindings, envelopes, claims or role ownership, use consistent backend-native snapshots for recovery: the complete embedded graph file, or a Neo4j database backup. Preserve the original logical store mapping. Generic graph import and queue-aware JSON import deliberately reject restoration of new privileged bindings/ownership into a fresh store; a JSON export alone is not a supported recovery backup for these profiles. Retain queue-aware exports as additional inspection evidence when jobs exist.
+
+For rollback, keep this binary and restore **Existing / Custom** writer settings while its readers continue validating new claims. Old-package downgrade and mixed-version writers/workers are unsupported for new-profile stores. Keep newly appended conversations; never overwrite them with an older snapshot. No reset, purge, bulk re-extraction or automatic legacy repair is part of this upgrade.
 
 ---
 

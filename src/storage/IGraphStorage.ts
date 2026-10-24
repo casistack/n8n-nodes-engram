@@ -1,5 +1,9 @@
 import type { StorageObservation } from '../schemas/StorageObservation.schema';
 import type {
+  AutomaticBindingCommand,
+  AutomaticBindingRecord,
+} from '../schemas/AutomaticOperations.schema';
+import type {
   QueueBinding,
   QueueStats,
   QueueClearOptions,
@@ -202,6 +206,7 @@ export interface StorageSchemaMigrationResult {
 }
 
 export interface IGraphStorage {
+  automaticBindingCommand?(command: AutomaticBindingCommand): Promise<AutomaticBindingRecord>;
   // Optional extraction transaction capabilities; absent on third-party adapters.
   withExtractionDiagnostics?<T>(
     observer: (value: StorageObservation) => void,
@@ -213,6 +218,13 @@ export interface IGraphStorage {
   previewQueueClear?(groupId?: string): Promise<QueueClearImpact>;
   readExtractionSnapshot?(groupId?: string): Promise<GraphData>;
   appendEpisodesWithExtraction?(
+    episodes: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }>;
+  appendAutomaticEpisodes?(episodes: CreateEpisodicNode[]): Promise<AppendEpisodeResult[]>;
+  appendAutomaticEpisodesWithExtraction?(
     episodes: CreateEpisodicNode[],
     eligible: number[],
     binding: QueueBinding,
@@ -236,7 +248,7 @@ export interface IGraphStorage {
   // === Edge/Relationship Operations ===
   addEdge(edge: CreateEntityEdge): Promise<EntityEdge>;
   getEdge(uuid: string): Promise<EntityEdge | null>;
-  getEdgesBetween(sourceUuid: string, targetUuid: string): Promise<EntityEdge[]>;
+  getEdgesBetween(sourceUuid: string, targetUuid: string, limit?: number): Promise<EntityEdge[]>;
   getEdgesForEntity(entityUuid: string): Promise<EntityEdge[]>;
   updateEdge(uuid: string, updates: Partial<EntityEdge>): Promise<EntityEdge>;
   deleteEdge(uuid: string): Promise<void>;

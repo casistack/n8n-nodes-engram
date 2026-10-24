@@ -91,7 +91,14 @@ export class LlmClient {
     const controller = new AbortController();
     const abort = () => controller.abort();
     this.budget?.controller.signal.addEventListener('abort', abort, { once: true });
-    const timeout = setTimeout(abort, Math.min(this.timeoutMs, remaining ?? this.timeoutMs));
+    const timeout = setTimeout(
+      () => {
+        // A timer clipped to the shared deadline owns that deadline, even if timer rounding fires early.
+        if (remaining !== undefined && remaining <= this.timeoutMs) this.budget?.controller.abort();
+        abort();
+      },
+      Math.min(this.timeoutMs, remaining ?? this.timeoutMs),
+    );
 
     try {
       const response = await fetch(url, {

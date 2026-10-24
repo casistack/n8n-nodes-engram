@@ -77,9 +77,9 @@ describe('EngramMemory node version controls', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('publishes v2 with human-only extraction defaults', () => {
+  it('publishes v3 while retaining human-only extraction defaults', () => {
     const node = new EngramMemory();
-    expect(node.description.version).toEqual([1, 2]);
+    expect(node.description.version).toEqual([1, 2, 3]);
 
     const properties = new Map(
       node.description.properties.map((property) => [property.name, property]),
@@ -94,6 +94,8 @@ describe('EngramMemory node version controls', () => {
     expect(properties.get('rejectBelowConfidence')?.default).toBe(0.3);
     expect(properties.get('memoryFactPolicy')?.default).toBe('acceptedOnly');
     expect(properties.get('contextTokenBudget')?.default).toBe(2000);
+    expect(properties.get('automaticMemoryProfile')?.default).toBe('existing');
+    expect(properties.get('automaticMemoryProfile')?.displayOptions?.show?.['@version']).toEqual([3]);
   });
 
   it('keeps v1 store-both behavior even when v2 parameters are present', async () => {

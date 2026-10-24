@@ -1,4 +1,6 @@
 import { advancedExtractionProperties, readExtractionPolicy } from '../../utils/advancedExtraction';
+import { automaticMemoryProperties, readAutomaticRuntime } from '../../utils/automaticMemory';
+import { fingerprint } from '../../extraction/QueueState';
 import { ExtractionTemperatureSchema, MemoryPolicySchema } from '../../schemas';
 /* eslint-disable n8n-nodes-base/node-dirname-against-convention */
 import {
@@ -31,7 +33,7 @@ export class EngramMemory implements INodeType {
     name: 'engramMemory',
     icon: 'file:engram.png',
     group: ['transform'],
-    version: [1, 2],
+    version: [1, 2, 3],
     description:
       'Knowledge graph memory for AI agents. Stores conversations as episodes and optionally extracts entities and relationships.',
     defaults: {
@@ -74,6 +76,7 @@ export class EngramMemory implements INodeType {
       },
     ],
     properties: [
+      ...automaticMemoryProperties,
       getConnectionHintNoticeField([NodeConnectionType.AiAgent]),
       // Session config
       sessionIdOption,
@@ -136,7 +139,7 @@ export class EngramMemory implements INodeType {
           { name: 'Disabled', value: 'disabled' },
         ],
         default: 'enabled',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Whether human messages should be persisted as episodes',
       },
       {
@@ -156,7 +159,7 @@ export class EngramMemory implements INodeType {
           },
         ],
         default: 'active_human',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description:
           'Provenance kind applied to stored human episodes and human extraction sources',
       },
@@ -169,7 +172,7 @@ export class EngramMemory implements INodeType {
           { name: 'Disabled', value: 'disabled' },
         ],
         default: 'enabled',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Whether assistant replies should be persisted as episodes',
       },
       {
@@ -182,7 +185,7 @@ export class EngramMemory implements INodeType {
         ],
         default: 'enabled',
         displayOptions: {
-          show: { '@version': [2], enableExtraction: ['enabled'] },
+          show: { '@version': [2, 3], enableExtraction: ['enabled'] },
         },
         description: 'Whether human message content is eligible for knowledge extraction',
       },
@@ -196,7 +199,7 @@ export class EngramMemory implements INodeType {
         ],
         default: 'disabled',
         displayOptions: {
-          show: { '@version': [2], enableExtraction: ['enabled'] },
+          show: { '@version': [2, 3], enableExtraction: ['enabled'] },
         },
         description: 'Whether assistant reply content is eligible for knowledge extraction',
       },
@@ -210,7 +213,7 @@ export class EngramMemory implements INodeType {
         ],
         default: 'disabled',
         displayOptions: {
-          show: { '@version': [2], enableExtraction: ['enabled'] },
+          show: { '@version': [2, 3], enableExtraction: ['enabled'] },
         },
         description:
           'Whether recognized system messages and tool outputs are eligible for knowledge extraction',
@@ -222,9 +225,10 @@ export class EngramMemory implements INodeType {
         default: 0.85,
         typeOptions: { minValue: 0, maxValue: 1, numberStepSize: 0.05 },
         displayOptions: {
-          show: { '@version': [2], enableExtraction: ['enabled'] },
+          show: { '@version': [2, 3], enableExtraction: ['enabled'] },
         },
-        description: 'Facts at or above this confidence are accepted automatically',
+        description:
+          'LLM facts at or above this confidence are accepted automatically in Existing / Custom; literal profiles use their source-evidence policy',
       },
       {
         displayName: 'Reject Below Confidence',
@@ -233,10 +237,10 @@ export class EngramMemory implements INodeType {
         default: 0.3,
         typeOptions: { minValue: 0, maxValue: 1, numberStepSize: 0.05 },
         displayOptions: {
-          show: { '@version': [2], enableExtraction: ['enabled'] },
+          show: { '@version': [2, 3], enableExtraction: ['enabled'] },
         },
         description:
-          'Facts below this confidence are rejected; intermediate confidence remains proposed',
+          'Existing / Custom LLM facts below this confidence are rejected; literal profiles use their source-evidence policy',
       },
       {
         displayName: 'Memory Fact Policy',
@@ -255,7 +259,7 @@ export class EngramMemory implements INodeType {
           },
         ],
         default: 'acceptedOnly',
-        displayOptions: { show: { '@version': [2], enableExtraction: ['enabled'] } },
+        displayOptions: { show: { '@version': [2, 3], enableExtraction: ['enabled'] } },
         description: 'Which reviewed fact states may be injected into agent memory',
       },
       {
@@ -264,7 +268,7 @@ export class EngramMemory implements INodeType {
         type: 'number',
         default: 2000,
         typeOptions: { minValue: 100, maxValue: 32000 },
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description:
           'Approximate total token budget shared by entity, fact, provenance, and traversal context',
       },
@@ -273,7 +277,7 @@ export class EngramMemory implements INodeType {
         name: 'retrievalSenderId',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Only retrieve facts supported by episodes from this sender',
       },
       {
@@ -291,7 +295,7 @@ export class EngramMemory implements INodeType {
           { name: 'Legacy', value: 'legacy' },
         ],
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Only retrieve facts supported by this episode kind',
       },
       {
@@ -306,7 +310,7 @@ export class EngramMemory implements INodeType {
           { name: 'Untrusted', value: 'untrusted' },
         ],
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Only retrieve facts supported by episodes at this trust level',
       },
       {
@@ -314,7 +318,7 @@ export class EngramMemory implements INodeType {
         name: 'retrievalSourceWorkflowId',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Only retrieve facts written by this source workflow',
       },
       {
@@ -322,7 +326,7 @@ export class EngramMemory implements INodeType {
         name: 'retrievalSourceExecutionId',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Only retrieve facts written by this source execution',
       },
       {
@@ -330,7 +334,7 @@ export class EngramMemory implements INodeType {
         name: 'retrievalReferenceAfter',
         type: 'dateTime',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Only retrieve facts supported at or after this time',
       },
       {
@@ -338,7 +342,7 @@ export class EngramMemory implements INodeType {
         name: 'retrievalReferenceBefore',
         type: 'dateTime',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Only retrieve facts supported at or before this time',
       },
       {
@@ -346,7 +350,7 @@ export class EngramMemory implements INodeType {
         name: 'sourceMessageId',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Stable upstream message ID used to deduplicate retried deliveries',
       },
       {
@@ -354,7 +358,7 @@ export class EngramMemory implements INodeType {
         name: 'episodeIdempotencyKey',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Optional stable turn key used when no source message ID is available',
       },
       {
@@ -362,7 +366,7 @@ export class EngramMemory implements INodeType {
         name: 'conversationId',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Upstream conversation or thread ID. Defaults to the Engram session ID.',
       },
       {
@@ -370,7 +374,7 @@ export class EngramMemory implements INodeType {
         name: 'senderId',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Stable identifier for the human sender',
       },
       {
@@ -378,7 +382,7 @@ export class EngramMemory implements INodeType {
         name: 'senderName',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Display name for the human sender',
       },
       {
@@ -386,7 +390,7 @@ export class EngramMemory implements INodeType {
         name: 'quotedMessageId',
         type: 'string',
         default: '',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Optional identifier of the message being quoted or replied to',
       },
       {
@@ -400,7 +404,7 @@ export class EngramMemory implements INodeType {
           { name: 'Untrusted', value: 'untrusted' },
         ],
         default: 'standard',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Initial trust classification applied to stored human and AI episodes',
       },
       {
@@ -408,7 +412,7 @@ export class EngramMemory implements INodeType {
         name: 'episodeAttributes',
         type: 'json',
         default: '{}',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
         description: 'Additional source-specific episode metadata as a JSON object',
       },
       {
@@ -485,7 +489,7 @@ export class EngramMemory implements INodeType {
         ],
         description:
           'Non-destructive filtering of conversation context; stored episodes remain intact',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
       },
       {
         displayName: 'Maximum History Scan',
@@ -495,7 +499,7 @@ export class EngramMemory implements INodeType {
         typeOptions: { minValue: 1, maxValue: 10000 },
         description:
           'Maximum episodes examined while filling the message window. Uses one bounded snapshot with local scan pages.',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
       },
       {
         displayName: 'Reviewed Legacy Content Hashes',
@@ -504,7 +508,7 @@ export class EngramMemory implements INodeType {
         default: '',
         description:
           'Comma-separated SHA256 hashes of exact operator-reviewed legacy tool payload content. Chain evidence is also required. Ambiguous JSON stays in context.',
-        displayOptions: { show: { '@version': [2], historyFilter: ['reviewedLegacy'] } },
+        displayOptions: { show: { '@version': [2, 3], historyFilter: ['reviewedLegacy'] } },
       },
       {
         displayName: 'Message Write Policy',
@@ -526,7 +530,7 @@ export class EngramMemory implements INodeType {
         ],
         description:
           'Select Final Turns to apply storage, extraction, and provenance controls to native bulk writes',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
       },
       {
         displayName: 'Store Tool Audit',
@@ -539,7 +543,7 @@ export class EngramMemory implements INodeType {
         ],
         description:
           'Whether to retain intermediate tool messages as unverified audit episodes outside conversation context',
-        displayOptions: { show: { '@version': [2], messageWritePolicy: ['finalTurns'] } },
+        displayOptions: { show: { '@version': [2, 3], messageWritePolicy: ['finalTurns'] } },
       },
       {
         displayName: 'Current Human Query',
@@ -549,7 +553,7 @@ export class EngramMemory implements INodeType {
           "={{ typeof $json.chatInput === 'string' ? $json.chatInput : (typeof $json.input === 'string' ? $json.input : '') }}",
         description:
           'Current human input for graph retrieval when n8n loads memory with empty values. Map this to the same current-message expression as the agent prompt.',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
       },
       {
         displayName: 'Max Facts per Query',
@@ -699,7 +703,7 @@ export class EngramMemory implements INodeType {
         ],
         description:
           'Durable Queue saves work for a separate scheduled Engram Admin worker; facts become available after processing',
-        displayOptions: { show: { '@version': [2], enableExtraction: ['enabled'] } },
+        displayOptions: { show: { '@version': [2, 3], enableExtraction: ['enabled'] } },
       },
       {
         displayName: 'Extraction Route ID',
@@ -707,7 +711,7 @@ export class EngramMemory implements INodeType {
         type: 'string',
         default: '',
         description: 'Nonsecret worker route identifier; must match the worker configuration',
-        displayOptions: { show: { '@version': [2], extractionExecution: ['durable'] } },
+        displayOptions: { show: { '@version': [2, 3], extractionExecution: ['durable'] } },
       },
       {
         displayName: 'Graph Context Policy',
@@ -722,7 +726,7 @@ export class EngramMemory implements INodeType {
         ],
         description:
           'Reconcile duplicate relationships and distinguish current from historical evidence',
-        displayOptions: { show: { '@version': [2] } },
+        displayOptions: { show: { '@version': [2, 3] } },
       },
       {
         displayName: 'Event Time',
@@ -732,7 +736,7 @@ export class EngramMemory implements INodeType {
         placeholder: '2026-10-24T12:00:00Z',
         description:
           'Explicit timestamp for event-interval relevance, not what was known at that time',
-        displayOptions: { show: { '@version': [2], graphContextPolicy: ['asOf'] } },
+        displayOptions: { show: { '@version': [2, 3], graphContextPolicy: ['asOf'] } },
       },
       {
         displayName: 'Durable Fact Token Allowance',
@@ -743,7 +747,7 @@ export class EngramMemory implements INodeType {
         description:
           'Estimated token allowance for durable evidence within the overall graph context cap',
         displayOptions: {
-          show: { '@version': [2], graphContextPolicy: ['current', 'historical', 'asOf'] },
+          show: { '@version': [2, 3], graphContextPolicy: ['current', 'historical', 'asOf'] },
         },
       },
       {
@@ -755,7 +759,7 @@ export class EngramMemory implements INodeType {
         description:
           'Estimated token allowance for temporal or legacy evidence within the overall graph context cap',
         displayOptions: {
-          show: { '@version': [2], graphContextPolicy: ['current', 'historical', 'asOf'] },
+          show: { '@version': [2, 3], graphContextPolicy: ['current', 'historical', 'asOf'] },
         },
       },
       // Retention settings
@@ -934,8 +938,14 @@ export class EngramMemory implements INodeType {
     try {
       // Get or create storage instance
       let storage;
+      let storeIdentity: string;
       if (backend === 'neo4j') {
         const credentials = await this.getCredentials('engramNeo4jApi');
+        storeIdentity = fingerprint({
+          backend,
+          uri: credentials.uri,
+          database: credentials.database ?? 'neo4j',
+        });
         storage = createStorage({
           backend: 'neo4j',
           uri: credentials.uri as string,
@@ -950,6 +960,7 @@ export class EngramMemory implements INodeType {
           customStoragePath: customPath,
           workflowId,
         });
+        storeIdentity = fingerprint({ backend: 'embedded', persistPath });
 
         migrateStorageIfNeeded({
           newPath: persistPath,
@@ -1064,6 +1075,14 @@ export class EngramMemory implements INodeType {
       }
 
       const memory = new EngramChatMemory({
+        automaticMemory:
+          nodeVersion >= 3
+            ? readAutomaticRuntime(
+                (name, fallback) => this.getNodeParameter(name, itemIndex, fallback as string),
+                sessionId,
+                storeIdentity,
+              )
+            : undefined,
         storage,
         groupId: sessionId,
         policy,

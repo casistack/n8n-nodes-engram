@@ -65,8 +65,22 @@ import { GraphTraverser } from '../traversal/GraphTraverser';
 import { extractionMetadataFromAttributes, type ExtractionThresholdPolicy } from '../schemas';
 import type { RetrievalFilters } from '../search/RetrievalGovernance';
 import { estimateContextTokens } from '../search/ContextBudget';
+import {
+  AutomaticRuntimeSchema,
+  type AutomaticRuntimeInput,
+} from '../schemas/AutomaticRuntime.schema';
+import { AutomaticWriteOwnerSchema } from '../schemas/AutomaticClaim.schema';
+import { compileAutomaticPolicy, captureEnvelope } from '../extraction/AutomaticEvidence';
+import { AUTOMATIC_ENVELOPE, AUTOMATIC_OWNER } from '../extraction/AutomaticClaims';
+import {
+  findAutomaticBinding,
+  assertAutomaticBinding,
+  assertAutomaticBindingIdentity,
+} from '../storage/AutomaticIdentity';
+import { canonical } from '../extraction/QueueState';
 
 export interface EngramChatMemoryInput extends BaseChatMemoryInput {
+  automaticMemory?: AutomaticRuntimeInput;
   storage: IGraphStorage;
   groupId: string;
   policy?: MemoryPolicyInput;
@@ -171,6 +185,10 @@ export class EngramChatMemory extends BaseChatMemory {
       throw new Error('Engram retrieval: as_of_requires_timestamp');
     this.fields = { ...fields, retrievalMode };
     const extractionPolicy = ExtractionPolicySchema.parse(fields.extractionPolicy);
+    const automatic = fields.automaticMemory
+      ? AutomaticRuntimeSchema.parse(fields.automaticMemory)
+      : undefined;
+    const automaticPolicy = compileAutomaticPolicy({ profileId: automatic?.profileId });
     if (extractionPolicy.quality !== 'legacy' && extractionPolicy.mode !== 'bounded')
       throw new Error('Knowledge Selection requires bounded extraction');
     if (
@@ -198,8 +216,27 @@ export class EngramChatMemory extends BaseChatMemory {
         policy: extractionPolicy,
         types: fields.entityTypes ?? ['person', 'organization', 'location', 'concept', 'event'],
         threshold: fields.extractionThresholdPolicy,
+        ...(automaticPolicy.profileId !== 'existing' ? { automaticPolicy } : {}),
       };
     this.policy = MemoryPolicySchema.parse(fields.policy ?? {});
+    if (
+      automaticPolicy.profileId !== 'existing' &&
+      (!fields.enableExtraction ||
+        !this.settings ||
+        !this.policy.finalTurnWrites ||
+        extractionPolicy.mode !== 'bounded' ||
+        fields.storeHumanEpisodes === false ||
+        fields.extractAi ||
+        fields.extractSystemTool ||
+        !fields.storage.readExtractionSnapshot ||
+        !fields.storage.appendAutomaticEpisodes ||
+        (fields.extractionExecution === 'durable' &&
+          !fields.storage.appendAutomaticEpisodesWithExtraction) ||
+        automatic?.actor.namespace !== fields.groupId)
+    )
+      throw new Error(
+        'Engram automatic: requires bounded extraction, final turns, persisted human sources and matching actor namespace',
+      );
     if (this.queueMode) {
       if (
         !fields.enableExtraction ||
@@ -289,6 +326,10 @@ export class EngramChatMemory extends BaseChatMemory {
   async loadMemoryVariablesWithDiagnostics(
     values: InputValues,
   ): Promise<{ variables: MemoryVariables; diagnostics: MemoryLoadDiagnostics }> {
+    if (this.fields.automaticMemory?.capturedSourceId) {
+      await this.validateCapturedHuman(this.extractInputText(values) || this.currentHumanQuery);
+      this.engramHistory.excludeCurrentSource(this.fields.automaticMemory.capturedSourceId);
+    }
     if (
       !this.snapshotRead &&
       (this.queueMode || (this.fields.retrievalMode && this.fields.retrievalMode !== 'legacy'))
@@ -301,7 +342,10 @@ export class EngramChatMemory extends BaseChatMemory {
         storage: new StagedGraph(snapshot, this.groupId, false).storage,
         extractionExecution: 'synchronous',
         enableExtraction: false,
+        automaticMemory: undefined,
       });
+      if (this.fields.automaticMemory?.capturedSourceId)
+        reader.engramHistory.excludeCurrentSource(this.fields.automaticMemory.capturedSourceId);
       reader.snapshotRead = true;
       const result = await reader.loadMemoryVariablesWithDiagnostics(values);
       result.diagnostics.queue = { version: 1, ...queueStats(snapshot, this.groupId) };
@@ -493,6 +537,78 @@ export class EngramChatMemory extends BaseChatMemory {
       writeIndex: number | null;
       extract: boolean;
     }> = [];
+    const automatic = this.fields.automaticMemory
+      ? AutomaticRuntimeSchema.parse(this.fields.automaticMemory)
+      : undefined;
+    const automaticPolicy = compileAutomaticPolicy({ profileId: automatic?.profileId });
+    const automaticEnabled = automaticPolicy.profileId !== 'existing';
+    let automaticBlocked: 'missing_binding' | 'invalid_envelope' | undefined;
+    const automaticGraph = automaticEnabled
+      ? await this.storage.readExtractionSnapshot!(this.groupId)
+      : undefined;
+    let actorBinding =
+      automatic && automaticGraph
+        ? findAutomaticBinding(
+            automaticGraph,
+            this.groupId,
+            automatic.actor.issuer,
+            automatic.actor.actorReference,
+          )
+        : null;
+    if (actorBinding && automatic && automaticGraph) {
+      try {
+        assertAutomaticBindingIdentity(
+          automaticGraph,
+          this.groupId,
+          automatic.actor.issuer,
+          automatic.actor.actorReference,
+          {
+            bindingId: actorBinding.bindingId,
+            revision: actorBinding.revision,
+            subjectId: actorBinding.subjectId,
+            fingerprint: actorBinding.fingerprint,
+          },
+        );
+      } catch {
+        actorBinding = null;
+      }
+    }
+    const humanMessages = messages.filter((message) => messageType(message) === 'human');
+    if (automaticEnabled && humanMessages.length > 1)
+      throw new Error('Engram automatic: one_current_human_required');
+    if (automaticEnabled && (!actorBinding || actorBinding.state !== 'active'))
+      automaticBlocked = 'missing_binding';
+    if (automaticEnabled && automatic?.capturedSourceId) {
+      const source = automaticGraph!.episodes.find(
+        (ep) => ep.uuid === automatic.capturedSourceId && ep.group_id === this.groupId,
+      );
+      const owner = AutomaticWriteOwnerSchema.parse(source?.attributes[AUTOMATIC_OWNER]);
+      const current = humanMessages[0];
+      const currentContent = current
+        ? this.stringifyMessageValue(current.content)
+        : this.currentHumanQuery;
+      if (
+        !source ||
+        !currentContent ||
+        source.content !== currentContent ||
+        owner.store !== automatic.storeIdentity ||
+        owner.turn !== automatic.turnId ||
+        owner.actor !== automatic.actor.actorReference ||
+        owner.issuer !== automatic.actor.issuer ||
+        canonical(owner.policy) !== canonical(automaticPolicy) ||
+        owner.role !== 'human'
+      )
+        throw new Error('Engram automatic: capture_reference_mismatch');
+      if (owner.binding)
+        assertAutomaticBinding(
+          automaticGraph!,
+          source.attributes[AUTOMATIC_ENVELOPE] as Parameters<typeof assertAutomaticBinding>[1],
+        );
+      else if (source.attributes[AUTOMATIC_ENVELOPE] !== undefined)
+        throw new Error('Engram automatic: capture_reference_mismatch');
+      else automaticBlocked = 'missing_binding';
+      await this.validateCapturedHuman(currentContent);
+    }
     let skipped = 0;
     let auditCount = 0;
     let humanPosition = -1;
@@ -510,6 +626,10 @@ export class EngramChatMemory extends BaseChatMemory {
           null;
       }
       const assistant = type === 'ai' && finals.has(index);
+      if (automaticEnabled && human && automatic?.capturedSourceId) {
+        skipped++;
+        continue;
+      }
       const audit = !human && !assistant;
       if (audit && !this.policy.storeToolAudit && !this.extractSystemTool) {
         skipped++;
@@ -550,6 +670,46 @@ export class EngramChatMemory extends BaseChatMemory {
               : null,
         },
       };
+      if (automaticEnabled && automatic && (human || assistant)) {
+        const content = this.stringifyMessageValue(message.content);
+        const bindingRef =
+          actorBinding?.state === 'active'
+            ? {
+                bindingId: actorBinding.bindingId,
+                revision: actorBinding.revision,
+                subjectId: actorBinding.subjectId,
+                fingerprint: actorBinding.fingerprint,
+              }
+            : null;
+        metadata.idempotency_key = `automatic:${contentHash(automatic.turnId)}:${human ? 'human' : 'assistant'}`;
+        metadata.attributes[AUTOMATIC_OWNER] = AutomaticWriteOwnerSchema.parse({
+          version: 1,
+          store: automatic.storeIdentity,
+          namespace: this.groupId,
+          turn: automatic.turnId,
+          role: human ? 'human' : 'assistant',
+          actor: automatic.actor.actorReference,
+          issuer: automatic.actor.issuer,
+          binding: bindingRef,
+          policy: automaticPolicy,
+          contentHash: contentHash(content),
+        });
+        if (human && bindingRef) {
+          const capture = captureEnvelope(
+            automatic.rawHumanContent ?? content,
+            content,
+            automatic.actor,
+            bindingRef,
+            automatic.explicitIntent,
+            automaticPolicy,
+          );
+          if (!capture.ok) {
+            automaticBlocked = 'invalid_envelope';
+            const owner = AutomaticWriteOwnerSchema.parse(metadata.attributes[AUTOMATIC_OWNER]);
+            metadata.attributes[AUTOMATIC_OWNER] = { ...owner, binding: null };
+          } else metadata.attributes[AUTOMATIC_ENVELOPE] = capture.envelope;
+        }
+      }
       const store = audit
         ? this.policy.storeToolAudit
         : human
@@ -563,13 +723,23 @@ export class EngramChatMemory extends BaseChatMemory {
         message,
         metadata,
         writeIndex,
-        extract: human ? this.extractHuman : assistant ? this.extractAi : this.extractSystemTool,
+        extract: automaticEnabled
+          ? human && this.extractHuman && !automaticBlocked
+          : human
+            ? this.extractHuman
+            : assistant
+              ? this.extractAi
+              : this.extractSystemTool,
       });
     }
     const enqueueStarted = performance.now();
     const enqueueStorage = new StorageAccumulator();
     const appendQueue = () =>
-      this.storage.appendEpisodesWithExtraction!(
+      (automaticEnabled
+        ? this.storage.appendAutomaticEpisodesWithExtraction!
+        : this.storage.appendEpisodesWithExtraction!
+      ).call(
+        this.storage,
         this.engramHistory.prepareMessageWrites(writes),
         candidates
           .filter(
@@ -591,7 +761,13 @@ export class EngramChatMemory extends BaseChatMemory {
             )
           : await appendQueue()
         : null;
-    const results = queued ? queued.results : await this.engramHistory.appendMessageWrites(writes);
+    const results = queued
+      ? queued.results
+      : automaticEnabled
+        ? await this.storage.appendAutomaticEpisodes!(
+            this.engramHistory.prepareMessageWrites(writes),
+          )
+        : await this.engramHistory.appendMessageWrites(writes);
     if (queued && queued.jobs.length)
       return {
         delivery: {
@@ -635,10 +811,29 @@ export class EngramChatMemory extends BaseChatMemory {
         });
       }
     }
-    return {
-      extraction: this.enableExtraction
+    const extraction = automaticBlocked
+      ? new ExtractionDiagnostics().finish('no_sources')
+      : this.enableExtraction
         ? await this.runExtraction(sources)
-        : new ExtractionDiagnostics().finish('disabled'),
+        : new ExtractionDiagnostics().finish('disabled');
+    if (automaticBlocked)
+      extraction.automatic = {
+        version: 1,
+        policy: automaticPolicy,
+        sourceIds: automatic?.capturedSourceId
+          ? [automatic.capturedSourceId]
+          : results
+              .filter((result) => result.episode.role === 'human')
+              .map((result) => result.episode.uuid),
+        persisted: false,
+        commitAt: null,
+        coverageComplete: true,
+        items: [
+          { state: 'deferred', persisted: false, mutation: 'none', reasons: [automaticBlocked] },
+        ],
+      };
+    return {
+      extraction,
       written: results.filter((result) => result.created).length,
       duplicates: results.filter((result) => !result.created).length,
       audit: auditCount,
@@ -650,6 +845,49 @@ export class EngramChatMemory extends BaseChatMemory {
     await this.engramHistory.clear();
   }
 
+  private async validateCapturedHuman(content: string): Promise<void> {
+    const config = AutomaticRuntimeSchema.parse(this.fields.automaticMemory);
+    if (!config.capturedSourceId || !content)
+      throw new Error('Engram automatic: current_capture_input_required');
+    const graph = await this.storage.readExtractionSnapshot!(this.groupId);
+    const source = graph.episodes.find(
+      (ep) => ep.uuid === config.capturedSourceId && ep.group_id === this.groupId,
+    );
+    const owner = AutomaticWriteOwnerSchema.parse(source?.attributes[AUTOMATIC_OWNER]);
+    const policy = compileAutomaticPolicy({ profileId: config.profileId });
+    if (
+      !source ||
+      source.content !== content ||
+      source.role !== 'human' ||
+      owner.role !== 'human' ||
+      owner.namespace !== this.groupId ||
+      owner.store !== config.storeIdentity ||
+      owner.turn !== config.turnId ||
+      owner.actor !== config.actor.actorReference ||
+      owner.issuer !== config.actor.issuer ||
+      owner.contentHash !== contentHash(content) ||
+      canonical(owner.policy) !== canonical(policy)
+    )
+      throw new Error('Engram automatic: capture_reference_mismatch');
+    if (owner.binding) {
+      const expected = captureEnvelope(
+        config.rawHumanContent ?? content,
+        content,
+        config.actor,
+        owner.binding,
+        config.explicitIntent,
+        policy,
+      );
+      if (
+        !expected.ok ||
+        canonical(expected.envelope) !== canonical(source.attributes[AUTOMATIC_ENVELOPE])
+      )
+        throw new Error('Engram automatic: capture_reference_mismatch');
+      assertAutomaticBinding(graph, expected.envelope);
+    } else if (source.attributes[AUTOMATIC_ENVELOPE] !== undefined)
+      throw new Error('Engram automatic: capture_reference_mismatch');
+  }
+
   /**
    * Search the knowledge graph for facts relevant to the current input.
    * Uses HybridSearchEngine which merges text + vector results via RRF when embeddings are enabled.
@@ -658,7 +896,9 @@ export class EngramChatMemory extends BaseChatMemory {
     if (!query.trim()) return [];
 
     try {
+      const automatic = { conflicts: { remaining: 128 }, sources: { remaining: 512, deferred: 0 } };
       const results = await this.searchEngine.search(query, this.groupId, {
+        automaticBudget: automatic,
         limit: this.maxFactsPerQuery,
         minScore: this.minRelevanceScore,
         acceptedOnly: this.acceptedOnlyRetrieval,
@@ -709,6 +949,8 @@ export class EngramChatMemory extends BaseChatMemory {
             const governedEdges = await this.searchEngine.governTraversalEdges(
               traversal.edges,
               filters,
+              undefined,
+              automatic,
             );
             const traversalContext = this.searchEngine.formatAsContext(
               { entities: [], edges: governedEdges },
@@ -752,6 +994,7 @@ export class EngramChatMemory extends BaseChatMemory {
   }
 
   private async runExtraction(sources: ExtractionSource[]): Promise<ExtractionOutcome> {
+    if (!sources.length) return new ExtractionDiagnostics().finish('no_sources');
     const extractionPolicy = ExtractionPolicySchema.parse(this.fields.extractionPolicy);
     const diagnostics = new ExtractionDiagnostics({
       backend: this.storage.extractionBackend?.() ?? 'unknown',

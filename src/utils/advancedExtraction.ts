@@ -12,7 +12,7 @@ export const advancedExtractionProperties: INodeProperties[] = [
       { name: 'Bounded', value: 'bounded' },
     ],
     description: 'Bound model comparisons and stage changes before applying them',
-    displayOptions: { show: { '@version': [2] } },
+    displayOptions: { show: { '@version': [2, 3] } },
   },
   {
     displayName: 'Knowledge Selection',
@@ -24,7 +24,7 @@ export const advancedExtractionProperties: INodeProperties[] = [
       { name: 'Durable and Temporal', value: 'durableTemporal' },
     ],
     description: 'Keep transient requests out of durable graph knowledge',
-    displayOptions: { show: { '@version': [2], advancedExtractionPolicy: ['bounded'] } },
+    displayOptions: { show: { '@version': [2, 3], advancedExtractionPolicy: ['bounded'] } },
   },
   {
     displayName: 'Fuzzy Comparison Limit',
@@ -33,7 +33,7 @@ export const advancedExtractionProperties: INodeProperties[] = [
     default: 16,
     typeOptions: { minValue: 0, maxValue: 128 },
     description: 'Maximum fuzzy identity comparisons per extraction',
-    displayOptions: { show: { '@version': [2], advancedExtractionPolicy: ['bounded'] } },
+    displayOptions: { show: { '@version': [2, 3], advancedExtractionPolicy: ['bounded'] } },
   },
   {
     displayName: 'Candidate Shortlist Size',
@@ -42,7 +42,7 @@ export const advancedExtractionProperties: INodeProperties[] = [
     default: 8,
     typeOptions: { minValue: 1, maxValue: 64 },
     description: 'Maximum identity candidates compared for each extracted entity',
-    displayOptions: { show: { '@version': [2], advancedExtractionPolicy: ['bounded'] } },
+    displayOptions: { show: { '@version': [2, 3], advancedExtractionPolicy: ['bounded'] } },
   },
   {
     displayName: 'Extraction Request Limit',
@@ -51,7 +51,7 @@ export const advancedExtractionProperties: INodeProperties[] = [
     default: 32,
     typeOptions: { minValue: 1, maxValue: 256 },
     description: 'Maximum model and embedding requests per extraction',
-    displayOptions: { show: { '@version': [2], advancedExtractionPolicy: ['bounded'] } },
+    displayOptions: { show: { '@version': [2, 3], advancedExtractionPolicy: ['bounded'] } },
   },
   {
     displayName: 'Extraction Deadline (Milliseconds)',
@@ -60,7 +60,7 @@ export const advancedExtractionProperties: INodeProperties[] = [
     default: 30000,
     typeOptions: { minValue: 100, maxValue: 120000 },
     description: 'Shared deadline for bounded extraction requests',
-    displayOptions: { show: { '@version': [2], advancedExtractionPolicy: ['bounded'] } },
+    displayOptions: { show: { '@version': [2, 3], advancedExtractionPolicy: ['bounded'] } },
   },
   {
     displayName: 'Source Timezone',
@@ -68,7 +68,7 @@ export const advancedExtractionProperties: INodeProperties[] = [
     type: 'string',
     default: '',
     description: 'Explicit source timezone; leave empty when unknown',
-    displayOptions: { show: { '@version': [2], advancedExtractionPolicy: ['bounded'] } },
+    displayOptions: { show: { '@version': [2, 3], advancedExtractionPolicy: ['bounded'] } },
   },
 ];
 export function readExtractionPolicy(get: (name: string, fallback: unknown) => unknown) {

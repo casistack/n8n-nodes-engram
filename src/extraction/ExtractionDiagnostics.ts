@@ -1,6 +1,7 @@
 import { StorageAccumulator } from '../storage/StorageDiagnostics';
 import { randomUUID } from 'crypto';
 import { performance } from 'perf_hooks';
+import type { ExtractionBudgetReason } from '../schemas/ExtractionBudget.schema';
 import {
   ExtractionStageSchema,
   ExtractionMetricContextSchema,
@@ -25,6 +26,11 @@ export class ExtractionError extends Error {
     super(`Engram extraction: ${kind}`);
     this.name = 'ExtractionError';
     this.details = details ? ExtractionErrorDetailsSchema.parse(details) : undefined;
+  }
+}
+export class ExtractionBudgetError extends ExtractionError {
+  constructor(public readonly budgetReason: ExtractionBudgetReason) {
+    super(budgetReason === 'cancelled' ? 'cancelled' : 'budget_exhausted');
   }
 }
 export function safeExtractionError(error: unknown): ExtractionError {
@@ -249,6 +255,7 @@ export class ExtractionDiagnostics {
     delete item.reason;
   }
   error(stage: ExtractionStage, error: ExtractionError): boolean {
+    if (error instanceof ExtractionBudgetError) this.budget(error.budgetReason);
     if (stage === 'entities' || stage === 'relationships' || stage === 'persistence')
       this.requiredFailure = true;
     else this.optionalFailure = true;
@@ -307,5 +314,8 @@ export class ExtractionDiagnostics {
     }
     // Return a detached snapshot, rather than a live collector reference.
     return snapshot;
+  }
+  budget(reason: ExtractionBudgetReason): void {
+    this.outcome.budget = { version: 1, reason };
   }
 }

@@ -1,5 +1,5 @@
 import { performance } from 'perf_hooks';
-import { ExtractionError } from './ExtractionDiagnostics';
+import { ExtractionError, ExtractionBudgetError } from './ExtractionDiagnostics';
 
 /** One invocation, finite requests and deadline. No background lifetime. */
 export class RequestBudget {
@@ -23,14 +23,14 @@ export class RequestBudget {
     this.timer = setTimeout(() => this.controller.abort(), deadlineMs);
   }
   check(): void {
-    if (this.externalSignal?.aborted) throw new ExtractionError('cancelled');
+    if (this.externalSignal?.aborted) throw new ExtractionBudgetError('cancelled');
     if (this.controller.signal.aborted || performance.now() >= this.expires)
-      throw new ExtractionError('budget_exhausted');
+      throw new ExtractionBudgetError('deadline');
   }
   reserve(bytes: number): number {
     this.check();
-    if (bytes > this.maxRequestBytes || this.calls >= this.maxCalls)
-      throw new ExtractionError('budget_exhausted');
+    if (bytes > this.maxRequestBytes) throw new ExtractionBudgetError('request_bytes');
+    if (this.calls >= this.maxCalls) throw new ExtractionBudgetError('request_count');
     this.calls++;
     return Math.max(1, this.expires - performance.now());
   }
@@ -45,7 +45,7 @@ export class RequestBudget {
 export async function readBoundedResponse(response: Response, maxBytes: number): Promise<string> {
   if (Number(response.headers?.get('content-length')) > maxBytes) {
     await response.body?.cancel().catch(() => {});
-    throw new ExtractionError('budget_exhausted');
+    throw new ExtractionBudgetError('response_bytes');
   }
   if (!response.body) throw new ExtractionError('invalid_response');
   const reader = response.body.getReader();
@@ -56,7 +56,7 @@ export async function readBoundedResponse(response: Response, maxBytes: number):
       const item = await reader.read();
       if (item.done) break;
       bytes += item.value.byteLength;
-      if (bytes > maxBytes) throw new ExtractionError('budget_exhausted');
+      if (bytes > maxBytes) throw new ExtractionBudgetError('response_bytes');
       chunks.push(item.value);
     }
     return Buffer.concat(chunks).toString('utf8');

@@ -65,6 +65,27 @@ import type {
 } from '../schemas';
 import { matchesEpisodeHygieneFilters } from './EpisodeHygiene';
 import {
+  assertAutomaticEpisodeTrustedPath,
+  assertAutomaticEntityDeleteAllowed,
+  assertAutomaticEpisodeBinding,
+  assertNoAutomaticBindingAttribute,
+  applyAutomaticBindingCommand,
+  prepareAutomaticEntityUpdate,
+  prepareAutomaticEpisodeInput,
+  prepareAutomaticEpisodeUpdate,
+  prepareAutomaticImport,
+  protectAutomaticEntity,
+  protectAutomaticEpisode,
+  assertOwnedEpisodeReplay,
+  SOURCE_ENVELOPE_ATTRIBUTE,
+  WRITE_OWNER_ATTRIBUTE,
+} from './AutomaticIdentity';
+import { AutomaticBindingCommandSchema } from '../schemas/AutomaticOperations.schema';
+import type {
+  AutomaticBindingCommand,
+  AutomaticBindingRecord,
+} from '../schemas/AutomaticOperations.schema';
+import {
   CURRENT_GRAPH_DATA_VERSION,
   QueueClearOptionsSchema,
   CreateEpisodicNodeSchema,
@@ -170,6 +191,21 @@ export class GraphologyStorage implements IGraphStorage {
   extractionBackend(): 'embedded' {
     return 'embedded';
   }
+
+  async automaticBindingCommand(command: AutomaticBindingCommand): Promise<AutomaticBindingRecord> {
+    const parsed = AutomaticBindingCommandSchema.parse(command);
+    const bindingId = parsed.action === 'create' ? generateUuid() : parsed.bindingId;
+    const at = nowIso();
+    return this.runMutation(
+      async () => {
+        const graph = JSON.parse(JSON.stringify(await this.exportGraph())) as GraphData;
+        const record = applyAutomaticBindingCommand(graph, parsed, bindingId, at);
+        this.replaceGraphData(graph);
+        return record;
+      },
+      { operation: 'automatic_binding_command', durable: true },
+    );
+  }
   supportsDurableExtraction(): boolean {
     return Boolean(this.persistPath);
   }
@@ -206,6 +242,25 @@ export class GraphologyStorage implements IGraphStorage {
     binding: QueueBinding,
     limits: QueueLimits,
   ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
+    return this.appendEpisodesWithExtractionInternal(inputs, eligible, binding, limits, false);
+  }
+
+  async appendAutomaticEpisodesWithExtraction(
+    inputs: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
+    return this.appendEpisodesWithExtractionInternal(inputs, eligible, binding, limits, true);
+  }
+
+  private async appendEpisodesWithExtractionInternal(
+    inputs: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+    allowTrustedAutomatic: boolean,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
     if (!this.persistPath) throw new Error('Engram queue: persistence_required');
     await fs.promises.mkdir(path.dirname(this.persistPath), { recursive: true });
     if (
@@ -215,15 +270,29 @@ export class GraphologyStorage implements IGraphStorage {
     )
       throw new Error('Engram queue: invalid_batch');
     const prepared = inputs.map((input) => {
+      assertAutomaticEpisodeTrustedPath(input, allowTrustedAutomatic);
       if (input.attributes?.[QUEUE_ATTRIBUTE] !== undefined)
         throw new Error('Engram queue: reserved_attribute');
       return {
-        parsed: CreateEpisodicNodeSchema.parse(input),
+        parsed: CreateEpisodicNodeSchema.parse(
+          allowTrustedAutomatic ? prepareAutomaticEpisodeInput(input) : input,
+        ),
         auto: !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
       };
     });
     return this.runMutation(
       async () => {
+        if (
+          allowTrustedAutomatic &&
+          prepared.some(
+            ({ parsed }) =>
+              Object.prototype.hasOwnProperty.call(parsed.attributes, SOURCE_ENVELOPE_ATTRIBUTE) ||
+              Object.prototype.hasOwnProperty.call(parsed.attributes, WRITE_OWNER_ATTRIBUTE),
+          )
+        ) {
+          const current = JSON.parse(JSON.stringify(await this.exportGraph())) as GraphData;
+          for (const item of prepared) assertAutomaticEpisodeBinding(current, item.parsed);
+        }
         const results = prepared.map((item) => this.appendEpisodeInternal(item.parsed, item.auto));
         const graph = JSON.parse(JSON.stringify(await this.exportGraph())) as GraphData;
         const refs = enqueue(graph, results, eligible, binding, limits, nowIso());
@@ -231,7 +300,9 @@ export class GraphologyStorage implements IGraphStorage {
         return {
           results: results.map((item) => ({
             ...item,
-            episode: graph.episodes.find((ep) => ep.uuid === item.episode.uuid)!,
+            episode: protectAutomaticEpisode(
+              graph.episodes.find((ep) => ep.uuid === item.episode.uuid)!,
+            ),
           })),
           jobs: refs,
           queue: queueStats(graph, inputs[0].group_id),
@@ -263,7 +334,7 @@ export class GraphologyStorage implements IGraphStorage {
       async () => {
         const existing = await this.exportGraph();
         const incoming = prepareQueueImport(input, existing, nowIso());
-        this.mergeGraphData(incoming);
+        this.mergeGraphData(prepareAutomaticImport(incoming, existing));
         this.extractionEpoch = generateUuid();
       },
       { operation: 'import_extraction_backup', durable: true },
@@ -284,6 +355,7 @@ export class GraphologyStorage implements IGraphStorage {
   // ===== Entity Operations =====
 
   async addEntity(input: CreateEntityNode): Promise<EntityNode> {
+    assertNoAutomaticBindingAttribute(input.attributes);
     const now = nowIso();
     const entity: EntityNode = {
       uuid: generateUuid(),
@@ -336,14 +408,15 @@ export class GraphologyStorage implements IGraphStorage {
     return this.runMutation(() => {
       const existing = this.getEpisodeOrEntity(uuid, 'entity') as EntityNode | null;
       if (!existing) throw new Error(`Entity not found: ${uuid}`);
+      const safeUpdates = prepareAutomaticEntityUpdate(existing, updates);
 
-      const updated: EntityNode = {
+      const updated = protectAutomaticEntity({
         ...existing,
-        ...updates,
+        ...safeUpdates,
         uuid: existing.uuid,
         created_at: existing.created_at,
         updated_at: nowIso(),
-      };
+      });
 
       this.graph.setNodeAttribute(uuid, 'data', updated);
       this.searchProvider.indexEntity(updated.uuid, {
@@ -359,6 +432,8 @@ export class GraphologyStorage implements IGraphStorage {
   async deleteEntity(uuid: string): Promise<void> {
     await this.runMutation(() => {
       if (!this.graph.hasNode(uuid)) return;
+      const existing = this.getEpisodeOrEntity(uuid, 'entity') as EntityNode | null;
+      if (existing) assertAutomaticEntityDeleteAllowed(existing);
 
       // Remove connected edges from search index before Graphology drops them
       this.graph.forEachEdge(uuid, (edgeKey, attrs) => {
@@ -448,20 +523,42 @@ export class GraphologyStorage implements IGraphStorage {
     return attrs.data as EntityEdge;
   }
 
-  async getEdgesBetween(sourceUuid: string, targetUuid: string): Promise<EntityEdge[]> {
+  async getEdgesBetween(
+    sourceUuid: string,
+    targetUuid: string,
+    limit?: number,
+  ): Promise<EntityEdge[]> {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 129)) {
+      throw new Error('Edge limit must be an integer between 1 and 129');
+    }
     const edges: EntityEdge[] = [];
 
     if (!this.graph.hasNode(sourceUuid) || !this.graph.hasNode(targetUuid)) return edges;
 
-    this.graph.forEachEdge(sourceUuid, (edgeKey, attrs, source, target) => {
-      if (attrs.type !== 'entity_edge' || !attrs.data) return;
+    if (limit === undefined) {
+      this.graph.forEachEdge(sourceUuid, (_edgeKey, attributes, source, target) => {
+        if (attributes.type !== 'entity_edge' || !attributes.data) return;
+        if (
+          (source === sourceUuid && target === targetUuid) ||
+          (source === targetUuid && target === sourceUuid)
+        ) {
+          edges.push(attributes.data as EntityEdge);
+        }
+      });
+      return edges;
+    }
+
+    for (const entry of this.graph.edgeEntries(sourceUuid)) {
+      const { attributes, source, target } = entry;
+      if (attributes.type !== 'entity_edge' || !attributes.data) continue;
       if (
         (source === sourceUuid && target === targetUuid) ||
         (source === targetUuid && target === sourceUuid)
       ) {
-        edges.push(attrs.data as EntityEdge);
+        edges.push(attributes.data as EntityEdge);
+        if (edges.length >= limit) break;
       }
-    });
+    }
 
     return edges;
   }
@@ -527,6 +624,10 @@ export class GraphologyStorage implements IGraphStorage {
     return this.appendEpisodesWithOptions(inputs, true);
   }
 
+  async appendAutomaticEpisodes(inputs: CreateEpisodicNode[]): Promise<AppendEpisodeResult[]> {
+    return this.appendEpisodesWithOptions(inputs, true, true);
+  }
+
   private async appendEpisodeWithOptions(
     input: CreateEpisodicNode,
     autoChain: boolean,
@@ -537,10 +638,12 @@ export class GraphologyStorage implements IGraphStorage {
   private async appendEpisodesWithOptions(
     inputs: CreateEpisodicNode[],
     autoChain: boolean,
+    allowTrustedAutomatic = false,
   ): Promise<AppendEpisodeResult[]> {
     if (inputs.length === 0) return [];
     if (inputs.length > 1000) throw new Error('Episode append batch cannot exceed 1000 episodes');
 
+    for (const input of inputs) assertAutomaticEpisodeTrustedPath(input, allowTrustedAutomatic);
     if (inputs.some((ep) => ep.attributes?.[QUEUE_ATTRIBUTE] !== undefined))
       throw new Error('Engram queue: reserved_attribute');
     const groupId = inputs[0].group_id;
@@ -551,14 +654,28 @@ export class GraphologyStorage implements IGraphStorage {
     const prepared = inputs.map((input) => ({
       shouldAutoChain:
         autoChain && !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
-      parsed: CreateEpisodicNodeSchema.parse(input),
+      parsed: CreateEpisodicNodeSchema.parse(
+        allowTrustedAutomatic ? prepareAutomaticEpisodeInput(input) : input,
+      ),
     }));
+    const hasAutomaticOwnership =
+      allowTrustedAutomatic &&
+      prepared.some(
+        ({ parsed }) =>
+          Object.prototype.hasOwnProperty.call(parsed.attributes, SOURCE_ENVELOPE_ATTRIBUTE) ||
+          Object.prototype.hasOwnProperty.call(parsed.attributes, WRITE_OWNER_ATTRIBUTE),
+      );
 
     return this.runMutation(
-      () =>
-        prepared.map(({ parsed, shouldAutoChain }) =>
+      async () => {
+        if (hasAutomaticOwnership) {
+          const graph = JSON.parse(JSON.stringify(await this.exportGraph())) as GraphData;
+          for (const { parsed } of prepared) assertAutomaticEpisodeBinding(graph, parsed);
+        }
+        return prepared.map(({ parsed, shouldAutoChain }) =>
           this.appendEpisodeInternal(parsed, shouldAutoChain),
-        ),
+        );
+      },
       {
         operation: inputs.length === 1 ? 'append_episode' : 'append_episodes',
         itemCount: inputs.length,
@@ -574,7 +691,10 @@ export class GraphologyStorage implements IGraphStorage {
     if (parsed.attributes[QUEUE_ATTRIBUTE] !== undefined)
       throw new Error('Engram queue: reserved_attribute');
     const existing = this.findEpisodeByIdempotency(parsed);
-    if (existing) return { episode: existing, created: false };
+    if (existing) {
+      assertOwnedEpisodeReplay(existing, parsed);
+      return { episode: existing, created: false };
+    }
 
     const createdAt = nowIso();
     const previousEpisodeUuid = shouldAutoChain
@@ -588,7 +708,8 @@ export class GraphologyStorage implements IGraphStorage {
       updated_at: createdAt,
     };
 
-    this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
+    const storedEpisode = protectAutomaticEpisode(episode);
+    this.graph.addNode(episode.uuid, { type: 'episode', data: storedEpisode });
     this.episodeOrder.set(episode.uuid, this.nextOrder++);
 
     const previous = previousEpisodeUuid
@@ -602,7 +723,7 @@ export class GraphologyStorage implements IGraphStorage {
       });
     }
 
-    return { episode, created: true };
+    return { episode: storedEpisode, created: true };
   }
 
   private findEpisodeByIdempotency(input: CreateEpisodicNode): EpisodicNode | null {
@@ -683,10 +804,11 @@ export class GraphologyStorage implements IGraphStorage {
       assertNoQueueMutation([existing]);
       if (updates.attributes?.[QUEUE_ATTRIBUTE] !== undefined)
         throw new Error('Engram queue: reserved_attribute');
+      const safeUpdates = prepareAutomaticEpisodeUpdate(existing, updates);
 
       const updated = EpisodicNodeSchema.parse({
         ...existing,
-        ...updates,
+        ...safeUpdates,
         uuid: existing.uuid,
         group_id: existing.group_id,
         source_message_id: existing.source_message_id,
@@ -696,8 +818,9 @@ export class GraphologyStorage implements IGraphStorage {
         created_at: existing.created_at,
         updated_at: nowIso(),
       });
-      this.graph.setNodeAttribute(uuid, 'data', updated);
-      return updated;
+      const protectedEpisode = protectAutomaticEpisode(updated);
+      this.graph.setNodeAttribute(uuid, 'data', protectedEpisode);
+      return protectedEpisode;
     });
   }
 
@@ -1268,9 +1391,11 @@ export class GraphologyStorage implements IGraphStorage {
   async importGraph(data: ImportGraphData): Promise<void> {
     const migrated = migrateGraphData(data).data;
     assertNoQueueMutation(migrated.episodes);
-    await this.runMutation(() => {
+    await this.runMutation(async () => {
+      const existing = await this.exportGraph();
+      const safeImport = prepareAutomaticImport(migrated, existing);
       this.extractionEpoch = generateUuid();
-      this.mergeGraphData(migrated);
+      this.mergeGraphData(safeImport);
     });
   }
 
@@ -1793,7 +1918,8 @@ export class GraphologyStorage implements IGraphStorage {
     // Import entities first because relationship edges require both endpoints.
     for (const entity of data.entities) {
       if (this.graph.hasNode(entity.uuid)) continue;
-      this.graph.addNode(entity.uuid, { type: 'entity', data: entity });
+      const storedEntity = protectAutomaticEntity(entity);
+      this.graph.addNode(entity.uuid, { type: 'entity', data: storedEntity });
       this.searchProvider.indexEntity(entity.uuid, {
         name: entity.name,
         summary: entity.summary,
@@ -1807,7 +1933,8 @@ export class GraphologyStorage implements IGraphStorage {
     });
     for (const episode of sortedEpisodes) {
       if (this.graph.hasNode(episode.uuid)) continue;
-      this.graph.addNode(episode.uuid, { type: 'episode', data: episode });
+      const storedEpisode = protectAutomaticEpisode(episode);
+      this.graph.addNode(episode.uuid, { type: 'episode', data: storedEpisode });
       this.episodeOrder.set(episode.uuid, this.nextOrder++);
     }
 
