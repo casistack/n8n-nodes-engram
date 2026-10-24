@@ -113,6 +113,30 @@ export class LlmClient {
               : response.status >= 500
                 ? 'provider_server'
                 : 'invalid_request';
+        if (response.status === 400 && options?.responseFormat?.type === 'json_object') {
+          let providerError: unknown;
+          try {
+            providerError = (JSON.parse(text) as { error?: unknown })?.error;
+          } catch {
+            // Non-JSON provider errors retain the existing bounded classification.
+          }
+          const error = providerError as
+            | { type?: unknown; param?: unknown; message?: unknown }
+            | undefined;
+          if (
+            error?.type === 'invalid_request_error' &&
+            error.param === 'messages' &&
+            typeof error.message === 'string' &&
+            /\bmust\b.{0,100}\b(?:contain|include|mention)\b.{0,100}\bjson\b/i.test(
+              error.message,
+            ) &&
+            /\bjson_object\b/i.test(error.message)
+          )
+            throw new ExtractionError('invalid_request', 400, {
+              reason: 'json_mode_instruction_missing',
+              parameter: 'messages',
+            });
+        }
         // Inspect only for classification; never retain or emit provider-controlled text.
         if (
           response.status === 400 &&
@@ -162,10 +186,21 @@ export class LlmClient {
       temperature?: number | ExtractionTemperature;
       maxTokens?: number;
       stage?: ExtractionStage;
+      /** Opt-in caller precondition: data messages cannot supply trusted JSON instructions. */
+      requireJsonInstruction?: boolean;
     },
   ): Promise<T> {
+    const { requireJsonInstruction, ...requestOptions } = options ?? {};
+    if (
+      requireJsonInstruction &&
+      !messages.some((message) => message.role === 'system' && /\bjson\b/i.test(message.content))
+    )
+      throw new ExtractionError('invalid_request', undefined, {
+        reason: 'json_mode_instruction_missing',
+        parameter: 'messages',
+      });
     const response = await this.chat(messages, {
-      ...options,
+      ...requestOptions,
       responseFormat: { type: 'json_object' },
     });
 

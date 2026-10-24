@@ -219,18 +219,25 @@ function suite(name: string, create: (path: string) => IGraphStorage) {
         { output: 'Noted.' },
       );
       const originalCommand = storage.extractionQueueCommand!.bind(storage);
+      let providerStarted!: () => void;
+      const providerReady = new Promise<void>((resolve) => {
+        providerStarted = resolve;
+      });
       jest.spyOn(storage, 'extractionQueueCommand').mockImplementation(async (command) => {
-        if (command.action === 'renew') throw new Error('Synthetic lease loss');
+        if (command.action === 'renew') {
+          // Coordinate mid-request lease loss rather than racing backend snapshot latency.
+          await providerReady;
+          throw new Error('Synthetic lease loss');
+        }
         return originalCommand(command);
       });
-      global.fetch = jest
-        .fn()
-        .mockImplementation(
-          async (_url, request) =>
-            new Promise((_resolve, reject) =>
-              request.signal.addEventListener('abort', () => reject(new Error('aborted'))),
-            ),
-        );
+      global.fetch = jest.fn().mockImplementation(
+        async (_url, request) =>
+          new Promise((_resolve, reject) => {
+            request.signal.addEventListener('abort', () => reject(new Error('aborted')));
+            providerStarted();
+          }),
+      );
       jest.spyOn(console, 'warn').mockImplementation();
       const result = await processExtractionJobs(storage, group, 'local', settings, 1, {
         lease_ms: 1000,

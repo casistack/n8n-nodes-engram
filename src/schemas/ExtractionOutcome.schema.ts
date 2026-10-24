@@ -22,6 +22,11 @@ export const ExtractionErrorKindSchema = z.enum([
   'cancelled',
 ]);
 export type ExtractionErrorKind = z.infer<typeof ExtractionErrorKindSchema>;
+export const ExtractionErrorDetailsSchema = z.object({
+  reason: z.literal('json_mode_instruction_missing'),
+  parameter: z.literal('messages'),
+});
+export type ExtractionErrorDetails = z.infer<typeof ExtractionErrorDetailsSchema>;
 export const ExtractionStageSchema = z.enum([
   'entities',
   'entity_dedup',
@@ -115,6 +120,8 @@ export const ExtractionOutcomeSchema = z.object({
         stage: ExtractionStageSchema,
         kind: ExtractionErrorKindSchema,
         http_status: z.number().int().min(100).max(599).optional(),
+        reason: z.literal('json_mode_instruction_missing').optional(),
+        parameter: z.literal('messages').optional(),
       }),
     )
     .max(20),

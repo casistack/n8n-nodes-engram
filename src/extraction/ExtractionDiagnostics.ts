@@ -4,6 +4,8 @@ import { performance } from 'perf_hooks';
 import {
   ExtractionStageSchema,
   ExtractionMetricContextSchema,
+  ExtractionErrorDetailsSchema,
+  type ExtractionErrorDetails,
   type ExtractionMetricContext,
   type ExtractionStage,
   type ExtractionErrorKind,
@@ -14,12 +16,15 @@ import {
 
 /** Safe by construction: never retains the original provider body or error message. */
 export class ExtractionError extends Error {
+  public readonly details?: ExtractionErrorDetails;
   constructor(
     public readonly kind: ExtractionErrorKind,
     public readonly httpStatus?: number,
+    details?: ExtractionErrorDetails,
   ) {
     super(`Engram extraction: ${kind}`);
     this.name = 'ExtractionError';
+    this.details = details ? ExtractionErrorDetailsSchema.parse(details) : undefined;
   }
 }
 export function safeExtractionError(error: unknown): ExtractionError {
@@ -258,6 +263,7 @@ export class ExtractionDiagnostics {
         stage,
         kind: error.kind,
         ...(error.httpStatus ? { http_status: error.httpStatus } : {}),
+        ...error.details,
       });
     else this.outcome.errors_truncated = true;
     return true;
