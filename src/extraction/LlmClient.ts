@@ -3,6 +3,8 @@
  * Works with OpenAI, OpenRouter, Ollama, or any compatible endpoint.
  */
 
+import { ExtractionTemperatureSchema, type ExtractionTemperature } from '../schemas';
+import { ExtractionError } from './ExtractionDiagnostics';
 import { normalizeHttpBaseUrl } from '../utils/url';
 
 export interface LlmClientConfig {
@@ -11,6 +13,7 @@ export interface LlmClientConfig {
   model: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeoutMs?: number;
+  temperature?: ExtractionTemperature;
 }
 
 export interface LlmMessage {
@@ -32,18 +35,20 @@ export class LlmClient {
   private baseUrl: string;
   private model: string;
   private timeoutMs: number;
+  private temperature: ExtractionTemperature;
 
   constructor(config: LlmClientConfig) {
     this.apiKey = config.apiKey;
     this.baseUrl = normalizeHttpBaseUrl(config.baseUrl, 'LLM API baseUrl');
     this.model = config.model;
+    this.temperature = ExtractionTemperatureSchema.parse(config.temperature ?? { mode: 'legacy' });
     this.timeoutMs = config.timeoutMs ?? 30_000;
   }
 
   async chat(
     messages: LlmMessage[],
     options?: {
-      temperature?: number;
+      temperature?: number | ExtractionTemperature;
       maxTokens?: number;
       responseFormat?: { type: 'json_object' | 'text' };
     },
@@ -53,8 +58,16 @@ export class LlmClient {
     const body: Record<string, unknown> = {
       model: this.model,
       messages,
-      temperature: options?.temperature ?? 0.0,
     };
+
+    const setting = options?.temperature;
+    const temperature = ExtractionTemperatureSchema.parse(
+      typeof setting === 'number'
+        ? { mode: 'custom', value: setting }
+        : (setting ?? this.temperature),
+    );
+    if (temperature.mode !== 'providerDefault')
+      body.temperature = temperature.mode === 'custom' ? temperature.value : 0;
 
     if (options?.maxTokens) {
       body.max_tokens = options.maxTokens;
@@ -67,45 +80,60 @@ export class LlmClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    let response: Response;
     try {
-      response = await fetch(url, {
+      const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`LLM API request timed out after ${this.timeoutMs}ms`);
+      if (!response.ok) {
+        const text = await response.text();
+        let kind: import('../schemas').ExtractionErrorKind =
+          response.status === 401 || response.status === 403
+            ? 'authentication'
+            : response.status === 429
+              ? 'rate_limit'
+              : response.status >= 500
+                ? 'provider_server'
+                : 'invalid_request';
+        // Inspect only for classification; never retain or emit provider-controlled text.
+        if (
+          response.status === 400 &&
+          /unsupported[_ ]parameter|(?:temperature|max_tokens|max_completion_tokens|response_format).{0,100}(?:unsupported|not supported|does not support|only supports)/i.test(
+            text,
+          )
+        )
+          kind = 'unsupported_parameter';
+        throw new ExtractionError(kind, response.status);
       }
-      throw error;
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        throw new ExtractionError('invalid_response');
+      }
+      const envelope = data as {
+        choices?: Array<{ message?: { content?: unknown } }>;
+        usage?: LlmResponse['usage'];
+      } | null;
+      const content = envelope?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim())
+        throw new ExtractionError('invalid_response');
+      return { content, usage: envelope?.usage };
+    } catch (error: unknown) {
+      if (controller.signal.aborted) throw new ExtractionError('timeout');
+      if (error instanceof ExtractionError) throw error;
+      throw new ExtractionError('network');
     } finally {
       clearTimeout(timeout);
     }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`LLM API error (${response.status}): ${errorText}`);
-    }
-
-    const data = (await response.json()) as {
-      choices: Array<{ message: { content: string } }>;
-      usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-    };
-
-    return {
-      content: data.choices[0]?.message?.content ?? '',
-      usage: data.usage,
-    };
   }
 
   async chatJson<T>(
     messages: LlmMessage[],
-    options?: { temperature?: number; maxTokens?: number },
+    options?: { temperature?: number | ExtractionTemperature; maxTokens?: number },
   ): Promise<T> {
     const response = await this.chat(messages, {
       ...options,
@@ -115,7 +143,7 @@ export class LlmClient {
     try {
       return JSON.parse(response.content) as T;
     } catch {
-      throw new Error(`Failed to parse LLM JSON response: ${response.content.slice(0, 200)}`);
+      throw new ExtractionError('invalid_response');
     }
   }
 }

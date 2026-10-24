@@ -1,3 +1,8 @@
+import {
+  ExtractionError,
+  reportExtractionError,
+  type ExtractionDiagnostics,
+} from './ExtractionDiagnostics';
 import type { IGraphStorage } from '../storage/IGraphStorage';
 import {
   ExtractionMetadataV2Schema,
@@ -49,14 +54,56 @@ export class ExtractionPipeline {
   private requireConfidence: boolean;
   private thresholdPolicy?: ExtractionThresholdPolicy;
 
-  constructor(storage: IGraphStorage, config: ExtractionPipelineConfig) {
+  constructor(
+    storage: IGraphStorage,
+    private config: ExtractionPipelineConfig,
+    private diagnostics?: ExtractionDiagnostics,
+  ) {
     const llm = new LlmClient(config.llmConfig);
-    this.storage = storage;
-    this.entityExtractor = new EntityExtractor(llm);
-    this.relationshipExtractor = new RelationshipExtractor(llm);
-    this.deduplicator = new EntityDeduplicator(llm);
-    this.contradictionDetector = new ContradictionDetector(llm);
-    this.edgeDeduplicator = new EdgeDeduplicator(llm);
+    this.storage = diagnostics
+      ? new Proxy(storage, {
+          get(target, property) {
+            const value: unknown = Reflect.get(target, property);
+            if (typeof value !== 'function') return value;
+            return async (...args: unknown[]) => {
+              try {
+                const result: unknown = await (value as (...a: unknown[]) => unknown).apply(
+                  target,
+                  args,
+                );
+                const counters = {
+                  addEntity: 'entities_created',
+                  updateEntity: 'entities_updated',
+                  addEdge: 'edges_created',
+                  updateEdge: 'edges_updated',
+                } as const;
+                const counter = counters[property as keyof typeof counters];
+                if (counter) {
+                  const update = args[1] as Record<string, unknown> | undefined;
+                  diagnostics.increment(
+                    property === 'updateEdge' && update?.expired_at ? 'edges_expired' : counter,
+                  );
+                  diagnostics.success('persistence');
+                }
+                return result;
+              } catch {
+                const error = new ExtractionError('storage');
+                if (
+                  ['addEntity', 'updateEntity', 'addEdge', 'updateEdge'].includes(String(property))
+                ) {
+                  reportExtractionError('persistence', error, diagnostics);
+                }
+                throw error;
+              }
+            };
+          },
+        })
+      : storage;
+    this.entityExtractor = new EntityExtractor(llm, diagnostics);
+    this.relationshipExtractor = new RelationshipExtractor(llm, diagnostics);
+    this.deduplicator = new EntityDeduplicator(llm, diagnostics);
+    this.contradictionDetector = new ContradictionDetector(llm, diagnostics);
+    this.edgeDeduplicator = new EdgeDeduplicator(llm, diagnostics);
     this.entityTypes = config.entityTypes;
     this.groupId = config.groupId;
     this.requireConfidence = config.requireConfidence ?? false;
@@ -95,7 +142,14 @@ export class ExtractionPipeline {
     await this.processSources(sources);
   }
 
-  async processSources(sources: ExtractionSource[]): Promise<void> {
+  async processSources(
+    sources: ExtractionSource[],
+    diagnostics?: ExtractionDiagnostics,
+  ): Promise<void> {
+    if (diagnostics) {
+      // Each invocation owns its stages, collector, and storage accounting proxy.
+      return new ExtractionPipeline(this.storage, this.config, diagnostics).processSources(sources);
+    }
     const selectedSources = sources.filter((source) => source.content.trim().length > 0);
     if (selectedSources.length === 0) return;
     const episodeUuids = extractionEpisodeUuids(selectedSources);
@@ -112,7 +166,10 @@ export class ExtractionPipeline {
       this.requireConfidence,
     );
 
-    if (extractedEntities.length === 0) return;
+    if (extractedEntities.length === 0) {
+      if (!this.diagnostics?.hasFailed('entities')) this.diagnostics?.skip('relationships');
+      return;
+    }
 
     // Step 3: Deduplicate and persist entities
     const resolvedEntities = new Map<string, EntityNode>();
@@ -175,6 +232,7 @@ export class ExtractionPipeline {
         if (Object.keys(updates).length > 0) {
           return await this.storage.updateEntity(existing.uuid, updates);
         }
+        this.diagnostics?.increment('unchanged');
         return existing;
       }
     }
@@ -185,8 +243,9 @@ export class ExtractionPipeline {
       try {
         const result = await this.embeddingService.embed(extracted.name);
         nameEmbedding = result.embedding;
+        this.diagnostics?.success('embeddings');
       } catch (error) {
-        console.warn('Engram: Failed to generate entity name embedding:', (error as Error).message);
+        reportExtractionError('embeddings', error, this.diagnostics);
       }
     }
 
@@ -260,13 +319,7 @@ export class ExtractionPipeline {
     try {
       samePairEdges = await this.storage.getEdgesBetween(sourceEntity.uuid, targetEntity.uuid);
     } catch (error) {
-      console.warn(
-        'Engram: Failed to fetch edges between',
-        sourceEntity.name,
-        'and',
-        targetEntity.name + ':',
-        (error as Error).message,
-      );
+      reportExtractionError('edge_dedup', error, this.diagnostics);
       // If we can't fetch existing edges, skip dedup/contradiction and just create
     }
 
@@ -300,18 +353,14 @@ export class ExtractionPipeline {
             );
             if (Object.keys(updates).length > 0) {
               await this.storage.updateEdge(existingMatchingEdge.uuid, updates);
+            } else {
+              this.diagnostics?.increment('unchanged');
             }
             return; // Deduplicated — skip contradiction detection and creation
           }
         }
       } catch (error) {
-        console.warn(
-          'Engram: Edge deduplication failed for',
-          sourceEntity.name,
-          '->',
-          targetEntity.name + ':',
-          (error as Error).message,
-        );
+        reportExtractionError('edge_dedup', error, this.diagnostics);
         // Fall through to cross-name dedup, then contradiction detection + creation
       }
     }
@@ -351,18 +400,14 @@ export class ExtractionPipeline {
             );
             if (Object.keys(updates).length > 0) {
               await this.storage.updateEdge(candidate.uuid, updates);
+            } else {
+              this.diagnostics?.increment('unchanged');
             }
             return; // Cross-name deduplicated — skip contradiction detection and creation
           }
         }
       } catch (error) {
-        console.warn(
-          'Engram: Cross-name edge deduplication failed for',
-          sourceEntity.name,
-          '->',
-          targetEntity.name + ':',
-          (error as Error).message,
-        );
+        reportExtractionError('cross_edge_dedup', error, this.diagnostics);
         // Fall through to contradiction detection + creation
       }
     }
@@ -402,13 +447,7 @@ export class ExtractionPipeline {
           normalizedNewEdgeName,
         );
       } catch (error) {
-        console.warn(
-          'Engram: Contradiction detection failed for edge between',
-          sourceEntity.name,
-          'and',
-          targetEntity.name + ':',
-          (error as Error).message,
-        );
+        reportExtractionError('contradictions', error, this.diagnostics);
       }
     }
 
@@ -418,8 +457,9 @@ export class ExtractionPipeline {
       try {
         const result = await this.embeddingService.embed(rel.fact);
         factEmbedding = result.embedding;
+        this.diagnostics?.success('embeddings');
       } catch (error) {
-        console.warn('Engram: Failed to generate edge fact embedding:', (error as Error).message);
+        reportExtractionError('embeddings', error, this.diagnostics);
       }
     }
 
@@ -465,8 +505,9 @@ export class ExtractionPipeline {
         try {
           const result = await this.embeddingService.embed(effectiveFact);
           updates.fact_embedding = result.embedding;
+          this.diagnostics?.success('embeddings');
         } catch (error) {
-          console.warn('Engram: Failed to regenerate edge embedding:', (error as Error).message);
+          reportExtractionError('embeddings', error, this.diagnostics);
         }
       }
     }

@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-from-v04x">Upgrade</a> &middot;
+  <a href="#upgrading-to-v060">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -98,6 +98,64 @@ Engram provides dedicated n8n nodes for AI memory, graph exploration, administra
 cd ~/.n8n
 npm install n8n-nodes-engram
 ```
+
+---
+
+## Upgrading to v0.6.0
+
+**Installing this release makes the controls available; it does not automatically activate history filtering or final-turn writes.** Existing saved settings retain temperature `0`, History Filter `Off`, Message Write Policy `Legacy`, and Store Tool Audit `Disabled`. Saved Memory v1 nodes remain v1 until explicitly upgraded. The temperature control is available in both v1 and v2; the history/write/query controls require Memory v2.
+
+### Back Up and Install
+
+1. Back up your workflows and n8n instance configuration using your normal recovery procedure. Create current Engram exports and backend backups before changing package or node settings.
+2. **Embedded:** preserve each workflow's graph file while writes are paused, or take a consistent Engram export. Keep the original storage directory, workflow-to-file mapping, and session/group keys. A copied workflow can have a different default storage filename; validate against a separately restored test copy rather than accidentally testing a new empty graph.
+3. **Neo4j:** take a database backup or consistent export using your normal Neo4j recovery procedure. Keep the same database, credentials, and session/group keys for the existing deployment.
+4. Upgrade the existing community-node installation to `n8n-nodes-engram@0.6.0`, restart n8n, refresh the editor, and confirm the installed version. Node.js 20 or newer is required by the package.
+5. For stores already running `0.5.1`, this release requires **no storage schema migration** on either backend. Run **Engram Admin > Monitoring > Diagnostics** to confirm storage health. If upgrading from `0.4.x` or earlier, complete the existing provenance/schema migration instructions separately.
+
+### Activate Deliberately, One Memory Workflow at a Time
+
+Start with one backed-up direct-conversation workflow, then validate before updating the remaining Memory nodes. If it still uses Memory v1, use n8n's node upgrade action in an inactive workflow copy to adopt **Memory v2**. Preserve its intended storage and canonical session key; do not replace session keys or use display-name changes as an identity migration.
+
+| Setting | Initial activation |
+| --- | --- |
+| Extraction Temperature Mode | Select **Provider Default** when the extraction model rejects temperature `0`; this truly omits the request field. Otherwise retain a mode supported by that model. |
+| History Filter | Select **Provenance** to exclude known tool-output, monitor-summary, and audit episodes from context. |
+| Message Write Policy | Select **Final Turns** to apply storage/extraction controls to both normal saves and native bulk tool-assisted saves. |
+| Store Tool Audit | Keep **Disabled** initially. Enable only if audit retention is needed; retained audits stay outside conversation context under Final Turns. |
+| Current Human Query | Map to the same current-human-message expression used by the agent prompt. The default accepts string `chatInput`, then string `input`; a different webhook shape needs an explicit mapping. |
+| Store Human / AI Episodes | Review the intended retention; both default to Enabled in v2. |
+| Extract from Human / AI / System and Tool Content | Human extraction defaults Enabled; AI and System/Tool extraction default Disabled. Review these when upgrading a v1 node. |
+| Human Episode Kind | Keep **Active Human** for direct conversations; use **Passive Human** for observed/curated human ingestion. |
+| Source Message ID / Idempotency Key | Use a stable **per-message/per-turn** identity for retry deduplication. A static session key or phone number is not a turn identity and can collapse distinct messages. |
+
+The context window counts messages/episodes, not user turns or days. With filtering enabled, older eligible messages refill that window within **Maximum History Scan** (default 1000, maximum 10000). Load diagnostics distinguish snapshot overflow from scan-budget truncation. n8n subnode expressions can have different item-resolution behavior from regular nodes; validate mappings for independent conversations rather than assuming a batch resolves each item separately.
+
+### Historical Artifacts: Inspect and Dry-Run First
+
+This release does not delete historical episodes or graph facts. Provenance filtering cannot automatically prove that an unlabelled legacy JSON message is a tool artifact.
+
+1. Use **Engram Explorer > Episode > List/Get** with the exact group, date, and provenance filters to inspect candidate records, their source identities, and `previous_episode_uuid` links. Preserve genuine human JSON, quoted content, and ambiguous messages.
+2. For a bounded preview, use **Engram Admin > Lifecycle > Purge Episodes**, keep **Execution Mode > Dry Run**, and set the same exact group/provenance/date scope with a small **Maximum Episodes** limit. **Malformed Content Rule > Empty Assistant Output** can locate empty assistant records; inspect their neighboring episodes separately. **Content Contains** should use a distinctive reviewed marker, not generic JSON keys. Do not select **Delete** or confirm a purge as part of this upgrade. Dry-run results are preview candidates, not automatic approval for deletion or filtering.
+3. There is no separate History Filter dry-run switch. Preview filtering in an **inactive workflow copy backed by a separate restored store**, compare its Memory load output before/after, and inspect `history.excluded_legacy`, `legacy_candidates`, `returned`, and `scan_truncated`.
+4. If an exact legacy payload is confirmed to be an artifact, calculate its lowercase SHA256 from the **exact UTF-8 episode content**, including whitespace. Select **History Filter > Provenance and Reviewed Legacy** and add that digest to **Reviewed Legacy Content Hashes** (up to 100 comma-separated hashes). A matching hash still requires strict legacy role, adjacency, chain, and source checks. The neighboring empty assistant and reviewed payload are excluded only from context; original records and facts remain intact. Unapproved or ambiguous JSON stays visible.
+
+### Verify Before Expanding the Rollout
+
+- **Extraction:** inspect the Memory save/bulk-write `extraction` outcome and verify expected accepted entities/relationships in Explorer. A green overall chat execution or a valid empty extraction response alone does not prove fact creation.
+- **Older recall:** query a known older accepted fact after its episode has fallen outside the recent-message window. Confirm the configured current query and relevant graph context, including any governance filters.
+- **Tool-assisted conversation:** exercise a real tool, confirm the real human/final-assistant messages are retained, and verify tool results are not new human sources. Inspect bulk write and extraction diagnostics.
+- **Filtered history:** confirm useful messages refill the window, reviewed exclusions match expectations, genuine JSON/quotes remain, and scan truncation is understood. Re-run one explicit turn identity to check retry behavior without reusing that identity for new turns.
+
+After these checks pass, apply the intended controls to the remaining Memory nodes in stages. Extraction and persistence are not a transactional exactly-once pipeline: retrying an already-stored source does not automatically recover extraction interrupted after persistence. Storage-disabled extraction has no durable retry ledger.
+
+### Rollback
+
+Keep the pre-upgrade workflows, exports, and backend backups unchanged until rollout validation finishes. To roll back, pause writes, restore the saved workflow configuration, reinstall `n8n-nodes-engram@0.5.1` through the same installation method, and restart n8n. This returns the prior behavior, including its extraction-model limitations.
+
+No store restore is required merely to undo a non-destructive history filter. However, if **Store Tool Audit** was enabled, `0.5.1` does not implement the new audit-context exclusion and may replay those new records. Review that history before downgrading; keeping `0.6.0` with the intended controls or using a separately restored pre-upgrade store may be preferable. Turning filtering off does not delete audit records.
+
+If a store restore is necessary, use the backed-up embedded file/Engram export or your Neo4j recovery procedure while writes are paused. Reconcile messages created since the backup before replacing live data; restoring an older snapshot can discard newer conversations. Never wipe groups, trim/change session keys, or delete graph facts as an automatic rollback step.
 
 ---
 
@@ -184,6 +242,7 @@ On each conversation turn, Engram Memory:
 | --- | --- | --- |
 | Storage Backend | Embedded (Graphology) or Neo4j | Embedded |
 | Knowledge Extraction | LLM-powered entity extraction | Disabled |
+| Extraction Temperature Mode | Legacy (0), Provider Default (omit), or Custom | Legacy (0) |
 | Store Human Episodes | Persist human messages as episodes (v2) | Enabled |
 | Human Episode Kind | Classify human input as active or passive provenance (v2) | Active Human |
 | Store AI Episodes | Persist assistant replies as episodes (v2) | Enabled |
@@ -191,12 +250,32 @@ On each conversation turn, Engram Memory:
 | Extract from AI Messages | Allow assistant content to produce facts (v2) | Disabled |
 | Semantic Search | Vector embeddings for hybrid search | Disabled |
 | Graph Traversal | BFS enrichment from matched entities | Disabled |
-| Context Window | Recent turns to include | 10 |
+| Context Window | Recent messages/episodes to include | 10 |
 | Max Facts per Query | Facts injected as context | 10 |
 | Min Relevance Score | Threshold for inclusion (0&ndash;1) | 0.5 |
 | Retention Policy | Episode lifecycle management | Forever |
 
 Existing saved Engram Memory nodes retain their original node version and behavior when the package is upgraded. Use n8n's node upgrade action on a workflow copy to adopt v2 controls. Passive ingestion workflows should select **Human Episode Kind > Passive Human**, while direct agent conversations should keep the default **Active Human** classification.
+
+### History Filtering and Final-Turn Writes (Memory v2)
+
+These controls are opt-in. Existing saved settings keep **History Filter > Off** and **Message Write Policy > Legacy**. Upgrade a v1 Memory node through n8n's node upgrade action on a workflow copy before adopting the v2 controls. Session keys and existing episodes are preserved.
+
+- Select **History Filter > Provenance** to exclude tool-output, monitor-summary, and audit episodes from conversation context.
+- Select **Provenance and Reviewed Legacy** to additionally exclude an exact reviewed legacy artifact pair: an empty assistant `[]` immediately chained to an unlabelled legacy human array of response/error objects. The human payload must match a configured **Reviewed Legacy Content Hash**, and source/chain checks must agree. Without that approval, ambiguous JSON remains. Genuine human JSON, quoted messages, and graph fact SystemMessages are retained.
+- **Reviewed Legacy Content Hashes** accepts up to 100 comma-separated lowercase SHA256 hashes of exact UTF-8 episode content, including its whitespace. Review the original episodes before supplying hashes. Filtering changes only the context read; it does not delete records, rewrite chains, or remove graph facts.
+
+The context window counts eligible messages. Engram captures one bounded recent-episode snapshot and scans it in local pages of 100, refilling from older eligible messages. **Maximum History Scan** defaults to 1000 and is capped at 10000; one extra prefetched episode supports boundary evidence and overflow detection. This is bounded snapshot prefetch with local paging, not backend cursor pagination. Load diagnostics show `fetched`, `examined`, `pages`, exclusion counts, and `returned`. `snapshot_overflow` means more history existed than the scan allowance; `scan_truncated` means that allowance prevented filling the window. No new appends are fetched during the scan.
+
+Select **Message Write Policy > Final Turns** to apply the same storage, extraction, and provenance controls when n8n saves a normal turn or calls the native bulk-message tool-save path. Engram retains real human input and the final assistant reply after identified tool calls have closed. Native tool/function messages and intermediate assistant tool calls are classified distinctly and never become human input. **Store Tool Audit** optionally retains those messages as unverified tool-output episodes; they stay outside conversation context even with History Filter set to Off. Tool extraction remains a separate explicit control and is disabled by default.
+
+Set a stable per-turn **Idempotency Key** or human **Source Message ID** to deduplicate retries across both write paths. Final-role keys are independent of intermediate tool count. Repeated identical turns without an explicit identity remain distinct. Existing stored sources are not re-extracted on an ordinary duplicate write; persistence followed by extraction is not a transactional exactly-once guarantee. If storage is disabled, extraction uses transient sources and has no durable retry ledger. Native bulk-save diagnostics report confirmed writes, duplicates, audits, skipped messages, and the extraction outcome.
+
+### Current Query for Empty Memory Loads
+
+Some n8n agent versions call memory loading with empty values. Configure **Current Human Query** to the same current-message expression used by the agent prompt. Its default reads string `chatInput`, then string `input`, and otherwise leaves the query empty. Explicit input passed by the agent takes precedence. Engram does not infer a current query from old history.
+
+The expression is resolved in n8n's subnode item context when memory is supplied. Subnode expression behavior can differ from regular-node per-item evaluation; process independent conversations separately and validate mappings in your workflow. Load diagnostics expose `retrieval.query_source` (`input`, `configured`, or `none`), query availability, and the number of graph fact context messages without including query text. If no current query is available, history still loads but graph search is not attempted. Validate graph recall with a known older accepted fact beyond the recent-message window.
 
 ### Engram Explorer
 
@@ -288,6 +367,32 @@ User message + AI response
 **Configurable entity types**: `person`, `organization`, `location`, `concept`, `event`, or custom types.
 
 Extracted entities and relationships include `attributes.engram_extraction` provenance metadata with source, extraction timestamp, confidence placeholder, review status, and related episode UUIDs where available.
+
+### Extraction Model Compatibility
+
+**Extraction Temperature Mode** applies to every extraction stage in Engram Memory v1 and v2:
+
+- **Legacy (0)** sends temperature `0` and preserves existing workflow behavior.
+- **Provider Default** omits the temperature field. Select this when your model rejects custom temperatures or requires its own default.
+- **Custom** sends the **Extraction Temperature** value. Use a finite number supported by your provider and model; supported ranges vary.
+
+Upgrading the package alone retains Legacy (0). To resolve an unsupported-temperature error, select Provider Default explicitly in the affected Memory node and validate the workflow before activating it. No storage migration or Memory node-version upgrade is required for these settings. Engram does not automatically change models or retry rejected requests with guessed settings. Extraction still uses Chat Completions JSON-object mode; confirm that your provider and model support it.
+
+### Extraction Outcomes
+
+In an execution, open the Engram Memory save output and inspect `extraction`. Conversation history saves before extraction, so an overall successful conversation can still have a failed extraction outcome.
+
+| Status | Meaning |
+| --- | --- |
+| `disabled` | Knowledge extraction is disabled. |
+| `skipped` | No eligible, nonempty source messages were selected. |
+| `succeeded` | Attempted stages completed; finding zero entities is also successful. |
+| `partial` | An optional stage failed, malformed records were excluded, or a required stage failed after some graph changes succeeded. |
+| `failed` | A required stage failed before any graph changes succeeded, or extraction configuration is missing. |
+
+Outcomes include duration, stage status, confirmed mutation counts, filtered/malformed record counts, and bounded error classifications such as `unsupported_parameter`, `authentication`, `rate_limit`, and `timeout`. Update counts include metadata-only updates; edge expirations are counted separately. Partial extraction does not roll back completed graph changes. Provider error bodies and message content are excluded from extraction error diagnostics; normal n8n conversation previews still contain message content.
+
+Extraction outcomes belong to their execution's save output. Engram Admin storage diagnostics do not provide a persistent extraction event history. A failed history preview is reported separately from the completed save. The context window counts messages, not user turns or days; graph recall operates independently of that window.
 
 ---
 

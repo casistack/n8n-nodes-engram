@@ -1,3 +1,16 @@
+import {
+  CurrentHumanQuerySchema,
+  MemoryPolicySchema,
+  type MemoryPolicyInput,
+  type MemoryPolicy,
+  type MemoryWriteOutcome,
+  type MemoryLoadDiagnostics,
+} from '../schemas';
+import { finalAssistantIndices, messageType, messageHasText } from './MessagePolicy';
+import { contentHash } from './HistorySelection';
+import type { BaseMessage } from '@langchain/core/messages';
+import { ExtractionDiagnostics, reportExtractionError } from '../extraction/ExtractionDiagnostics';
+import type { ExtractionOutcome } from '../schemas';
 import { BaseChatMemory } from '@langchain/classic/memory/chat_memory';
 import type { BaseChatMemoryInput } from '@langchain/classic/memory/chat_memory';
 import {
@@ -28,6 +41,8 @@ import { estimateContextTokens } from '../search/ContextBudget';
 export interface EngramChatMemoryInput extends BaseChatMemoryInput {
   storage: IGraphStorage;
   groupId: string;
+  policy?: MemoryPolicyInput;
+  currentHumanQuery?: string;
   memoryKey?: string;
   contextWindow?: number;
   maxFactsPerQuery?: number;
@@ -78,6 +93,8 @@ export class EngramChatMemory extends BaseChatMemory {
   private extractionPipeline: ExtractionPipeline | null = null;
   private searchEngine: HybridSearchEngine;
 
+  private policy: MemoryPolicy;
+  private currentHumanQuery: string;
   private engramHistory: EngramChatMessageHistory;
   private enableTraversal: boolean;
   private traversalHops: number;
@@ -99,6 +116,7 @@ export class EngramChatMemory extends BaseChatMemory {
       groupId: fields.groupId,
       contextWindow: fields.contextWindow ?? 10,
       humanEpisodeKind: fields.humanEpisodeKind,
+      policy: fields.policy,
     });
 
     super({
@@ -108,6 +126,8 @@ export class EngramChatMemory extends BaseChatMemory {
       outputKey: fields.outputKey ?? 'output',
     });
 
+    this.policy = MemoryPolicySchema.parse(fields.policy ?? {});
+    this.currentHumanQuery = CurrentHumanQuerySchema.parse(fields.currentHumanQuery ?? '');
     this.storage = fields.storage;
     this.groupId = fields.groupId;
     this.memoryKey = fields.memoryKey ?? 'chat_history';
@@ -116,6 +136,8 @@ export class EngramChatMemory extends BaseChatMemory {
     this.minRelevanceScore = fields.minRelevanceScore ?? 0.5;
     this.enableExtraction = fields.enableExtraction ?? false;
     this.engramHistory = history;
+    if (this.policy.finalTurnWrites)
+      history.setTurnWriter((messages) => this.saveMessagesWithOutcome(messages));
     this.enableTraversal = fields.enableTraversal ?? false;
     this.traversalHops = fields.traversalHops ?? 1;
     this.storeHumanEpisodes = fields.storeHumanEpisodes ?? true;
@@ -168,18 +190,31 @@ export class EngramChatMemory extends BaseChatMemory {
   }
 
   async loadMemoryVariables(values: InputValues): Promise<MemoryVariables> {
-    // Get recent conversation history
-    const messages = await this.chatHistory.getMessages();
+    return (await this.loadMemoryVariablesWithDiagnostics(values)).variables;
+  }
 
-    // Try to find relevant facts from the knowledge graph
-    const currentInput = this.extractInputText(values);
+  async loadMemoryVariablesWithDiagnostics(
+    values: InputValues,
+  ): Promise<{ variables: MemoryVariables; diagnostics: MemoryLoadDiagnostics }> {
+    const { messages, history } = await this.engramHistory.getMessagesWithDiagnostics();
+    const provided = this.extractInputText(values);
+    const configured = Object.keys(values).length === 0 ? this.currentHumanQuery : '';
+    const currentInput = provided || configured;
     const factMessages = await this.getRelevantFacts(currentInput);
+    const diagnostics: MemoryLoadDiagnostics = {
+      history,
+      retrieval: {
+        query_source: provided.trim() ? 'input' : configured.trim() ? 'configured' : 'none',
+        query_available: currentInput.trim().length > 0,
+        fact_messages: factMessages.length,
+      },
+    };
 
     // Combine: facts first (as system context), then conversation history
     const allMessages = [...factMessages, ...messages];
 
     if (this.returnMessages) {
-      return { [this.memoryKey]: allMessages };
+      return { variables: { [this.memoryKey]: allMessages }, diagnostics };
     }
 
     // Format as string if returnMessages is false
@@ -191,10 +226,17 @@ export class EngramChatMemory extends BaseChatMemory {
       })
       .join('\n');
 
-    return { [this.memoryKey]: formatted };
+    return { variables: { [this.memoryKey]: formatted }, diagnostics };
   }
 
   async saveContext(inputValues: InputValues, outputValues: OutputValues): Promise<void> {
+    await this.saveContextWithOutcome(inputValues, outputValues);
+  }
+
+  async saveContextWithOutcome(
+    inputValues: InputValues,
+    outputValues: OutputValues,
+  ): Promise<ExtractionOutcome> {
     // n8n agents may pass multiple keys (input, system_message, formatting_instructions).
     // LangChain's BaseChatMemory.saveContext throws if it sees >1 key without an explicit
     // inputKey/outputKey. Filter down to just the keys we care about to avoid this.
@@ -219,6 +261,17 @@ export class EngramChatMemory extends BaseChatMemory {
 
     const humanInput = getInputValue(filteredInput, this.inputKey);
     const aiOutput = getOutputValue(filteredOutput, this.outputKey);
+
+    if (this.policy.finalTurnWrites) {
+      const messages: BaseMessage[] = [new HumanMessage(humanInput), new AIMessage(aiOutput)];
+      // Explicit system/tool fields are audit inputs, never new human facts.
+      for (const source of this.extractSystemToolSources(inputValues, outputValues)) {
+        const audit = new SystemMessage(source.content);
+        audit.additional_kwargs.engram_tool_audit = true;
+        messages.splice(messages.length - 1, 0, audit);
+      }
+      return (await this.saveMessagesWithOutcome(messages)).extraction;
+    }
 
     const humanText = this.stringifyMessageValue(humanInput);
     const aiText = this.stringifyMessageValue(aiOutput);
@@ -263,8 +316,132 @@ export class EngramChatMemory extends BaseChatMemory {
       if (this.extractSystemTool) {
         sources.push(...this.extractSystemToolSources(inputValues, outputValues));
       }
-      await this.runExtraction(sources);
+      return this.runExtraction(sources);
     }
+    return new ExtractionDiagnostics().finish('disabled');
+  }
+
+  /** Both native bulk tool saves and final-only saves share this policy and extraction owner. */
+  async saveMessagesWithOutcome(messages: BaseMessage[]): Promise<MemoryWriteOutcome> {
+    if (messages.length > 1000) throw new Error('Memory write cannot exceed 1000 messages');
+    const finals = finalAssistantIndices(messages);
+    const writes: EpisodeMessageWrite[] = [];
+    const candidates: Array<{
+      message: BaseMessage;
+      metadata: EpisodeWriteMetadata;
+      writeIndex: number | null;
+      extract: boolean;
+    }> = [];
+    let skipped = 0;
+    let auditCount = 0;
+    let humanPosition = -1;
+    let turnIdentity: string | null =
+      this.episodeMetadata.idempotency_key ?? this.episodeMetadata.source_message_id ?? null;
+    for (const [index, message] of messages.entries()) {
+      const type = messageType(message);
+      const human = type === 'human';
+      if (human) {
+        humanPosition++;
+        turnIdentity =
+          this.episodeMetadata.idempotency_key ??
+          message.id ??
+          this.episodeMetadata.source_message_id ??
+          null;
+      }
+      const assistant = type === 'ai' && finals.has(index);
+      const audit = !human && !assistant;
+      if (audit && !this.policy.storeToolAudit && !this.extractSystemTool) {
+        skipped++;
+        continue;
+      }
+      // Unknown/native tool roles can only be audit inputs. No JSON-content heuristics here.
+      const kind = human ? this.humanEpisodeKind : assistant ? 'assistant_reply' : 'tool_output';
+      const metadata: EpisodeWriteMetadata =
+        human || assistant
+          ? this.metadataForEpisodeKind(human ? this.humanEpisodeKind : 'assistant_reply')
+          : {
+              ...this.episodeMetadata,
+              sender_id: null,
+              sender_name: null,
+              quoted_message_id: null,
+              source_message_id: null,
+              trust_level: 'unverified',
+              review_status: 'proposed',
+            };
+      metadata.episode_kind = kind;
+      // Preserve raw source IDs in provenance; isolate audit identities sharing tool_output kind.
+      if (message.id)
+        metadata.source_message_id = audit ? `${type}:${contentHash(message.id)}` : message.id;
+      else if (assistant) metadata.source_message_id = null;
+      if (turnIdentity)
+        metadata.idempotency_key = `turn:${contentHash(turnIdentity)}:${Math.max(0, humanPosition)}:${audit ? `audit:${index}` : kind}`;
+      else if (message.id) metadata.idempotency_key = `message:${type}:${contentHash(message.id)}`;
+      else metadata.idempotency_key = null;
+      metadata.attributes = {
+        ...this.episodeMetadata.attributes,
+        ...(audit ? { engram_audit: true } : {}),
+        engram_message: {
+          original_role: type,
+          original_message_id: message.id ?? null,
+          tool_call_id:
+            'tool_call_id' in message && typeof message.tool_call_id === 'string'
+              ? message.tool_call_id
+              : null,
+        },
+      };
+      const store = audit
+        ? this.policy.storeToolAudit
+        : human
+          ? this.storeHumanEpisodes
+          : this.storeAiEpisodes;
+      const writeIndex = store ? writes.length : null;
+      if (store) writes.push({ message, metadata });
+      else skipped++;
+      if (audit && store) auditCount++;
+      candidates.push({
+        message,
+        metadata,
+        writeIndex,
+        extract: human ? this.extractHuman : assistant ? this.extractAi : this.extractSystemTool,
+      });
+    }
+    const results = await this.engramHistory.appendMessageWrites(writes);
+    const sources: ExtractionSource[] = [];
+    for (const candidate of candidates) {
+      if (!candidate.extract || !messageHasText(candidate.message)) continue;
+      const result = candidate.writeIndex === null ? null : results[candidate.writeIndex];
+      // Existing records are not re-extracted by a second entry point/replayed turn.
+      if (result && !result.created) continue;
+      if (result) sources.push(this.episodeToExtractionSource(result.episode));
+      else {
+        const kind = candidate.metadata.episode_kind!;
+        sources.push({
+          content: this.stringifyMessageValue(candidate.message.content),
+          role:
+            messageType(candidate.message) === 'human'
+              ? 'human'
+              : messageType(candidate.message) === 'system'
+                ? 'system'
+                : 'ai',
+          episode_kind: kind,
+          source_message_id: candidate.metadata.source_message_id ?? null,
+          sender_id: candidate.metadata.sender_id ?? null,
+          sender_name: candidate.metadata.sender_name ?? null,
+          reference_time: new Date().toISOString(),
+          trust_level: candidate.metadata.trust_level ?? 'standard',
+          review_status: candidate.metadata.review_status ?? 'accepted',
+        });
+      }
+    }
+    return {
+      extraction: this.enableExtraction
+        ? await this.runExtraction(sources)
+        : new ExtractionDiagnostics().finish('disabled'),
+      written: results.filter((result) => result.created).length,
+      duplicates: results.filter((result) => !result.created).length,
+      audit: auditCount,
+      skipped,
+    };
   }
 
   async clear(): Promise<void> {
@@ -372,16 +549,16 @@ export class EngramChatMemory extends BaseChatMemory {
     return '';
   }
 
-  private async runExtraction(sources: ExtractionSource[]): Promise<void> {
-    if (!this.extractionPipeline) return;
-    if (sources.length === 0) return;
-
+  private async runExtraction(sources: ExtractionSource[]): Promise<ExtractionOutcome> {
+    const diagnostics = new ExtractionDiagnostics();
+    if (!this.extractionPipeline) return diagnostics.finish('missing_configuration');
+    if (!sources.some((source) => source.content.trim())) return diagnostics.finish('no_sources');
     try {
-      await this.extractionPipeline.processSources(sources);
+      await this.extractionPipeline.processSources(sources, diagnostics);
     } catch (error) {
-      // Extraction failure should never break the conversation flow
-      console.warn('Engram: Extraction pipeline failed:', (error as Error).message);
+      reportExtractionError('persistence', error, diagnostics);
     }
+    return diagnostics.finish();
   }
 
   private metadataForEpisodeKind(

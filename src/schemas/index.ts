@@ -72,3 +72,7 @@ export {
   type Community,
   type CommunityDetectionResult,
 } from './Community.schema';
+
+export * from './ExtractionOutcome.schema';
+
+export * from './MemoryPolicy.schema';

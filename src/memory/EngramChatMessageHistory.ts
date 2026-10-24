@@ -1,11 +1,21 @@
+import { ExtractionDiagnostics } from '../extraction/ExtractionDiagnostics';
 import { BaseChatMessageHistory } from '@langchain/core/chat_history';
 import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
-import type { IGraphStorage } from '../storage/IGraphStorage';
+import {
+  MemoryPolicySchema,
+  type MemoryPolicyInput,
+  type MemoryWriteOutcome,
+  type HistoryReadDiagnostics,
+} from '../schemas';
+import { selectHistory } from './HistorySelection';
+import { isToolCall, messageType } from './MessagePolicy';
+import type { AppendEpisodeResult, IGraphStorage } from '../storage/IGraphStorage';
 import type { CreateEpisodicNode, EpisodicNode } from '../schemas';
 
 export type EpisodeWriteMetadata = Partial<
   Pick<
     CreateEpisodicNode,
+    | 'episode_kind'
     | 'source_type'
     | 'source_message_id'
     | 'idempotency_key'
@@ -41,6 +51,8 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   private contextWindow: number;
   private metadata: EpisodeWriteMetadata;
   private humanEpisodeKind: HumanEpisodeKind;
+  private policy: ReturnType<typeof MemoryPolicySchema.parse>;
+  private turnWriter?: (messages: BaseMessage[]) => Promise<MemoryWriteOutcome>;
 
   constructor(params: {
     storage: IGraphStorage;
@@ -48,22 +60,83 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     contextWindow?: number;
     metadata?: EpisodeWriteMetadata;
     humanEpisodeKind?: HumanEpisodeKind;
+    policy?: MemoryPolicyInput;
   }) {
     super();
     this.storage = params.storage;
     this.groupId = params.groupId;
     this.contextWindow = params.contextWindow ?? 10;
     this.metadata = params.metadata ?? {};
+    this.policy = MemoryPolicySchema.parse(params.policy ?? {});
+    if (
+      (this.policy.historyFilter !== 'off' || this.policy.finalTurnWrites) &&
+      (!Number.isInteger(this.contextWindow) ||
+        this.contextWindow < 1 ||
+        this.contextWindow > 10000)
+    )
+      throw new Error('Context window must be an integer between 1 and 10000');
     this.humanEpisodeKind = params.humanEpisodeKind ?? 'active_human';
   }
 
+  setTurnWriter(writer: (messages: BaseMessage[]) => Promise<MemoryWriteOutcome>): void {
+    this.turnWriter = writer;
+  }
+
   async getMessages(): Promise<BaseMessage[]> {
-    const episodes = await this.storage.getRecentEpisodes(this.groupId, this.contextWindow);
-    return episodes.map((ep) => this.episodeToMessage(ep));
+    return (await this.getMessagesWithDiagnostics()).messages;
+  }
+
+  async getMessagesWithDiagnostics(): Promise<{
+    messages: BaseMessage[];
+    history: HistoryReadDiagnostics;
+  }> {
+    const filtering = this.policy.historyFilter !== 'off' || this.policy.finalTurnWrites;
+    const limit = filtering ? this.policy.maxHistoryScan + 1 : this.contextWindow;
+    // Detach immediately: mutations during later processing cannot change this read's evidence.
+    const episodes = JSON.parse(
+      JSON.stringify(await this.storage.getRecentEpisodes(this.groupId, limit)),
+    ) as EpisodicNode[];
+    if (!filtering)
+      return {
+        messages: episodes.map((ep) => this.episodeToMessage(ep)),
+        history: {
+          mode: 'off',
+          fetched: episodes.length,
+          examined: episodes.length,
+          pages: episodes.length ? 1 : 0,
+          returned: episodes.length,
+          excluded_provenance: 0,
+          excluded_legacy: 0,
+          legacy_candidates: 0,
+          snapshot_overflow: false,
+          scan_truncated: false,
+        },
+      };
+    const result = selectHistory(episodes, this.contextWindow, this.policy);
+    return {
+      messages: result.episodes.map((ep) => this.episodeToMessage(ep)),
+      history: result.diagnostics,
+    };
+  }
+
+  async addMessages(messages: BaseMessage[]): Promise<void> {
+    await this.addMessagesWithOutcome(messages);
+  }
+
+  async addMessagesWithOutcome(messages: BaseMessage[]): Promise<MemoryWriteOutcome> {
+    if (this.turnWriter) return this.turnWriter(messages);
+    const results = await this.appendMessageWrites(messages.map((message) => ({ message })));
+    return {
+      extraction: new ExtractionDiagnostics().finish('disabled'),
+      written: results.filter((r) => r.created).length,
+      duplicates: results.filter((r) => !r.created).length,
+      audit: 0,
+      skipped: 0,
+    };
   }
 
   async addMessage(message: BaseMessage): Promise<void> {
-    await this.addMessageAndGetEpisodeUuid(message);
+    await this.addMessages([message]);
   }
 
   async addMessageAndGetEpisodeUuid(message: BaseMessage): Promise<string> {
@@ -78,12 +151,15 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   }
 
   async addMessagesAndGetEpisodes(writes: EpisodeMessageWrite[]): Promise<EpisodicNode[]> {
+    return (await this.appendMessageWrites(writes)).map((result) => result.episode);
+  }
+
+  async appendMessageWrites(writes: EpisodeMessageWrite[]): Promise<AppendEpisodeResult[]> {
     if (writes.length === 0) return [];
     const inputs = writes.map(({ message, metadata = {} }) =>
       this.messageToEpisodeInput(message, metadata),
     );
-    const results = await this.storage.appendEpisodes(inputs);
-    return results.map((result) => result.episode);
+    return this.storage.appendEpisodes(inputs);
   }
 
   private messageToEpisodeInput(
@@ -94,11 +170,20 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     const content =
       typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
 
+    const originalType = messageType(message);
+    const tool = originalType === 'tool' || originalType === 'function' || isToolCall(message);
     const episodeKind =
-      role === 'human' ? this.humanEpisodeKind : role === 'ai' ? 'assistant_reply' : 'system';
+      metadata.episode_kind ??
+      (tool
+        ? 'tool_output'
+        : role === 'human'
+          ? this.humanEpisodeKind
+          : role === 'ai'
+            ? 'assistant_reply'
+            : 'system');
     return {
-      trust_level: 'standard',
-      review_status: 'accepted',
+      trust_level: tool ? 'unverified' : 'standard',
+      review_status: tool ? 'proposed' : 'accepted',
       ...this.metadata,
       ...metadata,
       group_id: this.groupId,
@@ -148,8 +233,11 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
         return 'ai';
       case 'system':
         return 'system';
+      case 'tool':
+      case 'function':
+        return 'ai';
       default:
-        return 'human';
+        return 'system';
     }
   }
 }

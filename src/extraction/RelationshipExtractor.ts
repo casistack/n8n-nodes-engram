@@ -1,3 +1,8 @@
+import {
+  ExtractionError,
+  reportExtractionError,
+  type ExtractionDiagnostics,
+} from './ExtractionDiagnostics';
 import type { LlmClient } from './LlmClient';
 import {
   RELATIONSHIP_EXTRACTION_SYSTEM,
@@ -21,7 +26,10 @@ interface RelationshipExtractionResult {
 export class RelationshipExtractor {
   private llm: LlmClient;
 
-  constructor(llm: LlmClient) {
+  constructor(
+    llm: LlmClient,
+    private diagnostics?: ExtractionDiagnostics,
+  ) {
     this.llm = llm;
   }
 
@@ -54,7 +62,10 @@ export class RelationshipExtractor {
     entityNames: string[],
     requireConfidence: boolean,
   ): Promise<ExtractedRelationship[]> {
-    if (entityNames.length < 2) return [];
+    if (entityNames.length < 2) {
+      this.diagnostics?.skip('relationships');
+      return [];
+    }
 
     try {
       const result = await this.llm.chatJson<RelationshipExtractionResult>([
@@ -62,21 +73,28 @@ export class RelationshipExtractor {
         { role: 'user', content: prompt },
       ]);
 
-      if (!result.relationships || !Array.isArray(result.relationships)) {
-        return [];
-      }
+      if (!result || !Array.isArray(result.relationships))
+        throw new ExtractionError('invalid_response');
+      this.diagnostics?.success('relationships');
 
       // Validate each relationship references known entities
       const entitySet = new Set(entityNames.map((n) => n.toLowerCase()));
       return result.relationships
-        .filter(
-          (r) =>
-            typeof r.source_entity === 'string' &&
-            typeof r.target_entity === 'string' &&
-            typeof r.name === 'string' &&
-            r.name.trim() !== '' &&
-            typeof r.fact === 'string' &&
-            r.fact.trim() !== '' &&
+        .filter((r) => {
+          if (
+            !r ||
+            typeof r !== 'object' ||
+            typeof r.source_entity !== 'string' ||
+            typeof r.target_entity !== 'string' ||
+            typeof r.name !== 'string' ||
+            !r.name.trim() ||
+            typeof r.fact !== 'string' ||
+            !r.fact.trim()
+          ) {
+            this.diagnostics?.malformed('relationships');
+            return false;
+          }
+          const eligible =
             (!requireConfidence ||
               (typeof r.confidence === 'number' &&
                 Number.isFinite(r.confidence) &&
@@ -84,8 +102,10 @@ export class RelationshipExtractor {
                 r.confidence <= 1)) &&
             r.source_entity.toLowerCase().trim() !== r.target_entity.toLowerCase().trim() &&
             entitySet.has(r.source_entity.toLowerCase().trim()) &&
-            entitySet.has(r.target_entity.toLowerCase().trim()),
-        )
+            entitySet.has(r.target_entity.toLowerCase().trim());
+          if (!eligible) this.diagnostics?.increment('filtered');
+          return eligible;
+        })
         .map((r) => ({
           source_entity: r.source_entity.trim(),
           target_entity: r.target_entity.trim(),
@@ -100,7 +120,7 @@ export class RelationshipExtractor {
               : null,
         }));
     } catch (error) {
-      console.warn('Engram: Relationship extraction failed:', (error as Error).message);
+      reportExtractionError('relationships', error, this.diagnostics);
       return [];
     }
   }

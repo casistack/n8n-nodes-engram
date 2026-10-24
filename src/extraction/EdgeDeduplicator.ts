@@ -1,3 +1,8 @@
+import {
+  ExtractionError,
+  reportExtractionError,
+  type ExtractionDiagnostics,
+} from './ExtractionDiagnostics';
 import type { LlmClient } from './LlmClient';
 import {
   EDGE_DEDUP_SYSTEM,
@@ -14,7 +19,10 @@ interface EdgeDedupResult {
 export class EdgeDeduplicator {
   private llm: LlmClient;
 
-  constructor(llm: LlmClient) {
+  constructor(
+    llm: LlmClient,
+    private diagnostics?: ExtractionDiagnostics,
+  ) {
     this.llm = llm;
   }
 
@@ -31,6 +39,7 @@ export class EdgeDeduplicator {
   ): Promise<{ isDuplicate: boolean; mergedFact?: string }> {
     // Fast path: exact fact match (case-insensitive, trimmed)
     if (existingFact.toLowerCase().trim() === newFact.toLowerCase().trim()) {
+      this.diagnostics?.success('edge_dedup');
       return { isDuplicate: true };
     }
 
@@ -43,6 +52,13 @@ export class EdgeDeduplicator {
           content: edgeDedupUser(existingFact, newFact, edgeName, sourceEntity, targetEntity),
         },
       ]);
+      if (
+        !result ||
+        typeof result.is_duplicate !== 'boolean' ||
+        (result.is_duplicate && typeof result.merged_fact !== 'string')
+      )
+        throw new ExtractionError('invalid_response');
+      this.diagnostics?.success('edge_dedup');
 
       return {
         isDuplicate: result.is_duplicate === true,
@@ -50,7 +66,7 @@ export class EdgeDeduplicator {
       };
     } catch (error) {
       // If LLM fails, assume not duplicate (safer — will create new edge)
-      console.warn('Engram: Edge deduplication failed:', (error as Error).message);
+      reportExtractionError('edge_dedup', error, this.diagnostics);
       return { isDuplicate: false };
     }
   }
@@ -88,6 +104,13 @@ export class EdgeDeduplicator {
           ),
         },
       ]);
+      if (
+        !result ||
+        typeof result.is_duplicate !== 'boolean' ||
+        (result.is_duplicate && typeof result.merged_fact !== 'string')
+      )
+        throw new ExtractionError('invalid_response');
+      this.diagnostics?.success('cross_edge_dedup');
 
       return {
         isDuplicate: result.is_duplicate === true,
@@ -95,7 +118,7 @@ export class EdgeDeduplicator {
       };
     } catch (error) {
       // If LLM fails, assume not duplicate (safer — will create new edge)
-      console.warn('Engram: Cross-name edge deduplication failed:', (error as Error).message);
+      reportExtractionError('cross_edge_dedup', error, this.diagnostics);
       return { isDuplicate: false };
     }
   }

@@ -1,3 +1,8 @@
+import {
+  ExtractionError,
+  reportExtractionError,
+  type ExtractionDiagnostics,
+} from './ExtractionDiagnostics';
 import type { LlmClient } from './LlmClient';
 import {
   ENTITY_EXTRACTION_SYSTEM,
@@ -20,7 +25,10 @@ interface EntityExtractionResult {
 export class EntityExtractor {
   private llm: LlmClient;
 
-  constructor(llm: LlmClient) {
+  constructor(
+    llm: LlmClient,
+    private diagnostics?: ExtractionDiagnostics,
+  ) {
     this.llm = llm;
   }
 
@@ -61,27 +69,35 @@ export class EntityExtractor {
         { role: 'user', content: prompt },
       ]);
 
-      if (!result.entities || !Array.isArray(result.entities)) {
-        return [];
-      }
+      if (!result || !Array.isArray(result.entities)) throw new ExtractionError('invalid_response');
+      this.diagnostics?.success('entities');
 
       const allowedTypes = new Set(entityTypes.map((type) => type.toLowerCase().trim()));
 
       return result.entities
-        .filter(
-          (e) =>
-            typeof e.name === 'string' &&
-            e.name.trim() !== '' &&
-            typeof e.entity_type === 'string' &&
-            e.entity_type.trim() !== '' &&
-            typeof e.summary === 'string' &&
+        .filter((e) => {
+          if (
+            !e ||
+            typeof e !== 'object' ||
+            typeof e.name !== 'string' ||
+            !e.name.trim() ||
+            typeof e.entity_type !== 'string' ||
+            !e.entity_type.trim() ||
+            typeof e.summary !== 'string'
+          ) {
+            this.diagnostics?.malformed('entities');
+            return false;
+          }
+          const eligible =
             (!requireConfidence ||
               (typeof e.confidence === 'number' &&
                 Number.isFinite(e.confidence) &&
                 e.confidence >= 0 &&
                 e.confidence <= 1)) &&
-            (allowedTypes.size === 0 || allowedTypes.has(e.entity_type.toLowerCase().trim())),
-        )
+            (allowedTypes.size === 0 || allowedTypes.has(e.entity_type.toLowerCase().trim()));
+          if (!eligible) this.diagnostics?.increment('filtered');
+          return eligible;
+        })
         .map((e) => ({
           name: e.name.trim(),
           entity_type: e.entity_type.trim(),
@@ -96,7 +112,7 @@ export class EntityExtractor {
         }));
     } catch (error) {
       // Extraction is best-effort; don't break the conversation
-      console.warn('Engram: Entity extraction failed:', (error as Error).message);
+      reportExtractionError('entities', error, this.diagnostics);
       return [];
     }
   }

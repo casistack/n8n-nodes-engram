@@ -1,3 +1,8 @@
+import {
+  ExtractionError,
+  reportExtractionError,
+  type ExtractionDiagnostics,
+} from './ExtractionDiagnostics';
 import type { LlmClient } from './LlmClient';
 import { CONTRADICTION_SYSTEM, contradictionUser } from './prompts';
 import { nowIso } from '../utils/temporal';
@@ -17,7 +22,10 @@ export interface ContradictionResolution {
 export class ContradictionDetector {
   private llm: LlmClient;
 
-  constructor(llm: LlmClient) {
+  constructor(
+    llm: LlmClient,
+    private diagnostics?: ExtractionDiagnostics,
+  ) {
     this.llm = llm;
   }
 
@@ -48,6 +56,13 @@ export class ContradictionDetector {
           ),
         },
       ]);
+      if (
+        !result ||
+        typeof result.is_contradiction !== 'boolean' ||
+        (result.is_contradiction && typeof result.explanation !== 'string')
+      )
+        throw new ExtractionError('invalid_response');
+      this.diagnostics?.success('contradictions');
 
       if (result.is_contradiction) {
         return {
@@ -60,7 +75,7 @@ export class ContradictionDetector {
       return { isContradiction: false };
     } catch (error) {
       // If LLM fails, assume no contradiction (safer to keep existing data)
-      console.warn('Engram: Contradiction detection failed:', (error as Error).message);
+      reportExtractionError('contradictions', error, this.diagnostics);
       return { isContradiction: false };
     }
   }

@@ -1,3 +1,8 @@
+import {
+  ExtractionError,
+  reportExtractionError,
+  type ExtractionDiagnostics,
+} from './ExtractionDiagnostics';
 import type { LlmClient } from './LlmClient';
 import { DEDUPLICATION_SYSTEM, deduplicationUser } from './prompts';
 
@@ -9,7 +14,10 @@ interface DeduplicationResult {
 export class EntityDeduplicator {
   private llm: LlmClient;
 
-  constructor(llm: LlmClient) {
+  constructor(
+    llm: LlmClient,
+    private diagnostics?: ExtractionDiagnostics,
+  ) {
     this.llm = llm;
   }
 
@@ -23,6 +31,7 @@ export class EntityDeduplicator {
   ): Promise<{ isDuplicate: boolean; mergedSummary?: string }> {
     // Fast path: exact name match (case-insensitive)
     if (newEntity.name.toLowerCase().trim() === existingEntity.name.toLowerCase().trim()) {
+      this.diagnostics?.success('entity_dedup');
       // Same name = same entity. Merge summaries by keeping the longer/newer one.
       const mergedSummary =
         newEntity.summary.length > existingEntity.summary.length
@@ -33,6 +42,7 @@ export class EntityDeduplicator {
 
     // Different entity types are unlikely to be duplicates
     if (newEntity.entity_type !== existingEntity.entity_type) {
+      this.diagnostics?.success('entity_dedup');
       return { isDuplicate: false };
     }
 
@@ -45,6 +55,13 @@ export class EntityDeduplicator {
           content: deduplicationUser(newEntity, existingEntity),
         },
       ]);
+      if (
+        !result ||
+        typeof result.is_duplicate !== 'boolean' ||
+        (result.is_duplicate && typeof result.merged_summary !== 'string')
+      )
+        throw new ExtractionError('invalid_response');
+      this.diagnostics?.success('entity_dedup');
 
       return {
         isDuplicate: result.is_duplicate === true,
@@ -52,7 +69,7 @@ export class EntityDeduplicator {
       };
     } catch (error) {
       // If LLM fails, assume not duplicate (safer)
-      console.warn('Engram: Entity deduplication failed:', (error as Error).message);
+      reportExtractionError('entity_dedup', error, this.diagnostics);
       return { isDuplicate: false };
     }
   }

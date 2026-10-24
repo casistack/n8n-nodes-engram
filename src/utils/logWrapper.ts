@@ -1,3 +1,4 @@
+import type { ExtractionOutcome, MemoryWriteOutcome, MemoryLoadDiagnostics } from '../schemas';
 import { NodeOperationError, NodeConnectionType } from 'n8n-workflow';
 import type { IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 
@@ -114,11 +115,23 @@ export function logWrapper(
     | VectorStore,
   executeFunctions: IExecuteFunctions,
 ) {
+  let historyWrapper: BaseChatMessageHistory | undefined;
   return new Proxy(originalInstance, {
     get: (target, prop) => {
       let connectionType: NodeConnectionType | undefined;
       // ========== BaseChatMemory ==========
       if (isBaseChatMemory(originalInstance)) {
+        if (
+          prop === 'chatHistory' &&
+          'chatHistory' in target &&
+          'addMessagesWithOutcome' in target.chatHistory
+        ) {
+          historyWrapper ??= logWrapper(
+            target.chatHistory,
+            executeFunctions,
+          ) as BaseChatMessageHistory;
+          return historyWrapper;
+        }
         if (prop === 'loadMemoryVariables' && 'loadMemoryVariables' in target) {
           return async (values: InputValues): Promise<MemoryVariables> => {
             connectionType = NodeConnectionType.AiMemory;
@@ -126,6 +139,34 @@ export function logWrapper(
             const { index } = executeFunctions.addInputData(connectionType, [
               [{ json: { action: 'loadMemoryVariables', values } }],
             ]);
+
+            if (
+              'loadMemoryVariablesWithDiagnostics' in target &&
+              typeof target.loadMemoryVariablesWithDiagnostics === 'function'
+            ) {
+              const result = (await callMethodAsync.call(target, {
+                executeFunctions,
+                connectionType,
+                currentNodeRunIndex: index,
+                method: target.loadMemoryVariablesWithDiagnostics as (
+                  ...args: unknown[]
+                ) => unknown,
+                arguments: [values],
+              })) as { variables: MemoryVariables; diagnostics: MemoryLoadDiagnostics };
+              executeFunctions.addOutputData(connectionType, index, [
+                [
+                  {
+                    json: {
+                      action: 'loadMemoryVariables',
+                      chatHistory: result.variables.chat_history ?? result.variables,
+                      history: result.diagnostics.history,
+                      retrieval: result.diagnostics.retrieval,
+                    },
+                  },
+                ],
+              ]);
+              return result.variables;
+            }
 
             const response = (await callMethodAsync.call(target, {
               executeFunctions,
@@ -143,13 +184,60 @@ export function logWrapper(
             return response;
           };
         } else if (prop === 'saveContext' && 'saveContext' in target) {
-          return async (input: InputValues, output: OutputValues): Promise<MemoryVariables> => {
+          return async (
+            input: InputValues,
+            output: OutputValues,
+          ): Promise<MemoryVariables | void> => {
             connectionType = NodeConnectionType.AiMemory;
 
             const { index } = executeFunctions.addInputData(connectionType, [
               [{ json: { action: 'saveContext', input, output } }],
             ]);
 
+            if (
+              'saveContextWithOutcome' in target &&
+              typeof target.saveContextWithOutcome === 'function'
+            ) {
+              const extraction = (await callMethodAsync.call(target, {
+                executeFunctions,
+                connectionType,
+                currentNodeRunIndex: index,
+                method: target.saveContextWithOutcome as (
+                  ...args: unknown[]
+                ) => Promise<ExtractionOutcome>,
+                arguments: [input, output],
+              })) as ExtractionOutcome;
+              let chatHistory: BaseMessage[] = [];
+              let historyWarning: string | undefined;
+              try {
+                chatHistory = await target.chatHistory.getMessages();
+              } catch {
+                historyWarning = 'History preview unavailable after save';
+              }
+              try {
+                executeFunctions.addOutputData(connectionType, index, [
+                  [
+                    {
+                      json: {
+                        action: 'saveContext',
+                        chatHistory,
+                        extraction,
+                        ...(historyWarning ? { historyWarning } : {}),
+                      },
+                    },
+                  ],
+                ]);
+                if (extraction.status === 'failed' || extraction.status === 'partial') {
+                  executeFunctions.logger.warn(
+                    'Engram extraction did not fully complete. Review the memory save extraction diagnostics and provider settings.',
+                  );
+                }
+              } catch {
+                // Diagnostics publication must never replay a completed save.
+                console.warn('Engram: Memory save diagnostics could not be published');
+              }
+              return;
+            }
             const response = (await callMethodAsync.call(target, {
               executeFunctions,
               connectionType,
@@ -157,13 +245,10 @@ export function logWrapper(
               method: target[prop],
               arguments: [input, output],
             })) as MemoryVariables;
-
             const chatHistory = await target.chatHistory.getMessages();
-
             executeFunctions.addOutputData(connectionType, index, [
               [{ json: { action: 'saveContext', chatHistory } }],
             ]);
-
             return response;
           };
         }
@@ -171,6 +256,37 @@ export function logWrapper(
 
       // ========== BaseChatMessageHistory ==========
       if (isBaseChatMessageHistory(originalInstance)) {
+        if (
+          prop === 'addMessages' &&
+          'addMessagesWithOutcome' in target &&
+          typeof target.addMessagesWithOutcome === 'function'
+        ) {
+          return async (messages: BaseMessage[]): Promise<void> => {
+            const connection = NodeConnectionType.AiMemory;
+            const { index } = executeFunctions.addInputData(connection, [
+              [{ json: { action: 'addMessages', messages } }],
+            ]);
+            const result = (await callMethodAsync.call(target, {
+              executeFunctions,
+              connectionType: connection,
+              currentNodeRunIndex: index,
+              method: target.addMessagesWithOutcome as (...args: unknown[]) => unknown,
+              arguments: [messages],
+            })) as MemoryWriteOutcome;
+            try {
+              executeFunctions.addOutputData(connection, index, [
+                [{ json: { action: 'addMessages', ...result } }],
+              ]);
+              if (result.extraction.status === 'failed' || result.extraction.status === 'partial')
+                executeFunctions.logger.warn(
+                  'Engram bulk extraction did not fully complete. Review the memory write diagnostics.',
+                );
+            } catch {
+              console.warn('Engram: Bulk memory diagnostics could not be published');
+            }
+          };
+        }
+
         if (prop === 'getMessages' && 'getMessages' in target) {
           return async (): Promise<BaseMessage[]> => {
             connectionType = NodeConnectionType.AiMemory;

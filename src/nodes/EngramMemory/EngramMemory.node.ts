@@ -1,3 +1,4 @@
+import { ExtractionTemperatureSchema, MemoryPolicySchema } from '../../schemas';
 /* eslint-disable n8n-nodes-base/node-dirname-against-convention */
 import {
   NodeConnectionType,
@@ -102,7 +103,7 @@ export class EngramMemory implements INodeType {
       {
         ...contextWindowLengthProperty,
         default: 10,
-        description: 'Number of recent conversation turns to include as context for the AI',
+        description: 'Number of recent message episodes to include as context for the AI',
       },
       // Extraction settings
       {
@@ -428,6 +429,128 @@ export class EngramMemory implements INodeType {
         },
       },
       {
+        displayName: 'Extraction Temperature Mode',
+        name: 'extractionTemperatureMode',
+        type: 'options',
+        options: [
+          {
+            name: 'Legacy (0)',
+            value: 'legacy',
+            description: 'Send temperature 0, preserving existing behavior',
+          },
+          {
+            name: 'Provider Default',
+            value: 'providerDefault',
+            description: 'Omit temperature and let the provider choose its default',
+          },
+          {
+            name: 'Custom',
+            value: 'custom',
+            description: 'Send a temperature supported by your provider and model',
+          },
+        ],
+        default: 'legacy',
+        description: 'How to set temperature on every extraction request',
+        displayOptions: { show: { enableExtraction: ['enabled'] } },
+      },
+      {
+        displayName: 'Extraction Temperature',
+        name: 'extractionTemperature',
+        type: 'number',
+        default: 0,
+        description: 'Temperature supported by your provider and model. Supported ranges vary.',
+        displayOptions: {
+          show: { enableExtraction: ['enabled'], extractionTemperatureMode: ['custom'] },
+        },
+      },
+      {
+        displayName: 'History Filter',
+        name: 'historyFilter',
+        type: 'options',
+        default: 'off',
+        options: [
+          { name: 'Off', value: 'off', description: 'Keep existing episode history behavior' },
+          {
+            name: 'Provenance',
+            value: 'provenance',
+            description: 'Exclude tool output, monitor summaries, and audit episodes from context',
+          },
+          {
+            name: 'Provenance and Reviewed Legacy',
+            value: 'reviewedLegacy',
+            description:
+              'Also exclude explicitly reviewed legacy artifact pairs using exact content hashes',
+          },
+        ],
+        description:
+          'Non-destructive filtering of conversation context; stored episodes remain intact',
+        displayOptions: { show: { '@version': [2] } },
+      },
+      {
+        displayName: 'Maximum History Scan',
+        name: 'maxHistoryScan',
+        type: 'number',
+        default: 1000,
+        typeOptions: { minValue: 1, maxValue: 10000 },
+        description:
+          'Maximum episodes examined while filling the message window. Uses one bounded snapshot with local scan pages.',
+        displayOptions: { show: { '@version': [2] } },
+      },
+      {
+        displayName: 'Reviewed Legacy Content Hashes',
+        name: 'legacyArtifactHashes',
+        type: 'string',
+        default: '',
+        description:
+          'Comma-separated SHA256 hashes of exact operator-reviewed legacy tool payload content. Chain evidence is also required. Ambiguous JSON stays in context.',
+        displayOptions: { show: { '@version': [2], historyFilter: ['reviewedLegacy'] } },
+      },
+      {
+        displayName: 'Message Write Policy',
+        name: 'messageWritePolicy',
+        type: 'options',
+        default: 'legacy',
+        options: [
+          {
+            name: 'Legacy',
+            value: 'legacy',
+            description: 'Keep existing saved workflow write behavior',
+          },
+          {
+            name: 'Final Turns',
+            value: 'finalTurns',
+            description:
+              'Share final human and assistant writes across normal and tool-assisted turns',
+          },
+        ],
+        description:
+          'Select Final Turns to apply storage, extraction, and provenance controls to native bulk writes',
+        displayOptions: { show: { '@version': [2] } },
+      },
+      {
+        displayName: 'Store Tool Audit',
+        name: 'storeToolAudit',
+        type: 'options',
+        default: 'disabled',
+        options: [
+          { name: 'Disabled', value: 'disabled' },
+          { name: 'Enabled', value: 'enabled' },
+        ],
+        description:
+          'Whether to retain intermediate tool messages as unverified audit episodes outside conversation context',
+        displayOptions: { show: { '@version': [2], messageWritePolicy: ['finalTurns'] } },
+      },
+      {
+        displayName: 'Current Human Query',
+        name: 'currentHumanQuery',
+        type: 'string',
+        default:
+          "={{ typeof $json.chatInput === 'string' ? $json.chatInput : (typeof $json.input === 'string' ? $json.input : '') }}",
+        description:
+          'Current human input for graph retrieval when n8n loads memory with empty values. Map this to the same current-message expression as the agent prompt.',
+        displayOptions: { show: { '@version': [2] } },
+      },
+      {
         displayName: 'Max Facts per Query',
         name: 'maxFactsPerQuery',
         type: 'number',
@@ -714,6 +837,28 @@ export class EngramMemory implements INodeType {
         'acceptedOnly'
       : false;
 
+    const policy = MemoryPolicySchema.parse(
+      usesGovernanceControls
+        ? {
+            historyFilter: this.getNodeParameter('historyFilter', itemIndex, 'off'),
+            maxHistoryScan: this.getNodeParameter('maxHistoryScan', itemIndex, 1000),
+            legacyArtifactHashes: (
+              this.getNodeParameter('legacyArtifactHashes', itemIndex, '') as string
+            )
+              .split(/[\s,]+/)
+              .filter(Boolean),
+            finalTurnWrites:
+              this.getNodeParameter('messageWritePolicy', itemIndex, 'legacy') === 'finalTurns',
+            storeToolAudit:
+              this.getNodeParameter('storeToolAudit', itemIndex, 'disabled') === 'enabled',
+          }
+        : {},
+    );
+    // Resolve once in this supplyData item's expression context, never from previous history.
+    const currentHumanQuery = usesGovernanceControls
+      ? (this.getNodeParameter('currentHumanQuery', itemIndex, '') as string)
+      : '';
+
     try {
       // Get or create storage instance
       let storage;
@@ -774,7 +919,21 @@ export class EngramMemory implements INodeType {
             },
           );
         }
+        const temperatureMode = this.getNodeParameter(
+          'extractionTemperatureMode',
+          itemIndex,
+          'legacy',
+        ) as string;
+        const temperature = ExtractionTemperatureSchema.parse(
+          temperatureMode === 'custom'
+            ? {
+                mode: temperatureMode,
+                value: this.getNodeParameter('extractionTemperature', itemIndex, 0),
+              }
+            : { mode: temperatureMode },
+        );
         llmConfig = {
+          temperature,
           apiKey: extractionCreds.apiKey as string,
           baseUrl: extractionCreds.baseUrl as string,
           model,
@@ -826,6 +985,8 @@ export class EngramMemory implements INodeType {
       const memory = new EngramChatMemory({
         storage,
         groupId: sessionId,
+        policy,
+        currentHumanQuery,
         memoryKey: 'chat_history',
         returnMessages: true,
         inputKey: 'input',

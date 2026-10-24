@@ -39,7 +39,7 @@ export const contextWindowLengthProperty: INodeProperties = {
   name: 'contextWindowLength',
   type: 'number',
   default: 5,
-  hint: 'How many past interactions the model receives as context',
+  hint: 'Number of recent messages (episodes) to include, not user turns or days',
 };
 
 export const customStoragePathProperty: INodeProperties = {

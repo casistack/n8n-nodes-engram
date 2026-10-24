@@ -32,6 +32,9 @@ function createSupplyContext(options: {
     getNode() {
       return { name: 'Engram Memory', typeVersion: options.typeVersion };
     },
+    async getCredentials() {
+      return { apiKey: 'test-key', baseUrl: 'https://example.test' };
+    },
     getWorkflow() {
       return { id: 'wf-memory-node-test' };
     },
@@ -78,7 +81,9 @@ describe('EngramMemory node version controls', () => {
     const node = new EngramMemory();
     expect(node.description.version).toEqual([1, 2]);
 
-    const properties = new Map(node.description.properties.map((property) => [property.name, property]));
+    const properties = new Map(
+      node.description.properties.map((property) => [property.name, property]),
+    );
     expect(properties.get('storeHumanEpisodes')?.default).toBe('enabled');
     expect(properties.get('humanEpisodeKind')?.default).toBe('active_human');
     expect(properties.get('storeAiEpisodes')?.default).toBe('enabled');
@@ -110,7 +115,7 @@ describe('EngramMemory node version controls', () => {
 
     const storage = createStorage({ backend: 'embedded', persistPath });
     await storage.initialize();
-    const episodes = await storage.listEpisodes('node-group');
+    const episodes = await storage.listEpisodes('node-group', { sort_order: 'asc' });
     await storage.close();
     expect(episodes.map((episode) => episode.episode_kind).sort()).toEqual([
       'active_human',
@@ -144,7 +149,7 @@ describe('EngramMemory node version controls', () => {
 
     const storage = createStorage({ backend: 'embedded', persistPath });
     await storage.initialize();
-    const episodes = await storage.listEpisodes('node-group');
+    const episodes = await storage.listEpisodes('node-group', { sort_order: 'asc' });
     await storage.close();
     expect(episodes).toHaveLength(1);
     expect(episodes[0]).toEqual(
@@ -159,6 +164,79 @@ describe('EngramMemory node version controls', () => {
         source_execution_id: 'execution-node-test',
         attributes: { channel: 'whatsapp' },
       }),
+    );
+  });
+  it.each([1, 2])(
+    'preserves legacy temperature and maps explicit omission for Memory v%s',
+    async (typeVersion) => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '{"entities":[]}' } }] }),
+      });
+      global.fetch = fetchMock;
+      for (const mode of [undefined, 'providerDefault', 'custom']) {
+        const supplied = await new EngramMemory().supplyData.call(
+          createSupplyContext({
+            tempDir,
+            typeVersion,
+            parameters: {
+              enableExtraction: 'enabled',
+              extractionModel: 'fixed',
+              ...(mode ? { extractionTemperatureMode: mode } : {}),
+              extractionTemperature: 1,
+            },
+          }),
+          0,
+        );
+        await (
+          supplied.response as unknown as {
+            saveContext(input: InputValues, output: OutputValues): Promise<void>;
+          }
+        ).saveContext({ input: 'Hello' }, { output: 'Hi' });
+        const body = JSON.parse(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1].body);
+        if (mode === 'providerDefault') expect(body).not.toHaveProperty('temperature');
+        else expect(body.temperature).toBe(mode === 'custom' ? 1 : 0);
+      }
+      const properties = new Map(new EngramMemory().description.properties.map((p) => [p.name, p]));
+      expect(properties.get('extractionTemperatureMode')?.default).toBe('legacy');
+      expect(properties.get('extractionTemperature')?.displayOptions?.show).toMatchObject({
+        enableExtraction: ['enabled'],
+        extractionTemperatureMode: ['custom'],
+      });
+    },
+  );
+  it.each([1, 2])('gates new history/write controls to v2 (version %s)', async (typeVersion) => {
+    const { HumanMessage, AIMessage, ToolMessage } = await import('@langchain/core/messages');
+    const supplied = await new EngramMemory().supplyData.call(
+      createSupplyContext({
+        tempDir,
+        typeVersion,
+        parameters: {
+          messageWritePolicy: 'finalTurns',
+          historyFilter: 'provenance',
+          currentHumanQuery: 'Current supplied-item query',
+          storeHumanEpisodes: 'disabled',
+        },
+      }),
+      0,
+    );
+    const memory =
+      supplied.response as unknown as import('../../../src/memory/EngramChatMemory').EngramChatMemory;
+    await memory.chatHistory.addMessages([
+      new HumanMessage('Human'),
+      new ToolMessage({ content: 'tool', tool_call_id: 'one' }),
+      new AIMessage('Final'),
+    ]);
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const episodes = await storage.listEpisodes('node-group', { sort_order: 'asc' });
+    await storage.close();
+    expect(episodes.map((e) => e.content)).toEqual(
+      typeVersion === 2 ? ['Final'] : ['Human', 'tool', 'Final'],
+    );
+    const loaded = await memory.loadMemoryVariablesWithDiagnostics({});
+    expect(loaded.diagnostics.retrieval.query_source).toBe(
+      typeVersion === 2 ? 'configured' : 'none',
     );
   });
 });
