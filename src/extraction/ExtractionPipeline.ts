@@ -59,13 +59,16 @@ export class ExtractionPipeline {
     private config: ExtractionPipelineConfig,
     private diagnostics?: ExtractionDiagnostics,
   ) {
-    const llm = new LlmClient(config.llmConfig);
+    const llm = (stage: import('../schemas').ExtractionStage) =>
+      new LlmClient(config.llmConfig, diagnostics, stage);
     this.storage = diagnostics
       ? new Proxy(storage, {
           get(target, property) {
             const value: unknown = Reflect.get(target, property);
             if (typeof value !== 'function') return value;
             return async (...args: unknown[]) => {
+              const end = diagnostics.begin('persistence');
+              let failed = true;
               try {
                 const result: unknown = await (value as (...a: unknown[]) => unknown).apply(
                   target,
@@ -85,6 +88,7 @@ export class ExtractionPipeline {
                   );
                   diagnostics.success('persistence');
                 }
+                failed = false;
                 return result;
               } catch {
                 const error = new ExtractionError('storage');
@@ -94,16 +98,18 @@ export class ExtractionPipeline {
                   reportExtractionError('persistence', error, diagnostics);
                 }
                 throw error;
+              } finally {
+                end(failed);
               }
             };
           },
         })
       : storage;
-    this.entityExtractor = new EntityExtractor(llm, diagnostics);
-    this.relationshipExtractor = new RelationshipExtractor(llm, diagnostics);
-    this.deduplicator = new EntityDeduplicator(llm, diagnostics);
-    this.contradictionDetector = new ContradictionDetector(llm, diagnostics);
-    this.edgeDeduplicator = new EdgeDeduplicator(llm, diagnostics);
+    this.entityExtractor = new EntityExtractor(llm('entities'), diagnostics);
+    this.relationshipExtractor = new RelationshipExtractor(llm('relationships'), diagnostics);
+    this.deduplicator = new EntityDeduplicator(llm('entity_dedup'), diagnostics);
+    this.contradictionDetector = new ContradictionDetector(llm('contradictions'), diagnostics);
+    this.edgeDeduplicator = new EdgeDeduplicator(llm('edge_dedup'), diagnostics);
     this.entityTypes = config.entityTypes;
     this.groupId = config.groupId;
     this.requireConfidence = config.requireConfidence ?? false;
@@ -113,7 +119,7 @@ export class ExtractionPipeline {
     }
 
     if (config.embeddingConfig) {
-      this.embeddingService = new EmbeddingService(config.embeddingConfig);
+      this.embeddingService = new EmbeddingService(config.embeddingConfig, diagnostics);
     }
   }
 
@@ -156,6 +162,8 @@ export class ExtractionPipeline {
 
     // Step 1: Get existing entity names for dedup context
     const existingEntities = await this.storage.listEntities(this.groupId);
+    if (this.diagnostics)
+      this.diagnostics.stageMetric('entity_dedup').candidates += existingEntities.length;
     const existingNames = existingEntities.map((e) => e.name);
 
     // Step 2: Extract entities

@@ -1,3 +1,28 @@
+import { AsyncLocalStorage } from 'async_hooks';
+import type { StorageObservation } from '../schemas/StorageObservation.schema';
+import {
+  enqueue,
+  queueClearImpact,
+  assertQueueClear,
+  queueStats,
+  queueCommand,
+  applyPlan,
+  assertNoQueueMutation,
+  QUEUE_ATTRIBUTE,
+  canonical,
+  prepareQueueImport,
+} from '../extraction/QueueState';
+import type {
+  QueueBinding,
+  QueueStats,
+  QueueClearOptions,
+  QueueClearImpact,
+  QueueLimits,
+  QueueCommand,
+  QueueResult,
+  StagedExtraction,
+  ExtractionJob,
+} from '../schemas';
 import neo4j, { type Driver, type ManagedTransaction, type Session } from 'neo4j-driver';
 import { generateUuid } from '../utils/uuid';
 import { nowIso } from '../utils/temporal';
@@ -36,6 +61,7 @@ import type {
 } from '../schemas';
 import {
   CURRENT_GRAPH_DATA_VERSION,
+  QueueClearOptionsSchema,
   CreateEpisodicNodeSchema,
   EpisodicNodeSchema,
   migrateGraphData,
@@ -44,6 +70,26 @@ import {
 export class Neo4jStorage implements IGraphStorage {
   private driver: Driver;
   private database: string;
+  private extractionObservers = new AsyncLocalStorage<(value: StorageObservation) => void>();
+  async withExtractionDiagnostics<T>(
+    observer: (value: StorageObservation) => void,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const parent = this.extractionObservers.getStore();
+    const deliver = (value: StorageObservation) => {
+      try {
+        parent?.(value);
+      } catch {
+        /* Observers cannot affect storage mutations. */
+      }
+      try {
+        observer(value);
+      } catch {
+        /* Observers cannot affect storage mutations. */
+      }
+    };
+    return this.extractionObservers.run(deliver, operation);
+  }
   private initialized = false;
   private vectorIndexCreated = false;
 
@@ -63,7 +109,10 @@ export class Neo4jStorage implements IGraphStorage {
     // Create indexes and constraints
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      await this.executeWrite(session, async (tx) => {
+        await tx.run(
+          'CREATE CONSTRAINT engram_store_lock IF NOT EXISTS FOR (lock:EngramStoreLock) REQUIRE lock.id IS UNIQUE',
+        );
         // Entity indexes
         await tx.run('CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.uuid)');
         await tx.run('CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.group_id)');
@@ -103,6 +152,283 @@ export class Neo4jStorage implements IGraphStorage {
 
   private getSession(): Session {
     return this.driver.session({ database: this.database });
+  }
+
+  /** All supported graph writers share this lock before any reads or namespace locks. */
+  private async executeWrite<T>(
+    session: Session,
+    work: (tx: ManagedTransaction) => Promise<T>,
+  ): Promise<T> {
+    const started = performance.now();
+    let acknowledged = false;
+    try {
+      const result = await session.executeWrite(async (tx) => {
+        if (this.initialized)
+          await tx.run(`MERGE (lock:EngramStoreLock {id: 'extraction-v1'})
+        SET lock.revision = coalesce(lock.revision, 0) + 1`);
+        return work(tx);
+      });
+      acknowledged = true;
+      return result;
+    } finally {
+      try {
+        this.extractionObservers.getStore()?.({
+          backend: 'neo4j',
+          acknowledged,
+          total_ms: performance.now() - started,
+          queue_wait_ms: null,
+          lock_wait_ms: null,
+          disk_refresh_ms: null,
+          snapshot_write_ms: null,
+          snapshot_bytes: null,
+          transaction_ms: performance.now() - started,
+          serialization_ms: null,
+        });
+      } catch {
+        /* Diagnostics are observational. */
+      }
+    }
+  }
+
+  extractionBackend(): 'neo4j' {
+    return 'neo4j';
+  }
+  supportsDurableExtraction(): boolean {
+    return true;
+  }
+
+  private async graphInTransaction(tx: ManagedTransaction, groupId?: string): Promise<GraphData> {
+    const where = groupId ? ' WHERE e.group_id = $group' : '';
+    const params = groupId ? { group: groupId } : {};
+    const entities = await tx.run(`MATCH (e:Entity)${where} RETURN e LIMIT 100001`, params);
+    const edges = await tx.run(
+      `MATCH ()-[r:RELATES_TO]->()${groupId ? ' WHERE r.group_id = $group' : ''} RETURN r LIMIT 100001`,
+      params,
+    );
+    const episodes = await tx.run(
+      `MATCH (e:Episode)${where} RETURN e ORDER BY e.created_at ASC, coalesce(e.append_sequence, 0) ASC, e.uuid ASC LIMIT 100001`,
+      params,
+    );
+    if (entities.records.length + edges.records.length + episodes.records.length > 100000)
+      throw new Error('Engram queue: snapshot_limit');
+    const epoch = await tx.run(
+      `MATCH (lock:EngramStoreLock {id:'extraction-v1'}) RETURN lock.epoch AS epoch`,
+    );
+    const epochValue = epoch.records[0]?.get('epoch') as string | undefined;
+    const data: GraphData = {
+      ...(epochValue ? { metadata: { extraction_epoch: epochValue } } : {}),
+      version: CURRENT_GRAPH_DATA_VERSION,
+      exported_at: nowIso(),
+      group_id: groupId,
+      entities: entities.records.map((record) => this.recordToEntity(record.get('e').properties)),
+      edges: edges.records.map((record) => this.recordToEdge(record.get('r').properties)),
+      episodes: episodes.records.map((record) => this.recordToEpisode(record.get('e').properties)),
+    };
+    if (Buffer.byteLength(canonical(data)) > 100 * 1024 * 1024)
+      throw new Error('Engram queue: snapshot_limit');
+    return data;
+  }
+
+  async readExtractionSnapshot(groupId?: string): Promise<GraphData> {
+    const session = this.getSession();
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const result = await session.executeRead(async (tx) => {
+          const revision = async () => {
+            const r = await tx.run(
+              `MATCH (lock:EngramStoreLock {id: 'extraction-v1'}) RETURN coalesce(lock.revision,0) AS revision, lock.epoch AS epoch`,
+            );
+            return (
+              (r.records[0]?.get('revision')?.toString() ?? '0') +
+              ':' +
+              (r.records[0]?.get('epoch') ?? 'initial')
+            );
+          };
+          const before = await revision();
+          const graph = await this.graphInTransaction(tx, groupId);
+          return before === (await revision()) ? graph : null;
+        });
+        if (result) return result;
+      }
+      throw new Error('Engram queue: concurrent_snapshot');
+    } finally {
+      await session.close();
+    }
+  }
+
+  /** Write only changed records; deterministic identities survive driver transaction retries. */
+  private async writeExtractionDiff(
+    tx: ManagedTransaction,
+    before: GraphData,
+    after: GraphData,
+  ): Promise<void> {
+    for (const entity of after.entities) {
+      const prior = before.entities.find((item) => item.uuid === entity.uuid);
+      if (prior && canonical(prior) === canonical(entity)) continue;
+      await tx.run(`MERGE (e:Entity {uuid:$uuid}) SET e += $props`, {
+        uuid: entity.uuid,
+        props: { ...entity, attributes: JSON.stringify(entity.attributes) },
+      });
+    }
+    for (const edge of after.edges) {
+      const prior = before.edges.find((item) => item.uuid === edge.uuid);
+      if (prior && canonical(prior) === canonical(edge)) continue;
+      await tx.run(
+        `MATCH (a:Entity {uuid:$source}) MATCH (b:Entity {uuid:$target})
+        MERGE (a)-[r:RELATES_TO {uuid:$uuid}]->(b) SET r += $props`,
+        {
+          source: edge.source_node_uuid,
+          target: edge.target_node_uuid,
+          uuid: edge.uuid,
+          props: { ...edge, attributes: JSON.stringify(edge.attributes) },
+        },
+      );
+    }
+    for (const ep of after.episodes) {
+      const prior = before.episodes.find((item) => item.uuid === ep.uuid);
+      if (prior && canonical(prior.attributes) !== canonical(ep.attributes))
+        await tx.run('MATCH (ep:Episode {uuid:$uuid}) SET ep.attributes=$attributes', {
+          uuid: ep.uuid,
+          attributes: JSON.stringify(ep.attributes),
+        });
+    }
+  }
+
+  async appendEpisodesWithExtraction(
+    inputs: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
+    if (
+      !inputs.length ||
+      inputs.length > 1000 ||
+      inputs.some(
+        (ep) =>
+          ep.group_id !== inputs[0].group_id || ep.attributes?.[QUEUE_ATTRIBUTE] !== undefined,
+      )
+    )
+      throw new Error('Engram queue: invalid_batch');
+    const invocation = generateUuid();
+    const prepared = inputs.map((input, index) => ({
+      uuid: generateUuid(),
+      parsed: CreateEpisodicNodeSchema.parse({
+        ...input,
+        idempotency_key: input.idempotency_key ?? `queue-write:${invocation}:${index}`,
+      }),
+      auto: !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
+    }));
+    const session = this.getSession();
+    try {
+      return await this.executeWrite(session, async (tx) => {
+        await this.lockEpisodeGroup(tx, inputs[0].group_id);
+        const sequenceResult = await tx.run(
+          `MATCH (lock:EpisodeGroupLock {group_id:$group})
+          SET lock.sequence=lock.sequence+$size RETURN lock.sequence AS sequence`,
+          { group: inputs[0].group_id, size: neo4j.int(inputs.length) },
+        );
+        const finalSequence = sequenceResult.records[0].get('sequence').toNumber();
+        const results: AppendEpisodeResult[] = [];
+        for (const [index, item] of prepared.entries())
+          results.push(
+            await this.appendEpisodeInTransaction(
+              tx,
+              item.parsed,
+              item.auto,
+              finalSequence - inputs.length + index + 1,
+              item.uuid,
+            ),
+          );
+        const before = await this.graphInTransaction(tx);
+        const after = JSON.parse(JSON.stringify(before)) as GraphData;
+        const clock = await tx.run('RETURN toString(datetime.realtime()) AS now');
+        const now = new Date(clock.records[0].get('now')).toISOString();
+        const refs = enqueue(after, results, eligible, binding, limits, now, invocation);
+        await this.writeExtractionDiff(tx, before, after);
+        return {
+          results: results.map((item) => ({
+            ...item,
+            episode: after.episodes.find((ep) => ep.uuid === item.episode.uuid)!,
+          })),
+          jobs: refs,
+          queue: queueStats(after, inputs[0].group_id),
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async extractionQueueCommand(command: QueueCommand): Promise<QueueResult> {
+    const session = this.getSession();
+    try {
+      return await this.executeWrite(session, async (tx) => {
+        const before = await this.graphInTransaction(tx);
+        const after = JSON.parse(JSON.stringify(before)) as GraphData;
+        const clock = await tx.run('RETURN toString(datetime.realtime()) AS now');
+        const result = queueCommand(
+          after,
+          command,
+          new Date(clock.records[0].get('now')).toISOString(),
+        );
+        await this.writeExtractionDiff(tx, before, after);
+        return result;
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async importExtractionBackup(input: unknown): Promise<void> {
+    const session = this.getSession();
+    try {
+      await this.executeWrite(session, async (tx) => {
+        const existing = await this.graphInTransaction(tx);
+        const incoming = prepareQueueImport(input, existing, nowIso());
+        const after = {
+          ...existing,
+          entities: [...existing.entities, ...incoming.entities],
+          edges: [...existing.edges, ...incoming.edges],
+          episodes: [...existing.episodes, ...incoming.episodes],
+        };
+        await this.writeExtractionDiff(tx, existing, after);
+        for (const ep of incoming.episodes) {
+          await tx.run('CREATE (ep:Episode) SET ep += $props', {
+            props: {
+              ...ep,
+              attributes: JSON.stringify(ep.attributes),
+              source_dedup_key: this.sourceDedupKey(ep),
+              idempotency_dedup_key: this.idempotencyDedupKey(ep),
+            },
+          });
+        }
+        for (const ep of incoming.episodes)
+          if (ep.previous_episode_uuid)
+            await tx.run(
+              'MATCH (a:Episode {uuid:$prev}) MATCH (b:Episode {uuid:$uuid}) MERGE (a)-[:NEXT_EPISODE]->(b)',
+              { prev: ep.previous_episode_uuid, uuid: ep.uuid },
+            );
+        await tx.run(`MATCH (lock:EngramStoreLock {id:'extraction-v1'}) SET lock.epoch=$epoch`, {
+          epoch: generateUuid(),
+        });
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async applyStagedExtraction(plan: StagedExtraction): Promise<void> {
+    const session = this.getSession();
+    try {
+      await this.executeWrite(session, async (tx) => {
+        const before = await this.graphInTransaction(tx);
+        const after = JSON.parse(JSON.stringify(before)) as GraphData;
+        applyPlan(after, plan);
+        await this.writeExtractionDiff(tx, before, after);
+      });
+    } finally {
+      await session.close();
+    }
   }
 
   private sourceDedupKey(input: {
@@ -248,6 +574,7 @@ export class Neo4jStorage implements IGraphStorage {
       };
     }
     const episode = this.recordToEpisode(existingResult.records[0].get('ep').properties);
+    assertNoQueueMutation([episode]);
     if (!groupAlreadyLocked) await this.lockEpisodeGroup(tx, episode.group_id);
 
     const linkedResult = await tx.run(
@@ -345,7 +672,7 @@ export class Neo4jStorage implements IGraphStorage {
 
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      await this.executeWrite(session, async (tx) => {
         await tx.run(
           `CREATE (e:Entity {
 						uuid: $uuid,
@@ -437,7 +764,7 @@ export class Neo4jStorage implements IGraphStorage {
         }
       }
 
-      const result = await session.executeWrite(async (tx) => {
+      const result = await this.executeWrite(session, async (tx) => {
         return tx.run(
           `MATCH (e:Entity {uuid: $uuid}) SET ${setClauses.join(', ')} RETURN e`,
           params,
@@ -457,7 +784,7 @@ export class Neo4jStorage implements IGraphStorage {
   async deleteEntity(uuid: string): Promise<void> {
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      await this.executeWrite(session, async (tx) => {
         await tx.run('MATCH (e:Entity {uuid: $uuid}) DETACH DELETE e', { uuid });
       });
     } finally {
@@ -537,7 +864,7 @@ export class Neo4jStorage implements IGraphStorage {
 
     const session = this.getSession();
     try {
-      const result = await session.executeWrite(async (tx) => {
+      const result = await this.executeWrite(session, async (tx) => {
         return tx.run(
           `MATCH (source:Entity {uuid: $source_node_uuid})
 					 MATCH (target:Entity {uuid: $target_node_uuid})
@@ -676,7 +1003,7 @@ export class Neo4jStorage implements IGraphStorage {
         }
       }
 
-      const result = await session.executeWrite(async (tx) => {
+      const result = await this.executeWrite(session, async (tx) => {
         return tx.run(
           `MATCH ()-[r:RELATES_TO {uuid: $uuid}]->()
 					 SET ${setClauses.join(', ')}
@@ -698,7 +1025,7 @@ export class Neo4jStorage implements IGraphStorage {
   async deleteEdge(uuid: string): Promise<void> {
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      await this.executeWrite(session, async (tx) => {
         await tx.run('MATCH ()-[r:RELATES_TO {uuid: $uuid}]->() DELETE r', { uuid });
       });
     } finally {
@@ -735,6 +1062,8 @@ export class Neo4jStorage implements IGraphStorage {
     if (inputs.length === 0) return [];
     if (inputs.length > 1000) throw new Error('Episode append batch cannot exceed 1000 episodes');
 
+    if (inputs.some((ep) => ep.attributes?.[QUEUE_ATTRIBUTE] !== undefined))
+      throw new Error('Engram queue: reserved_attribute');
     const groupId = inputs[0].group_id;
     if (inputs.some((input) => input.group_id !== groupId)) {
       throw new Error('Episode append batch must contain exactly one group ID');
@@ -748,7 +1077,7 @@ export class Neo4jStorage implements IGraphStorage {
 
     const session = this.getSession();
     try {
-      return await session.executeWrite(async (tx) => {
+      return await this.executeWrite(session, async (tx) => {
         const lockResult = await tx.run(
           `MERGE (lock:EpisodeGroupLock {group_id: $group_id})
            SET lock.sequence = coalesce(lock.sequence, 0) + $batch_size,
@@ -789,7 +1118,10 @@ export class Neo4jStorage implements IGraphStorage {
     parsed: ReturnType<typeof CreateEpisodicNodeSchema.parse>,
     shouldAutoChain: boolean,
     appendSequence: number,
+    preparedUuid?: string,
   ): Promise<AppendEpisodeResult> {
+    if (parsed.attributes[QUEUE_ATTRIBUTE] !== undefined)
+      throw new Error('Engram queue: reserved_attribute');
     const sourceDedupKey = this.sourceDedupKey(parsed);
     const idempotencyDedupKey = this.idempotencyDedupKey(parsed);
 
@@ -830,7 +1162,7 @@ export class Neo4jStorage implements IGraphStorage {
 
     const createdAt = nowIso();
     const episode: EpisodicNode = {
-      uuid: generateUuid(),
+      uuid: preparedUuid ?? generateUuid(),
       ...parsed,
       previous_episode_uuid: previousEpisodeUuid,
       created_at: createdAt,
@@ -932,10 +1264,13 @@ export class Neo4jStorage implements IGraphStorage {
   async updateEpisode(uuid: string, updates: UpdateEpisodeInput): Promise<EpisodicNode> {
     const session = this.getSession();
     try {
-      return await session.executeWrite(async (tx) => {
+      return await this.executeWrite(session, async (tx) => {
         const existingResult = await tx.run('MATCH (ep:Episode {uuid: $uuid}) RETURN ep', { uuid });
         if (existingResult.records.length === 0) throw new Error(`Episode not found: ${uuid}`);
         const existing = this.recordToEpisode(existingResult.records[0].get('ep').properties);
+        assertNoQueueMutation([existing]);
+        if (updates.attributes?.[QUEUE_ATTRIBUTE] !== undefined)
+          throw new Error('Engram queue: reserved_attribute');
         await this.lockEpisodeGroup(tx, existing.group_id);
 
         const updated = EpisodicNodeSchema.parse({
@@ -975,7 +1310,9 @@ export class Neo4jStorage implements IGraphStorage {
   ): Promise<DeleteEpisodeResult> {
     const session = this.getSession();
     try {
-      return await session.executeWrite((tx) => this.deleteEpisodeInTransaction(tx, uuid, options));
+      return await this.executeWrite(session, (tx) =>
+        this.deleteEpisodeInTransaction(tx, uuid, options),
+      );
     } finally {
       await session.close();
     }
@@ -1015,7 +1352,7 @@ export class Neo4jStorage implements IGraphStorage {
 
     const session = this.getSession();
     try {
-      return await session.executeWrite(async (tx) => {
+      return await this.executeWrite(session, async (tx) => {
         await this.lockEpisodeGroup(tx, groupId);
         const { query, params } = this.buildEpisodeListQuery(groupId, selectionOptions);
         const selectedResult = await tx.run(query, params);
@@ -1497,10 +1834,38 @@ export class Neo4jStorage implements IGraphStorage {
 
   // ===== Graph Management =====
 
-  async clearGroup(groupId: string): Promise<void> {
+  private async queueClearSources(
+    tx: ManagedTransaction,
+    groupId?: string,
+  ): Promise<Array<{ attributes: Record<string, unknown> }>> {
+    const result = await tx.run(
+      `MATCH (ep:Episode) WHERE ($group IS NULL OR ep.group_id=$group) AND ep.attributes CONTAINS $key RETURN ep.attributes AS attributes LIMIT 100001`,
+      { group: groupId ?? null, key: QUEUE_ATTRIBUTE },
+    );
+    if (result.records.length > 100000) throw new Error('Engram queue: clear_preview_limit');
+    return result.records.map((record) => ({
+      attributes: JSON.parse(record.get('attributes') as string) as Record<string, unknown>,
+    }));
+  }
+  async previewQueueClear(groupId?: string): Promise<QueueClearImpact> {
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      return await session.executeRead(async (tx) =>
+        queueClearImpact(await this.queueClearSources(tx, groupId)),
+      );
+    } finally {
+      await session.close();
+    }
+  }
+  async clearGroup(groupId: string, options: QueueClearOptions = {}): Promise<void> {
+    const reviewed = QueueClearOptionsSchema.parse(options).allowQueued;
+    const session = this.getSession();
+    try {
+      await this.executeWrite(session, async (tx) => {
+        if (!reviewed) assertQueueClear(await this.queueClearSources(tx, groupId));
+        await tx.run(`MATCH (lock:EngramStoreLock {id:'extraction-v1'}) SET lock.epoch=$epoch`, {
+          epoch: generateUuid(),
+        });
         // Delete edges first
         await tx.run(
           `MATCH ()-[r:RELATES_TO {group_id: $groupId}]->()
@@ -1520,10 +1885,15 @@ export class Neo4jStorage implements IGraphStorage {
     }
   }
 
-  async clearAll(): Promise<void> {
+  async clearAll(options: QueueClearOptions = {}): Promise<void> {
+    const reviewed = QueueClearOptionsSchema.parse(options).allowQueued;
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      await this.executeWrite(session, async (tx) => {
+        if (!reviewed) assertQueueClear(await this.queueClearSources(tx));
+        await tx.run(`MATCH (lock:EngramStoreLock {id:'extraction-v1'}) SET lock.epoch=$epoch`, {
+          epoch: generateUuid(),
+        });
         await tx.run('MATCH (n) WHERE n:Entity OR n:Episode DETACH DELETE n');
       });
     } finally {
@@ -1586,9 +1956,22 @@ export class Neo4jStorage implements IGraphStorage {
 
   async importGraph(sourceData: ImportGraphData): Promise<void> {
     const data = migrateGraphData(sourceData).data;
+    assertNoQueueMutation(data.episodes);
     const session = this.getSession();
     try {
-      await session.executeWrite(async (tx) => {
+      await this.executeWrite(session, async (tx) => {
+        await tx.run(`MATCH (lock:EngramStoreLock {id:'extraction-v1'}) SET lock.epoch=$epoch`, {
+          epoch: generateUuid(),
+        });
+        const existingQueueSources = await tx.run(
+          'MATCH (ep:Episode) WHERE ep.uuid IN $ids RETURN ep',
+          { ids: data.episodes.map((ep) => ep.uuid) },
+        );
+        assertNoQueueMutation(
+          existingQueueSources.records.map((record) =>
+            this.recordToEpisode(record.get('ep').properties),
+          ),
+        );
         // Import entities
         for (const entity of data.entities) {
           await tx.run(
@@ -1729,7 +2112,7 @@ export class Neo4jStorage implements IGraphStorage {
     const session = this.getSession();
     let migratedCount = 0;
     try {
-      migratedCount = await session.executeWrite(async (tx) => {
+      migratedCount = await this.executeWrite(session, async (tx) => {
         const result = await tx.run(
           `MATCH (ep:Episode)
            WHERE ep.episode_kind IS NULL
@@ -1843,7 +2226,13 @@ export class Neo4jStorage implements IGraphStorage {
       if (policy.type === 'days' && policy.value) {
         const cutoffDate = new Date(Date.now() - policy.value * 24 * 60 * 60 * 1000).toISOString();
 
-        const result = await session.executeWrite(async (tx) => {
+        const result = await this.executeWrite(session, async (tx) => {
+          const existing = await tx.run('MATCH (ep:Episode {group_id:$group}) RETURN ep', {
+            group: groupId,
+          });
+          assertNoQueueMutation(
+            existing.records.map((record) => this.recordToEpisode(record.get('ep').properties)),
+          );
           return tx.run(
             `MATCH (ep:Episode {group_id: $groupId})
 						 WHERE ep.created_at < $cutoffDate
@@ -1857,7 +2246,13 @@ export class Neo4jStorage implements IGraphStorage {
       }
 
       if (policy.type === 'max_episodes' && policy.value) {
-        const result = await session.executeWrite(async (tx) => {
+        const result = await this.executeWrite(session, async (tx) => {
+          const existing = await tx.run('MATCH (ep:Episode {group_id:$group}) RETURN ep', {
+            group: groupId,
+          });
+          assertNoQueueMutation(
+            existing.records.map((record) => this.recordToEpisode(record.get('ep').properties)),
+          );
           return tx.run(
             `MATCH (ep:Episode {group_id: $groupId})
 						 WITH ep ORDER BY ep.created_at DESC

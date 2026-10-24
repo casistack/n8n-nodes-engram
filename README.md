@@ -101,6 +101,44 @@ npm install n8n-nodes-engram
 
 ---
 
+## Bounded Extraction and Durable Workers
+
+These Memory v2 controls are optional. Existing workflows keep **Entity Resolution > Legacy**, **Knowledge Selection > Legacy**, **Extraction Execution > Synchronous** and **Graph Context Policy > Legacy**. Installing a newer package does not enable them or rewrite existing knowledge.
+
+### Activate Bounded Extraction First
+
+Back up current workflows and both the graph and conversation records before changing settings. Preserve the exact namespace, including whitespace, and the existing embedded workflow-to-file mapping or Neo4j database. Begin with one conversation workflow and keep the current model, session identity and conversation window.
+
+Select **Entity Resolution > Bounded** and **Message Write Policy > Final Turns**. Keep eligible human/final-assistant sources stored; system/tool extraction is unsupported in this mode. Exact names and explicitly verified aliases resolve before model comparisons. Defaults limit each extraction to an eight-candidate shortlist, 16 fuzzy comparisons, 32 model/embedding requests and a 30-second shared deadline. Identity ambiguity, pruned candidates and exhausted budgets remain proposed or deferred; they are not permission to merge existing identities. Legacy contradiction expiry and automatic summary updates are not performed by the bounded path.
+
+Select **Knowledge Selection > Durable and Temporal** to keep temporary requests in conversation history without automatically accepting them as durable facts. Automatic acceptance requires accepted human provenance and complete, literal assertion evidence. Paraphrases, quotations, hypothetical or qualified statements and uncertain identities require review. This conservative policy can produce more proposed records. It does not reclassify, re-extract or delete previously stored facts. **Source Timezone** must be an explicit IANA zone such as `Europe/London`; omit it when unknown. Calendar-day resolution supports today/tomorrow/yesterday and a single explicit date. Other relative expressions remain uncertain.
+
+**Graph Context Policy > Governed Current** reconciles search/traversal duplicates by relationship UUID, omits ungrounded entity summaries and excludes unresolved or out-of-interval plans from current context. **Governed Historical** retains historical evidence with source attribution; map historical intent explicitly in the workflow. **Governed As Of** requires an ISO timestamp with `Z` or a numeric offset and tests event-interval relevance, not what the system knew at that time. Separate **Durable Fact Token Allowance** (4096) and **Historical Evidence Token Allowance** (2048) stay within the overall graph context token cap; the recent-message window remains independent. A zero allowance disables that evidence category. Governed search and traversal share a 512-source-reference hydration allowance; candidates whose complete provenance does not fit are deferred, with `source_reference_deferred` and truncation diagnostics. Existing accepted legacy records are not automatically corrected. Genuine human JSON and quoted conversation remain in the episode ledger.
+
+Inspect save diagnostics for per-stage elapsed time, model-call counts, available token usage, candidate/deferral counts and storage timing. Unavailable provider/backend measurements are `null`; overlapping stage/request/storage times must not be added together. Agree latency targets from your own normal and tool-assisted workloads before expanding the rollout.
+
+### Activate a Durable Extraction Worker
+
+Durable Queue removes model extraction from the chat save path by persisting the episode and its extraction job together. Graph facts become available only after a worker completes. It requires persistent storage, bounded resolution, Final Turns and **Retention Policy > Keep Forever**; unsupported combinations fail before the write. Use stable per-turn message/idempotency keys for retries.
+
+1. Create a separate workflow with **Schedule Trigger > Engram Admin v2 > Extraction Queue > Process Jobs**. Start with **Worker Batch Size > 1**; each execution processes at most ten jobs sequentially. No worker runs automatically merely because the package is installed.
+2. Configure the same backend and exact **Queue Group ID** as Memory. For embedded storage, set **Memory Workflow ID** to the original producer workflow ID and use the same custom storage directory. The worker's own workflow ID is not the producer's store. The existing producer file must be present. For Neo4j, use the same database and appropriate credentials.
+3. Match the producer's extraction credential endpoint, model, temperature mode/value, entity types, thresholds, embedding configuration and all bounded/quality settings. Set the same nonsecret **Extraction Route ID** on producer and worker. API keys are not stored in jobs; credential rotation can retain the binding when these settings are unchanged. Route URLs containing credentials, query strings or fragments are rejected.
+4. Activate the scheduled worker, then select **Extraction Execution > Durable Queue** on the producer. Inspect `delivery.status=queued`, job IDs, enqueue timing and `graph_fresh=false`; this is not a successful extraction result. Use **Extraction Queue > Status** for pending/failed counts, oldest pending time and bounded job summaries, then inspect worker outcomes and actual graph facts.
+5. Verify an ordinary turn, a real tool-assisted turn, a durable preference, older-fact recall and an explicit historical query. Confirm the final pair is saved once, audits remain outside conversational context, original records retain their identity and the queue drains. Only then activate additional namespaces. Evaluate passive ingestion separately.
+
+Jobs use fenced leases, bounded retry/backoff and atomic graph/completion writes. Restarts can recover work; retries do not resend chat messages. Configuration mismatch leaves work unclaimed. Use **Rebind Job** with an operator and reason only after reviewing corrected settings; this preserves the source/job identity and clears stale staged work. Pause, resume, retry and cancel are explicit reviewed operations. Capacity or durable-storage failures can reject the conversation write; monitor workflow errors rather than assuming every queued save is fail-soft. Snapshot preparation is capped at 100,000 records/100 MiB; source, request, response and staged-plan byte limits can defer oversized work without truncating original messages.
+
+### Backups, Historical Artifacts and Rollback
+
+Use **Extraction Queue > Export Queue Backup** to preserve jobs, ownership and completion markers along with graph/episode records. A generic graph export alone is not the queue recovery procedure. Imports verify checksums, namespace/endpoints and collisions; incomplete legacy source/chain references are retained with warnings. Imported active jobs are paused pending configuration review. Creating a fresh embedded import destination requires explicit review and a custom directory. Never import over newer live conversations.
+
+The historical-artifact inspection and dry-run steps below still apply. This feature does not reinterpret historical records already labelled as genuine conversation, automatically delete extracted facts or provide a record-specific correction migration.
+
+For rollback, first stop producers and workers and take a fresh queue-aware backup. Prefer restoring the previous policy settings on the new package. Before using an older binary, complete or explicitly cancel outstanding jobs and verify no worker remains active. Older binaries do not enforce queue ownership, leases or disk-sync protections; do not run old and new writers concurrently against a queue-bearing store. Keep the queue-aware backup and all new legitimate records. If an older package cannot safely read the retained operational metadata, use a separately reviewed recovery/export procedure; never overwrite live history with an old snapshot as routine rollback. Existing no-queue embedded stores retain their prior disk-sync behavior. Neo4j graph writers coordinate through a shared store lock to protect atomic extraction commits; measure concurrent write throughput before expanding a busy deployment.
+
+---
+
 ## Upgrading to v0.6.0
 
 **Installing this release makes the controls available; it does not automatically activate history filtering or final-turn writes.** Existing saved settings retain temperature `0`, History Filter `Off`, Message Write Policy `Legacy`, and Store Tool Audit `Disabled`. Saved Memory v1 nodes remain v1 until explicitly upgraded. The temperature control is available in both v1 and v2; the history/write/query controls require Memory v2.

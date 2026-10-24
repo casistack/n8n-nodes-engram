@@ -15,6 +15,7 @@ import {
 } from './RetrievalGovernance';
 import { formatBudgetedItems, type BudgetedSectionResult } from './ContextBudget';
 import type { EntityEdge } from '../schemas';
+import type { SourceHydrationBudget } from '../schemas/ExtractionPolicy.schema';
 
 export interface HybridSearchOptions {
   limit?: number;
@@ -29,6 +30,8 @@ export interface HybridSearchOptions {
   retrievalFilters?: RetrievalFilters;
   includeDiagnostics?: boolean;
   diagnosticsCandidateLimit?: number;
+  captureMatchEvidence?: boolean;
+  hydrationBudget?: SourceHydrationBudget;
 }
 
 export interface HybridSearchResults {
@@ -170,7 +173,12 @@ export class HybridSearchEngine {
 
         // Merge with RRF
         const mergedEntities = this.mergeEntityResults(textEntities, vectorEntities, limit * 2);
-        const mergedEdges = this.mergeEdgeResults(textEdges, vectorEdges, limit * 2);
+        const mergedEdges = this.mergeEdgeResults(
+          textEdges,
+          vectorEdges,
+          limit * 2,
+          options?.captureMatchEvidence,
+        );
         const preliminaryDecisions = options?.includeDiagnostics
           ? [
               ...this.reviewFilterDecisions(rawTextEntities, 'entity', options?.acceptedOnly),
@@ -235,15 +243,27 @@ export class HybridSearchEngine {
   ): Promise<HybridSearchResults> {
     if (!options?.includeDiagnostics) {
       const [entities, edges] = await Promise.all([
-        this.governance.governEntities(entityCandidates, retrievalFilters),
-        this.governance.governEdges(edgeCandidates, retrievalFilters),
+        this.governance.governEntities(
+          entityCandidates,
+          retrievalFilters,
+          options?.hydrationBudget,
+        ),
+        this.governance.governEdges(edgeCandidates, retrievalFilters, options?.hydrationBudget),
       ]);
       return { entities: entities.slice(0, limit), edges: edges.slice(0, limit) };
     }
 
     const [entityGovernance, edgeGovernance] = await Promise.all([
-      this.governance.governEntitiesWithDecisions(entityCandidates, retrievalFilters),
-      this.governance.governEdgesWithDecisions(edgeCandidates, retrievalFilters),
+      this.governance.governEntitiesWithDecisions(
+        entityCandidates,
+        retrievalFilters,
+        options?.hydrationBudget,
+      ),
+      this.governance.governEdgesWithDecisions(
+        edgeCandidates,
+        retrievalFilters,
+        options?.hydrationBudget,
+      ),
     ]);
     const entities = entityGovernance.results.slice(0, limit);
     const edges = edgeGovernance.results.slice(0, limit);
@@ -439,13 +459,17 @@ export class HybridSearchEngine {
     textResults: EdgeSearchResult[],
     vectorResults: EdgeSearchResult[],
     limit: number,
+    evidence = false,
   ): EdgeSearchResult[] {
     const scores = new Map<string, { score: number; result: EdgeSearchResult }>();
 
     for (let i = 0; i < textResults.length; i++) {
       const r = textResults[i];
       const rrfScore = 1 / (RRF_K + i + 1);
-      scores.set(r.edge.uuid, { score: rrfScore, result: r });
+      scores.set(r.edge.uuid, {
+        score: rrfScore,
+        result: evidence ? { ...r, match_evidence: { text: true, vector: false } } : r,
+      });
     }
 
     for (let i = 0; i < vectorResults.length; i++) {
@@ -454,8 +478,13 @@ export class HybridSearchEngine {
       const existing = scores.get(r.edge.uuid);
       if (existing) {
         existing.score += rrfScore;
+        if (evidence)
+          existing.result = { ...existing.result, match_evidence: { text: true, vector: true } };
       } else {
-        scores.set(r.edge.uuid, { score: rrfScore, result: r });
+        scores.set(r.edge.uuid, {
+          score: rrfScore,
+          result: evidence ? { ...r, match_evidence: { text: false, vector: true } } : r,
+        });
       }
     }
 
@@ -525,6 +554,7 @@ export class HybridSearchEngine {
   async governTraversalEdges(
     edges: EntityEdge[],
     filters: RetrievalFilters = {},
+    budget?: SourceHydrationBudget,
   ): Promise<GovernedEdgeSearchResult[]> {
     const results = (
       await Promise.all(
@@ -538,7 +568,7 @@ export class HybridSearchEngine {
         }),
       )
     ).filter((result): result is EdgeSearchResult => result !== null);
-    return this.governance.governEdges(results, filters);
+    return this.governance.governEdges(results, filters, budget);
   }
 
   private formatFactWithProvenance(result: GovernedEdgeSearchResult): string {

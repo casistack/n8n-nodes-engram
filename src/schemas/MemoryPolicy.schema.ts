@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { StorageTotalsSchema } from './StorageObservation.schema';
+import { QueueStatsSchema } from './ExtractionQueue.schema';
 import { ExtractionOutcomeSchema } from './ExtractionOutcome.schema';
 
 export const CurrentHumanQuerySchema = z.string();
@@ -28,11 +30,25 @@ export const HistoryReadDiagnosticsSchema = z.object({
 });
 export type HistoryReadDiagnostics = z.infer<typeof HistoryReadDiagnosticsSchema>;
 export const MemoryLoadDiagnosticsSchema = z.object({
+  queue: QueueStatsSchema.extend({ version: z.literal(1) }).optional(),
   history: HistoryReadDiagnosticsSchema,
   retrieval: z.object({
     query_source: z.enum(['input', 'configured', 'none']),
     query_available: z.boolean(),
     fact_messages: z.number().int().nonnegative(),
+    selection: z
+      .object({
+        candidates: z.number().int().nonnegative(),
+        returned: z.number().int().nonnegative(),
+        duplicate_uuid: z.number().int().nonnegative(),
+        irrelevant: z.number().int().nonnegative(),
+        uncertain_time: z.number().int().nonnegative(),
+        invalid_time: z.number().int().nonnegative(),
+        budget: z.number().int().nonnegative(),
+        source_reference_deferred: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+      })
+      .optional(),
   }),
 });
 export type MemoryLoadDiagnostics = z.infer<typeof MemoryLoadDiagnosticsSchema>;
@@ -44,3 +60,19 @@ export const MemoryWriteOutcomeSchema = z.object({
   skipped: z.number().int().nonnegative(),
 });
 export type MemoryWriteOutcome = z.infer<typeof MemoryWriteOutcomeSchema>;
+
+export const QueueDeliverySchema = z.object({
+  version: z.literal(1),
+  status: z.literal('queued'),
+  durable: z.literal(true),
+  enqueue_ms: z.number().finite().nonnegative(),
+  storage_breakdown: StorageTotalsSchema.nullable().optional(),
+  jobs: z.array(z.object({ uuid: z.string().uuid(), state: z.string().max(32) })).max(64),
+  graph_fresh: z.boolean(),
+});
+export type QueueDelivery = z.infer<typeof QueueDeliverySchema>;
+export const MemoryDeliveryOutcomeSchema = z.union([
+  MemoryWriteOutcomeSchema,
+  MemoryWriteOutcomeSchema.omit({ extraction: true }).extend({ delivery: QueueDeliverySchema }),
+]);
+export type MemoryDeliveryOutcome = z.infer<typeof MemoryDeliveryOutcomeSchema>;

@@ -1,10 +1,12 @@
+import { RequestBudget, readBoundedResponse } from './RequestBudget';
 /**
  * Lightweight OpenAI-compatible API client for extraction tasks.
  * Works with OpenAI, OpenRouter, Ollama, or any compatible endpoint.
  */
 
 import { ExtractionTemperatureSchema, type ExtractionTemperature } from '../schemas';
-import { ExtractionError } from './ExtractionDiagnostics';
+import { ExtractionError, type ExtractionDiagnostics } from './ExtractionDiagnostics';
+import type { ExtractionStage } from '../schemas';
 import { normalizeHttpBaseUrl } from '../utils/url';
 
 export interface LlmClientConfig {
@@ -37,7 +39,12 @@ export class LlmClient {
   private timeoutMs: number;
   private temperature: ExtractionTemperature;
 
-  constructor(config: LlmClientConfig) {
+  constructor(
+    config: LlmClientConfig,
+    private diagnostics?: ExtractionDiagnostics,
+    private stage: ExtractionStage = 'entities',
+    private budget?: RequestBudget,
+  ) {
     this.apiKey = config.apiKey;
     this.baseUrl = normalizeHttpBaseUrl(config.baseUrl, 'LLM API baseUrl');
     this.model = config.model;
@@ -51,6 +58,7 @@ export class LlmClient {
       temperature?: number | ExtractionTemperature;
       maxTokens?: number;
       responseFormat?: { type: 'json_object' | 'text' };
+      stage?: ExtractionStage;
     },
   ): Promise<LlmResponse> {
     const url = `${this.baseUrl}/chat/completions`;
@@ -77,18 +85,26 @@ export class LlmClient {
       body.response_format = options.responseFormat;
     }
 
+    const serializedBody = JSON.stringify(body);
+    const remaining = this.budget?.reserve(Buffer.byteLength(serializedBody));
+    const metric = this.diagnostics?.beginRequest(options?.stage ?? this.stage);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abort = () => controller.abort();
+    this.budget?.controller.signal.addEventListener('abort', abort, { once: true });
+    const timeout = setTimeout(abort, Math.min(this.timeoutMs, remaining ?? this.timeoutMs));
 
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify(body),
+        body: serializedBody,
         signal: controller.signal,
       });
+      metric?.headers();
       if (!response.ok) {
-        const text = await response.text();
+        const text = this.budget
+          ? await readBoundedResponse(response, this.budget.maxResponseBytes)
+          : await response.text();
         let kind: import('../schemas').ExtractionErrorKind =
           response.status === 401 || response.status === 403
             ? 'authentication'
@@ -109,9 +125,13 @@ export class LlmClient {
       }
       let data: unknown;
       try {
-        data = await response.json();
+        data = this.budget
+          ? (JSON.parse(
+              await readBoundedResponse(response, this.budget.maxResponseBytes),
+            ) as unknown)
+          : await response.json();
       } catch (error) {
-        if (controller.signal.aborted) throw error;
+        if (controller.signal.aborted || error instanceof ExtractionError) throw error;
         throw new ExtractionError('invalid_response');
       }
       const envelope = data as {
@@ -121,19 +141,28 @@ export class LlmClient {
       const content = envelope?.choices?.[0]?.message?.content;
       if (typeof content !== 'string' || !content.trim())
         throw new ExtractionError('invalid_response');
+      this.budget?.check();
+      metric?.end('completed', envelope?.usage);
       return { content, usage: envelope?.usage };
     } catch (error: unknown) {
+      metric?.end(controller.signal.aborted ? 'cancelled' : 'failed');
+      if (this.budget?.controller.signal.aborted) this.budget.check();
       if (controller.signal.aborted) throw new ExtractionError('timeout');
       if (error instanceof ExtractionError) throw error;
       throw new ExtractionError('network');
     } finally {
       clearTimeout(timeout);
+      this.budget?.controller.signal.removeEventListener('abort', abort);
     }
   }
 
   async chatJson<T>(
     messages: LlmMessage[],
-    options?: { temperature?: number | ExtractionTemperature; maxTokens?: number },
+    options?: {
+      temperature?: number | ExtractionTemperature;
+      maxTokens?: number;
+      stage?: ExtractionStage;
+    },
   ): Promise<T> {
     const response = await this.chat(messages, {
       ...options,

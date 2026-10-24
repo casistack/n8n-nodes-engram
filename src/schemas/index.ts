@@ -76,3 +76,8 @@ export {
 export * from './ExtractionOutcome.schema';
 
 export * from './MemoryPolicy.schema';
+
+export * from './ExtractionQueue.schema';
+export * from './ExtractionPolicy.schema';
+
+export * from './StorageObservation.schema';

@@ -1,3 +1,27 @@
+import { AsyncLocalStorage } from 'async_hooks';
+import type { StorageObservation } from '../schemas/StorageObservation.schema';
+import {
+  enqueue,
+  queueClearImpact,
+  assertQueueClear,
+  queueStats,
+  queueCommand,
+  applyPlan,
+  assertNoQueueMutation,
+  QUEUE_ATTRIBUTE,
+  prepareQueueImport,
+} from '../extraction/QueueState';
+import type {
+  QueueBinding,
+  QueueStats,
+  QueueClearOptions,
+  QueueClearImpact,
+  QueueLimits,
+  QueueCommand,
+  QueueResult,
+  StagedExtraction,
+  ExtractionJob,
+} from '../schemas';
 import { MultiDirectedGraph } from 'graphology';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -42,6 +66,7 @@ import type {
 import { matchesEpisodeHygieneFilters } from './EpisodeHygiene';
 import {
   CURRENT_GRAPH_DATA_VERSION,
+  QueueClearOptionsSchema,
   CreateEpisodicNodeSchema,
   EpisodicNodeSchema,
   migrateGraphData,
@@ -66,6 +91,7 @@ const EMBEDDED_BACKUP_SUFFIX = '.pre-schema-2.0.backup.json';
 
 interface MutationOptions<T> {
   operation?: string;
+  durable?: boolean;
   itemCount?: number;
   shouldWriteSnapshot?: (result: T) => boolean;
 }
@@ -74,7 +100,28 @@ export class GraphologyStorage implements IGraphStorage {
   private graph: MultiDirectedGraph<GraphNodeAttributes, GraphEdgeAttributes>;
   private searchProvider: MinisearchProvider;
   private persistPath: string | undefined;
+  private extractionObservers = new AsyncLocalStorage<(value: StorageObservation) => void>();
+  async withExtractionDiagnostics<T>(
+    observer: (value: StorageObservation) => void,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const parent = this.extractionObservers.getStore();
+    const deliver = (value: StorageObservation) => {
+      try {
+        parent?.(value);
+      } catch {
+        /* Observers cannot affect storage mutations. */
+      }
+      try {
+        observer(value);
+      } catch {
+        /* Observers cannot affect storage mutations. */
+      }
+    };
+    return this.extractionObservers.run(deliver, operation);
+  }
   private initialized = false;
+  private extractionEpoch?: string;
   private episodeOrder = new Map<string, number>();
   private nextOrder = 0;
   private mutationTail: Promise<void> = Promise.resolve();
@@ -118,6 +165,120 @@ export class GraphologyStorage implements IGraphStorage {
 
   getLastMutationDiagnostics(): StorageMutationDiagnostics | null {
     return this.lastMutationDiagnostics ? { ...this.lastMutationDiagnostics } : null;
+  }
+
+  extractionBackend(): 'embedded' {
+    return 'embedded';
+  }
+  supportsDurableExtraction(): boolean {
+    return Boolean(this.persistPath);
+  }
+
+  /** Capture and refresh without a write; serialize state/index swap with local mutations. */
+  async readExtractionSnapshot(groupId?: string): Promise<GraphData> {
+    const previous = this.mutationTail;
+    let release!: () => void;
+    this.mutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      this.assertQueueFilePresent();
+      if (this.persistPath && fs.existsSync(this.persistPath)) {
+        const stat = await fs.promises.stat(this.persistPath);
+        if (stat.size > 100 * 1024 * 1024) throw new Error('Engram queue: snapshot_limit');
+        const parsed = migrateGraphData(
+          JSON.parse(await fs.promises.readFile(this.persistPath, 'utf8')),
+        ).data;
+        if (parsed.entities.length + parsed.edges.length + parsed.episodes.length > 100000)
+          throw new Error('Engram queue: snapshot_limit');
+        this.replaceGraphData(parsed);
+      }
+      return JSON.parse(JSON.stringify(await this.exportGraph(groupId))) as GraphData;
+    } finally {
+      release();
+    }
+  }
+
+  async appendEpisodesWithExtraction(
+    inputs: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }> {
+    if (!this.persistPath) throw new Error('Engram queue: persistence_required');
+    await fs.promises.mkdir(path.dirname(this.persistPath), { recursive: true });
+    if (
+      !inputs.length ||
+      inputs.length > 1000 ||
+      inputs.some((ep) => ep.group_id !== inputs[0].group_id)
+    )
+      throw new Error('Engram queue: invalid_batch');
+    const prepared = inputs.map((input) => {
+      if (input.attributes?.[QUEUE_ATTRIBUTE] !== undefined)
+        throw new Error('Engram queue: reserved_attribute');
+      return {
+        parsed: CreateEpisodicNodeSchema.parse(input),
+        auto: !Object.prototype.hasOwnProperty.call(input, 'previous_episode_uuid'),
+      };
+    });
+    return this.runMutation(
+      async () => {
+        const results = prepared.map((item) => this.appendEpisodeInternal(item.parsed, item.auto));
+        const graph = JSON.parse(JSON.stringify(await this.exportGraph())) as GraphData;
+        const refs = enqueue(graph, results, eligible, binding, limits, nowIso());
+        this.replaceGraphData(graph);
+        return {
+          results: results.map((item) => ({
+            ...item,
+            episode: graph.episodes.find((ep) => ep.uuid === item.episode.uuid)!,
+          })),
+          jobs: refs,
+          queue: queueStats(graph, inputs[0].group_id),
+        };
+      },
+      { operation: 'append_enqueue', itemCount: inputs.length, durable: true },
+    );
+  }
+
+  async extractionQueueCommand(command: QueueCommand): Promise<QueueResult> {
+    if (!this.persistPath) throw new Error('Engram queue: persistence_required');
+    return this.runMutation(
+      async () => {
+        const graph = JSON.parse(JSON.stringify(await this.exportGraph())) as GraphData;
+        const result = queueCommand(graph, command, nowIso());
+        this.replaceGraphData(graph);
+        return result;
+      },
+      {
+        operation: 'extraction_queue',
+        durable: true,
+        shouldWriteSnapshot: () => command.action !== 'status',
+      },
+    );
+  }
+
+  async importExtractionBackup(input: unknown): Promise<void> {
+    await this.runMutation(
+      async () => {
+        const existing = await this.exportGraph();
+        const incoming = prepareQueueImport(input, existing, nowIso());
+        this.mergeGraphData(incoming);
+        this.extractionEpoch = generateUuid();
+      },
+      { operation: 'import_extraction_backup', durable: true },
+    );
+  }
+
+  async applyStagedExtraction(plan: StagedExtraction): Promise<void> {
+    await this.runMutation(
+      async () => {
+        const graph = JSON.parse(JSON.stringify(await this.exportGraph())) as GraphData;
+        applyPlan(graph, plan);
+        this.replaceGraphData(graph);
+      },
+      { operation: 'apply_extraction', durable: true },
+    );
   }
 
   // ===== Entity Operations =====
@@ -380,6 +541,8 @@ export class GraphologyStorage implements IGraphStorage {
     if (inputs.length === 0) return [];
     if (inputs.length > 1000) throw new Error('Episode append batch cannot exceed 1000 episodes');
 
+    if (inputs.some((ep) => ep.attributes?.[QUEUE_ATTRIBUTE] !== undefined))
+      throw new Error('Engram queue: reserved_attribute');
     const groupId = inputs[0].group_id;
     if (inputs.some((input) => input.group_id !== groupId)) {
       throw new Error('Episode append batch must contain exactly one group ID');
@@ -408,6 +571,8 @@ export class GraphologyStorage implements IGraphStorage {
     parsed: ReturnType<typeof CreateEpisodicNodeSchema.parse>,
     shouldAutoChain: boolean,
   ): AppendEpisodeResult {
+    if (parsed.attributes[QUEUE_ATTRIBUTE] !== undefined)
+      throw new Error('Engram queue: reserved_attribute');
     const existing = this.findEpisodeByIdempotency(parsed);
     if (existing) return { episode: existing, created: false };
 
@@ -515,6 +680,9 @@ export class GraphologyStorage implements IGraphStorage {
     return this.runMutation(() => {
       const existing = this.getEpisodeOrEntity(uuid, 'episode') as EpisodicNode | null;
       if (!existing) throw new Error(`Episode not found: ${uuid}`);
+      assertNoQueueMutation([existing]);
+      if (updates.attributes?.[QUEUE_ATTRIBUTE] !== undefined)
+        throw new Error('Engram queue: reserved_attribute');
 
       const updated = EpisodicNodeSchema.parse({
         ...existing,
@@ -715,6 +883,7 @@ export class GraphologyStorage implements IGraphStorage {
       };
     }
 
+    assertNoQueueMutation([episode]);
     const repairChain = options.repair_chain ?? true;
     const cleanup = options.fact_cleanup ?? 'unlink';
     const successors: EpisodicNode[] = [];
@@ -1007,8 +1176,17 @@ export class GraphologyStorage implements IGraphStorage {
 
   // ===== Graph Management =====
 
-  async clearGroup(groupId: string): Promise<void> {
+  async previewQueueClear(groupId?: string): Promise<QueueClearImpact> {
+    return this.runMutation(
+      async () => queueClearImpact((await this.exportGraph(groupId)).episodes),
+      { operation: 'queue_clear_preview', shouldWriteSnapshot: () => false },
+    );
+  }
+  async clearGroup(groupId: string, options: QueueClearOptions = {}): Promise<void> {
+    const reviewed = QueueClearOptionsSchema.parse(options).allowQueued;
     await this.runMutation(() => {
+      assertQueueClear(this.collectEpisodes(groupId, {}), reviewed);
+      this.extractionEpoch = generateUuid();
       const nodesToRemove: string[] = [];
 
       this.graph.forEachNode((key, attrs) => {
@@ -1045,8 +1223,13 @@ export class GraphologyStorage implements IGraphStorage {
     });
   }
 
-  async clearAll(): Promise<void> {
-    await this.runMutation(() => this.resetGraph());
+  async clearAll(options: QueueClearOptions = {}): Promise<void> {
+    const reviewed = QueueClearOptionsSchema.parse(options).allowQueued;
+    await this.runMutation(async () => {
+      assertQueueClear((await this.exportGraph()).episodes, reviewed);
+      this.extractionEpoch = generateUuid();
+      this.resetGraph();
+    });
   }
 
   async exportGraph(groupId?: string): Promise<GraphData> {
@@ -1073,6 +1256,7 @@ export class GraphologyStorage implements IGraphStorage {
 
     return {
       version: CURRENT_GRAPH_DATA_VERSION,
+      ...(this.extractionEpoch ? { metadata: { extraction_epoch: this.extractionEpoch } } : {}),
       exported_at: nowIso(),
       group_id: groupId,
       entities,
@@ -1083,7 +1267,11 @@ export class GraphologyStorage implements IGraphStorage {
 
   async importGraph(data: ImportGraphData): Promise<void> {
     const migrated = migrateGraphData(data).data;
-    await this.runMutation(() => this.mergeGraphData(migrated));
+    assertNoQueueMutation(migrated.episodes);
+    await this.runMutation(() => {
+      this.extractionEpoch = generateUuid();
+      this.mergeGraphData(migrated);
+    });
   }
 
   async getMigrationStatus(): Promise<StorageMigrationStatus> {
@@ -1198,6 +1386,7 @@ export class GraphologyStorage implements IGraphStorage {
     if (policy.type === 'forever') return 0;
 
     return this.runMutation(() => {
+      assertNoQueueMutation(this.collectEpisodes(groupId, {}));
       let removed = 0;
 
       if (policy.type === 'days' && policy.value) {
@@ -1277,30 +1466,60 @@ export class GraphologyStorage implements IGraphStorage {
     let rollbackRestoreMs = 0;
     let snapshotBytes: number | null = null;
     let snapshotWritten = false;
+    let snapshotAttempted = false;
+    let refreshAttempted = false;
+    let serializationMs: number | null = null;
     let success = false;
     try {
       if (this.persistPath) {
         const lockStarted = performance.now();
-        releaseFileLock = await this.acquirePersistLock();
-        lockWaitMs = performance.now() - lockStarted;
+        try {
+          releaseFileLock = await this.acquirePersistLock();
+        } finally {
+          lockWaitMs = performance.now() - lockStarted;
+        }
         const refreshStarted = performance.now();
-        await this.refreshFromDiskUnderLock();
-        diskRefreshMs = performance.now() - refreshStarted;
+        refreshAttempted = true;
+        try {
+          await this.refreshFromDiskUnderLock();
+        } finally {
+          diskRefreshMs = performance.now() - refreshStarted;
+        }
       }
 
       const rollbackExportStarted = performance.now();
-      rollbackData = await this.exportGraph();
-      rollbackExportMs = performance.now() - rollbackExportStarted;
+      try {
+        rollbackData = await this.exportGraph();
+      } finally {
+        rollbackExportMs = performance.now() - rollbackExportStarted;
+      }
 
       const mutationStarted = performance.now();
-      const result = await mutation();
-      mutationMs = performance.now() - mutationStarted;
+      const result = await (async () => {
+        try {
+          return await mutation();
+        } finally {
+          mutationMs = performance.now() - mutationStarted;
+        }
+      })();
 
       const shouldWriteSnapshot = options.shouldWriteSnapshot?.(result) ?? true;
       if (this.persistPath && shouldWriteSnapshot) {
         const snapshotWriteStarted = performance.now();
-        snapshotBytes = await this.writeSnapshotUnderLock();
-        snapshotWriteMs = performance.now() - snapshotWriteStarted;
+        snapshotAttempted = true;
+        try {
+          const preservesQueue = rollbackData.episodes.some(
+            (episode) => episode.attributes[QUEUE_ATTRIBUTE] !== undefined,
+          );
+          snapshotBytes = await this.writeSnapshotUnderLock(
+            options.durable || preservesQueue,
+            (value) => {
+              serializationMs = value;
+            },
+          );
+        } finally {
+          snapshotWriteMs = performance.now() - snapshotWriteStarted;
+        }
         snapshotWritten = true;
       }
 
@@ -1335,6 +1554,24 @@ export class GraphologyStorage implements IGraphStorage {
           total_ms: round(performance.now() - totalStarted),
           snapshot_bytes: snapshotBytes,
         };
+        try {
+          this.extractionObservers.getStore()?.({
+            backend: 'embedded',
+            acknowledged: success,
+            total_ms: this.lastMutationDiagnostics.total_ms,
+            queue_wait_ms: this.lastMutationDiagnostics.queue_wait_ms,
+            lock_wait_ms: this.persistPath ? this.lastMutationDiagnostics.lock_wait_ms : null,
+            disk_refresh_ms: refreshAttempted ? this.lastMutationDiagnostics.disk_refresh_ms : null,
+            snapshot_write_ms: snapshotAttempted
+              ? this.lastMutationDiagnostics.snapshot_write_ms
+              : null,
+            snapshot_bytes: snapshotBytes,
+            transaction_ms: null,
+            serialization_ms: serializationMs,
+          });
+        } catch {
+          /* Diagnostic delivery cannot change a committed operation. */
+        }
         releaseQueue();
       }
     }
@@ -1357,18 +1594,36 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   private async refreshFromDiskUnderLock(): Promise<void> {
+    this.assertQueueFilePresent();
     if (!this.persistPath || !fs.existsSync(this.persistPath)) return;
 
     const data = await this.readAndMigratePersistedDataUnderLock();
     this.replaceGraphData(data);
   }
 
-  private async writeSnapshotUnderLock(): Promise<number> {
+  private assertQueueFilePresent(): void {
+    if (!this.persistPath || fs.existsSync(this.persistPath)) return;
+    let queued = false;
+    this.graph.forEachNode((_key, attrs) => {
+      if (attrs.type === 'episode' && attrs.data.attributes[QUEUE_ATTRIBUTE] !== undefined)
+        queued = true;
+    });
+    if (queued) throw new Error('Engram queue: store_missing');
+  }
+
+  private async writeSnapshotUnderLock(
+    durable = false,
+    onSerialized?: (value: number) => void,
+  ): Promise<number> {
     if (!this.persistPath) return 0;
 
     const data = await this.exportGraph();
+    // Every replacement containing acknowledged queue state must retain its durability.
+    durable ||= data.episodes.some((episode) => episode.attributes[QUEUE_ATTRIBUTE] !== undefined);
+    const serializeStarted = performance.now();
     const payload = JSON.stringify(data, null, 2);
-    await this.writeTextAtomic(payload, this.persistPath);
+    onSerialized?.(performance.now() - serializeStarted);
+    await this.writeTextAtomic(payload, this.persistPath, durable);
     return Buffer.byteLength(payload, 'utf-8');
   }
 
@@ -1475,15 +1730,42 @@ export class GraphologyStorage implements IGraphStorage {
     await this.writeTextAtomic(JSON.stringify(data, null, 2), targetPath);
   }
 
-  private async writeTextAtomic(payload: string, targetPath: string): Promise<void> {
+  private async writeTextAtomic(
+    payload: string,
+    targetPath: string,
+    durable = false,
+  ): Promise<void> {
     const dir = path.dirname(targetPath);
     await fs.promises.mkdir(dir, { recursive: true });
     const tmpPath = `${targetPath}.${process.pid}.${generateUuid()}.tmp`;
 
     try {
-      await fs.promises.writeFile(tmpPath, payload, { encoding: 'utf-8', mode: 0o600 });
+      if (durable) {
+        const file = await fs.promises.open(tmpPath, 'w', 0o600);
+        try {
+          await file.writeFile(payload, 'utf8');
+          await file.sync();
+        } finally {
+          await file.close();
+        }
+      } else await fs.promises.writeFile(tmpPath, payload, { encoding: 'utf-8', mode: 0o600 });
       await fs.promises.rename(tmpPath, targetPath);
       await fs.promises.chmod(targetPath, 0o600);
+      if (durable) {
+        // Include ancestor entries: a freshly created storage directory must survive too.
+        let current = dir;
+        for (;;) {
+          const directory = await fs.promises.open(current, 'r');
+          try {
+            await directory.sync();
+          } finally {
+            await directory.close();
+          }
+          const parent = path.dirname(current);
+          if (parent === current) break;
+          current = parent;
+        }
+      }
     } catch (error) {
       await fs.promises.rm(tmpPath, { force: true }).catch(() => {});
       throw error;
@@ -1495,6 +1777,7 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   private replaceGraphData(data: GraphData): void {
+    this.extractionEpoch = data.metadata?.extraction_epoch;
     this.resetGraph();
     this.mergeGraphData(data);
   }

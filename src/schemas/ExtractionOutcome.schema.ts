@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { StorageTotalsSchema } from './StorageObservation.schema';
 
 export const ExtractionTemperatureSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('legacy') }),
@@ -17,6 +18,8 @@ export const ExtractionErrorKindSchema = z.enum([
   'invalid_response',
   'storage',
   'unknown',
+  'budget_exhausted',
+  'cancelled',
 ]);
 export type ExtractionErrorKind = z.infer<typeof ExtractionErrorKindSchema>;
 export const ExtractionStageSchema = z.enum([
@@ -40,10 +43,62 @@ export const ExtractionCountsSchema = z.object({
   malformed: z.number().int().nonnegative(),
   filtered: z.number().int().nonnegative(),
 });
+const metricCount = z.number().int().nonnegative();
+const metricDuration = z.number().finite().nonnegative();
+export const ExtractionStageMetricsSchema = z.object({
+  stage: ExtractionStageSchema,
+  operations: metricCount,
+  operation_failures: metricCount,
+  elapsed_ms: metricDuration,
+  summed_operation_ms: metricDuration,
+  requests: z.object({
+    attempted: metricCount,
+    completed: metricCount,
+    failed: metricCount,
+    cancelled: metricCount,
+    in_flight: metricCount,
+    retries: metricCount,
+    summed_ms: metricDuration,
+    headers_ms: metricDuration.nullable(),
+    body_ms: metricDuration.nullable(),
+    timing_samples: metricCount,
+    usage_valid: metricCount,
+    usage_missing: metricCount,
+    usage_invalid: metricCount,
+    input_tokens: metricCount.nullable(),
+    output_tokens: metricCount.nullable(),
+    total_tokens: metricCount.nullable(),
+  }),
+  candidates: metricCount,
+  exact_hits: metricCount,
+  shortlisted: metricCount,
+  pruned: metricCount,
+  unresolved: metricCount,
+  deferrals: z.object({ budget: metricCount, ambiguity: metricCount, unknown: metricCount }),
+});
+export const ExtractionMetricContextSchema = z.object({
+  backend: z.enum(['embedded', 'neo4j', 'unknown']).default('unknown'),
+  resolution: z.enum(['legacy', 'bounded']).default('legacy'),
+  quality: z.enum(['legacy', 'durableTemporal']).default('legacy'),
+  execution: z.enum(['synchronous', 'durable', 'unknown']).default('unknown'),
+});
+export type ExtractionMetricContext = z.input<typeof ExtractionMetricContextSchema>;
+export const ExtractionMetricsSchema = z.object({
+  version: z.literal(1),
+  operation_id: z.string().uuid(),
+  package_version: z.string().max(64),
+  context: ExtractionMetricContextSchema,
+  stages: z.array(ExtractionStageMetricsSchema).length(8),
+  // Storage method timing is observed; backend lock/provider compute timings are not inferred.
+  storage_breakdown: StorageTotalsSchema.nullable(),
+});
+export type ExtractionStageMetrics = z.infer<typeof ExtractionStageMetricsSchema>;
+export type ExtractionMetrics = z.infer<typeof ExtractionMetricsSchema>;
 export const ExtractionOutcomeSchema = z.object({
   status: z.enum(['disabled', 'skipped', 'succeeded', 'partial', 'failed']),
   reason: z.enum(['disabled', 'no_sources', 'missing_configuration']).optional(),
   duration_ms: z.number().nonnegative(),
+  duration_scope: z.enum(['end_to_end', 'preparation']).optional(),
   counts: ExtractionCountsSchema,
   stages: z
     .array(
@@ -65,5 +120,6 @@ export const ExtractionOutcomeSchema = z.object({
     .max(20),
   error_count: z.number().int().nonnegative(),
   errors_truncated: z.boolean(),
+  metrics: ExtractionMetricsSchema.optional(),
 });
 export type ExtractionOutcome = z.infer<typeof ExtractionOutcomeSchema>;

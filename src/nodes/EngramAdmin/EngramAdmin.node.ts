@@ -1,3 +1,14 @@
+import { StorageAccumulator } from '../../storage/StorageDiagnostics';
+import { existsSync, promises as fsPromises } from 'fs';
+import { dirname } from 'path';
+import { advancedExtractionProperties, readExtractionPolicy } from '../../utils/advancedExtraction';
+import {
+  processExtractionJobs,
+  queueBinding,
+  type ExtractionSettings,
+} from '../../extraction/DurableExtraction';
+import { jobs, exportQueueBackup, QueueClearRequiresReview } from '../../extraction/QueueState';
+import { ExtractionTemperatureSchema } from '../../schemas';
 import {
   NodeConnectionType,
   type IExecuteFunctions,
@@ -81,6 +92,11 @@ export class EngramAdmin implements INodeType {
         noDataExpression: true,
         options: [
           {
+            name: 'Extraction Queue',
+            value: 'extractionQueue',
+            description: 'Process and inspect durable extraction jobs',
+          },
+          {
             name: 'Monitoring',
             value: 'monitoring',
             description: 'Graph statistics and group monitoring',
@@ -107,6 +123,253 @@ export class EngramAdmin implements INodeType {
           },
         ],
         default: 'monitoring',
+      },
+      {
+        displayName: 'Operation',
+        name: 'operation',
+        type: 'options',
+        noDataExpression: true,
+        default: 'queueStatus',
+        options: [
+          { name: 'Status', value: 'queueStatus', action: 'Inspect extraction queue' },
+          { name: 'Process Jobs', value: 'queueProcess', action: 'Process extraction jobs' },
+          { name: 'Pause Job', value: 'queuePause', action: 'Pause extraction job' },
+          { name: 'Resume Job', value: 'queueResume', action: 'Resume extraction job' },
+          { name: 'Retry Job', value: 'queueRetry', action: 'Retry extraction job' },
+          {
+            name: 'Rebind Job',
+            value: 'queueRebind',
+            action: 'Rebind pending extraction configuration',
+          },
+          { name: 'Cancel Job', value: 'queueCancel', action: 'Cancel extraction job' },
+          {
+            name: 'Compact Job Diagnostics',
+            value: 'queueCompact',
+            action: 'Compact completed job diagnostics',
+          },
+          {
+            name: 'Export Queue Backup',
+            value: 'queueExport',
+            action: 'Export extraction queue backup',
+          },
+          {
+            name: 'Import Queue Backup',
+            value: 'queueImport',
+            action: 'Import paused extraction queue backup',
+          },
+        ],
+        displayOptions: { show: { resource: ['extractionQueue'], '@version': [2] } },
+      },
+      {
+        displayName: 'Memory Workflow ID',
+        name: 'queueStorageWorkflowId',
+        type: 'string',
+        default: '',
+        required: true,
+        description:
+          'Producer workflow ID used in the embedded store filename; separate workers must point at the original store',
+        displayOptions: { show: { resource: ['extractionQueue'], backend: ['embedded'] } },
+      },
+      {
+        displayName: 'Queue Group ID',
+        name: 'queueGroupId',
+        type: 'string',
+        default: '',
+        required: true,
+        description: 'Exact existing memory namespace; use the same store as the Memory node',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Worker Batch Size',
+        name: 'queueBatchSize',
+        type: 'number',
+        default: 1,
+        typeOptions: { minValue: 1, maxValue: 10 },
+        description: 'Maximum jobs processed sequentially during this worker execution',
+        displayOptions: { show: { operation: ['queueProcess'] } },
+      },
+      {
+        displayName: 'Extraction Route ID',
+        name: 'extractionRouteId',
+        type: 'string',
+        default: '',
+        description: 'Nonsecret route identifier matching the Memory node',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Extraction Model',
+        name: 'queueModel',
+        type: 'string',
+        default: '',
+        description: 'Exact extraction model configured on the producer Memory node',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Extraction Temperature Mode',
+        name: 'queueTemperatureMode',
+        type: 'options',
+        default: 'legacy',
+        options: [
+          { name: 'Legacy', value: 'legacy' },
+          { name: 'Provider Default', value: 'providerDefault' },
+          { name: 'Custom', value: 'custom' },
+        ],
+        description: 'Match the producer generation setting',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Extraction Temperature',
+        name: 'queueTemperature',
+        type: 'number',
+        default: 0,
+        description: 'Custom extraction temperature matching the producer',
+        displayOptions: {
+          show: { resource: ['extractionQueue'], queueTemperatureMode: ['custom'] },
+        },
+      },
+      {
+        displayName: 'Entity Types',
+        name: 'queueEntityTypes',
+        type: 'string',
+        default: 'person, organization, location, concept, event',
+        description: 'Comma-separated types matching the producer',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Auto-Accept Confidence',
+        name: 'queueAutoAccept',
+        type: 'number',
+        default: 0.85,
+        typeOptions: { minValue: 0, maxValue: 1 },
+        description: 'Confidence threshold matching the producer',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Reject Below Confidence',
+        name: 'queueRejectBelow',
+        type: 'number',
+        default: 0.3,
+        typeOptions: { minValue: 0, maxValue: 1 },
+        description: 'Rejection threshold matching the producer',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Worker Embeddings',
+        name: 'queueEmbeddings',
+        type: 'options',
+        default: 'disabled',
+        options: [
+          { name: 'Disabled', value: 'disabled' },
+          { name: 'Enabled', value: 'enabled' },
+        ],
+        description: 'Match the producer embedding configuration',
+        displayOptions: { show: { resource: ['extractionQueue'] } },
+      },
+      {
+        displayName: 'Embedding Model',
+        name: 'queueEmbeddingModel',
+        type: 'string',
+        default: '',
+        description: 'Embedding model matching the producer',
+        displayOptions: { show: { resource: ['extractionQueue'], queueEmbeddings: ['enabled'] } },
+      },
+      ...advancedExtractionProperties.map((property) => ({
+        ...property,
+        displayOptions: { show: { resource: ['extractionQueue'], '@version': [2] } },
+        ...(property.name === 'advancedExtractionPolicy' ? { default: 'bounded' } : {}),
+      })),
+      {
+        displayName: 'Job ID',
+        name: 'queueJobId',
+        type: 'string',
+        default: '',
+        description: 'Exact job UUID from queue status',
+        displayOptions: {
+          show: {
+            operation: [
+              'queuePause',
+              'queueResume',
+              'queueRetry',
+              'queueCancel',
+              'queueCompact',
+              'queueRebind',
+            ],
+          },
+        },
+      },
+      {
+        displayName: 'Operator',
+        name: 'queueOperator',
+        type: 'string',
+        default: '',
+        description: 'Operator identity recorded with the queue control decision',
+        displayOptions: {
+          show: {
+            operation: [
+              'queuePause',
+              'queueResume',
+              'queueRetry',
+              'queueCancel',
+              'queueCompact',
+              'queueRebind',
+            ],
+          },
+        },
+      },
+      {
+        displayName: 'Reason',
+        name: 'queueReason',
+        type: 'string',
+        default: '',
+        description: 'Reason recorded for the explicit queue decision',
+        displayOptions: {
+          show: {
+            operation: [
+              'queuePause',
+              'queueResume',
+              'queueRetry',
+              'queueCancel',
+              'queueCompact',
+              'queueRebind',
+            ],
+          },
+        },
+      },
+      {
+        displayName: 'Create Import Destination',
+        name: 'queueImportCreate',
+        type: 'options',
+        default: 'disabled',
+        options: [
+          { name: 'Disabled', value: 'disabled' },
+          { name: 'Reviewed New Destination', value: 'enabled' },
+        ],
+        description:
+          'Allow a paused backup import to create the explicitly selected embedded destination; requires a custom directory',
+        displayOptions: { show: { operation: ['queueImport'], backend: ['embedded'] } },
+      },
+      {
+        displayName: 'Queue Backup',
+        name: 'queueBackup',
+        type: 'json',
+        default: '{}',
+        description: 'Versioned queue-aware backup; imports are paused and collisions rejected',
+        displayOptions: { show: { operation: ['queueImport'] } },
+      },
+      {
+        displayName: 'Queue Clear Review',
+        name: 'queueClearReview',
+        type: 'options',
+        default: 'disabled',
+        options: [
+          { name: 'Preview Required', value: 'disabled' },
+          { name: 'Reviewed Queue Impact', value: 'enabled' },
+        ],
+        description:
+          'Explicitly permit whole-store or group clearing to erase extraction ownership and fence outstanding work after reviewing the preview',
+        displayOptions: {
+          show: { operation: ['clearGroup', 'bulkClearGroups', 'clearAll'], '@version': [2] },
+        },
       },
       // ===== Operations per resource =====
       {
@@ -892,19 +1155,36 @@ export class EngramAdmin implements INodeType {
         databaseConfigured: Boolean((credentials.database as string | undefined)?.trim()),
       };
     } else {
-      const workflowId = this.getWorkflow().id ?? 'default';
+      const workflowId =
+        resource === 'extractionQueue'
+          ? (this.getNodeParameter('queueStorageWorkflowId', 0, '') as string).trim()
+          : (this.getWorkflow().id ?? 'default');
+      if (resource === 'extractionQueue' && !workflowId)
+        throw new Error('Memory Workflow ID is required for an embedded worker');
       const customPath = this.getNodeParameter('customStoragePath', 0, '') as string;
       const persistPath = resolveStoragePath({
         customStoragePath: customPath,
         workflowId,
       });
 
-      migrateStorageIfNeeded({
-        newPath: persistPath,
-        workflowId,
-        staticData: this.getWorkflowStaticData('node'),
-        logger: this.logger,
-      });
+      if (resource === 'extractionQueue' && !existsSync(persistPath)) {
+        if (
+          operation !== 'queueImport' ||
+          this.getNodeParameter('queueImportCreate', 0, 'disabled') !== 'enabled' ||
+          !customPath.trim()
+        )
+          throw new Error(
+            'Producer memory store not found; verify the workflow ID and storage directory',
+          );
+        await fsPromises.mkdir(dirname(persistPath), { recursive: true });
+      }
+      if (resource !== 'extractionQueue')
+        migrateStorageIfNeeded({
+          newPath: persistPath,
+          workflowId,
+          staticData: this.getWorkflowStaticData('node'),
+          logger: this.logger,
+        });
 
       storage = createStorage({
         backend: 'embedded',
@@ -926,7 +1206,9 @@ export class EngramAdmin implements INodeType {
         try {
           const beforeLength = returnData.length;
 
-          if (resource === 'monitoring') {
+          if (resource === 'extractionQueue') {
+            await executeExtractionQueue(this, storage, operation, i, returnData);
+          } else if (resource === 'monitoring') {
             await executeMonitoring(this, storage, operation, i, returnData, diagnosticsContext);
           } else if (resource === 'lifecycle') {
             await executeLifecycle(this, storage, operation, i, returnData);
@@ -953,6 +1235,17 @@ export class EngramAdmin implements INodeType {
             }
           }
         } catch (error: unknown) {
+          if (error instanceof QueueClearRequiresReview) {
+            returnData.push({
+              json: {
+                operation,
+                dry_run: true,
+                queue_review_required: true,
+                queue_impact: error.impact,
+              },
+            });
+            continue;
+          }
           if (error instanceof NodeOperationError) throw error;
           throw new NodeOperationError(
             this.getNode(),
@@ -1345,7 +1638,9 @@ async function executeLifecycle(
         },
       );
     }
-    await storage.clearGroup(groupId);
+    await storage.clearGroup(groupId, {
+      allowQueued: ctx.getNodeParameter('queueClearReview', i, 'disabled') === 'enabled',
+    });
     returnData.push({
       json: { success: true, operation: 'clearGroup', group_id: groupId },
     });
@@ -1378,12 +1673,22 @@ async function executeLifecycle(
       });
     }
 
+    const allowQueued = ctx.getNodeParameter('queueClearReview', i, 'disabled') === 'enabled';
+    if (!allowQueued && storage.previewQueueClear) {
+      const total = { sources: 0, jobs: 0 };
+      for (const gid of groupIds) {
+        const impact = await storage.previewQueueClear(gid);
+        total.sources += impact.sources;
+        total.jobs += impact.jobs;
+      }
+      if (total.sources) throw new QueueClearRequiresReview(total);
+    }
     const cleared: string[] = [];
     const failed: Array<{ group_id: string; error: string }> = [];
 
     for (const gid of groupIds) {
       try {
-        await storage.clearGroup(gid);
+        await storage.clearGroup(gid, { allowQueued });
         cleared.push(gid);
       } catch (err) {
         failed.push({ group_id: gid, error: (err as Error).message });
@@ -1412,7 +1717,9 @@ async function executeLifecycle(
         },
       );
     }
-    await storage.clearAll();
+    await storage.clearAll({
+      allowQueued: ctx.getNodeParameter('queueClearReview', i, 'disabled') === 'enabled',
+    });
     returnData.push({
       json: { success: true, operation: 'clearAll' },
     });
@@ -1950,4 +2257,193 @@ async function executeAnalysis(
       },
     });
   }
+}
+
+async function executeExtractionQueue(
+  ctx: IExecuteFunctions,
+  storage: import('../../storage/IGraphStorage').IGraphStorage,
+  operation: string,
+  i: number,
+  output: INodeExecutionData[],
+): Promise<void> {
+  if (
+    (ctx.getNode().typeVersion ?? 1) < 2 ||
+    !storage.readExtractionSnapshot ||
+    !storage.extractionQueueCommand
+  )
+    throw new Error('Durable extraction requires supported Memory and Admin v2');
+  const group = ctx.getNodeParameter('queueGroupId', i, '') as string;
+  if (!group.trim()) throw new Error('Queue Group ID is required');
+  if (operation === 'queueExport') {
+    output.push({
+      json: exportQueueBackup(
+        await storage.readExtractionSnapshot(group),
+      ) as unknown as IDataObject,
+    });
+    return;
+  }
+  if (operation === 'queueImport') {
+    if (!storage.importExtractionBackup) throw new Error('Queue-aware import is unsupported');
+    const raw = ctx.getNodeParameter('queueBackup', i, '{}');
+    let input: unknown = raw;
+    if (typeof raw === 'string') {
+      try {
+        input = JSON.parse(raw);
+      } catch {
+        throw new Error('Invalid queue backup JSON');
+      }
+    }
+    // Imported namespace must be explicit; do not silently select another destination.
+    const envelope = input as {
+      graph?: { group_id?: string; episodes?: Array<{ group_id: string }> };
+    };
+    if (
+      envelope.graph?.group_id !== group ||
+      envelope.graph?.episodes?.some((ep) => ep.group_id !== group)
+    )
+      throw new Error('Queue backup namespace must match Queue Group ID');
+    await storage.importExtractionBackup(input);
+    output.push({ json: { operation, imported: true, paused: true } });
+    return;
+  }
+  if (operation === 'queueStatus') {
+    const snapshot = await storage.readExtractionSnapshot(group);
+    const priority = (state: string) =>
+      state === 'failed'
+        ? 0
+        : state === 'leased' || state === 'staged'
+          ? 1
+          : state === 'pending' || state === 'retry_wait' || state === 'paused'
+            ? 2
+            : 3;
+    const all = jobs(snapshot).sort(
+      (a, b) =>
+        priority(a.state) - priority(b.state) ||
+        a.created_at.localeCompare(b.created_at) ||
+        a.uuid.localeCompare(b.uuid),
+    );
+    output.push({
+      json: {
+        operation,
+        pending: all.filter((job) => !['completed', 'cancelled', 'failed'].includes(job.state))
+          .length,
+        failed: all.filter((job) => job.state === 'failed').length,
+        oldest_pending_at:
+          all
+            .filter((job) => !['completed', 'cancelled', 'failed'].includes(job.state))
+            .map((job) => job.created_at)
+            .sort()[0] ?? null,
+        jobs: all.slice(0, 100).map((job) => ({
+          uuid: job.uuid,
+          state: job.state,
+          attempts: job.processing_attempts,
+          recoveries: job.recoveries,
+          created_at: job.created_at,
+          last_error: job.last_error,
+        })),
+        truncated: all.length > 100,
+      },
+    });
+    return;
+  }
+  let settings: ExtractionSettings | undefined;
+  const route = ctx.getNodeParameter('extractionRouteId', i, '') as string;
+  if (['queueProcess', 'queueResume', 'queueRetry', 'queueRebind'].includes(operation)) {
+    const credentials = await ctx.getCredentials('engramExtractionApi');
+    const model = ctx.getNodeParameter('queueModel', i, '') as string;
+    if (!model || !route) throw new Error('Extraction model and route must match the producer');
+    const mode = ctx.getNodeParameter('queueTemperatureMode', i, 'legacy');
+    const temperature = ExtractionTemperatureSchema.parse(
+      mode === 'custom'
+        ? { mode, value: ctx.getNodeParameter('queueTemperature', i, 0) }
+        : { mode },
+    );
+    const policy = readExtractionPolicy((name, fallback) =>
+      ctx.getNodeParameter(name, i, fallback as string),
+    );
+    if (policy.mode !== 'bounded') throw new Error('Durable worker requires bounded extraction');
+    settings = {
+      llm: {
+        apiKey: credentials.apiKey as string,
+        baseUrl: credentials.baseUrl as string,
+        model,
+        temperature,
+      },
+      policy,
+      types: (
+        ctx.getNodeParameter(
+          'queueEntityTypes',
+          i,
+          'person, organization, location, concept, event',
+        ) as string
+      )
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean),
+      threshold: {
+        autoAcceptThreshold: ctx.getNodeParameter('queueAutoAccept', i, 0.85) as number,
+        rejectBelowThreshold: ctx.getNodeParameter('queueRejectBelow', i, 0.3) as number,
+      },
+    };
+    if (ctx.getNodeParameter('queueEmbeddings', i, 'disabled') === 'enabled') {
+      const embeddingModel = ctx.getNodeParameter('queueEmbeddingModel', i, '') as string;
+      if (!embeddingModel) throw new Error('Embedding model is required');
+      settings.embeddings = {
+        apiKey: credentials.apiKey as string,
+        baseUrl: credentials.baseUrl as string,
+        model: embeddingModel,
+      };
+    }
+  }
+  if (operation === 'queueProcess') {
+    const snapshot = await storage.readExtractionSnapshot(group);
+    const configured = queueBinding(route, settings!);
+    const mismatch = jobs(snapshot).filter(
+      (job) =>
+        !['completed', 'cancelled'].includes(job.state) &&
+        (job.binding.config_hash !== configured.config_hash ||
+          job.binding.route_id !== configured.route_id),
+    ).length;
+    const timing = new StorageAccumulator();
+    const process = () =>
+      processExtractionJobs(
+        storage,
+        group,
+        route,
+        settings!,
+        ctx.getNodeParameter('queueBatchSize', i, 1) as number,
+      );
+    const results = storage.withExtractionDiagnostics
+      ? await storage.withExtractionDiagnostics((value) => timing.observe(value), process)
+      : await process();
+    output.push({
+      json: {
+        operation,
+        processed: results.length,
+        configuration_mismatch_count: mismatch,
+        storage_breakdown: timing.snapshot(),
+        results: results as unknown as IDataObject[],
+      },
+    });
+    return;
+  }
+  const controls: Record<string, 'pause' | 'resume' | 'retry' | 'cancel' | 'compact' | 'rebind'> = {
+    queuePause: 'pause',
+    queueResume: 'resume',
+    queueRetry: 'retry',
+    queueCancel: 'cancel',
+    queueCompact: 'compact',
+    queueRebind: 'rebind',
+  };
+  if (!controls[operation]) throw new Error('Unsupported queue operation');
+  const result = await storage.extractionQueueCommand({
+    action: 'control',
+    group_id: group,
+    job_uuid: ctx.getNodeParameter('queueJobId', i, '') as string,
+    operation: controls[operation],
+    actor: ctx.getNodeParameter('queueOperator', i, '') as string,
+    reason: ctx.getNodeParameter('queueReason', i, '') as string,
+    ...(settings ? { binding: queueBinding(route, settings) } : {}),
+  });
+  output.push({ json: { operation, job_uuid: result.job!.uuid, state: result.job!.state } });
 }

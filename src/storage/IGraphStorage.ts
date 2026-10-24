@@ -1,3 +1,15 @@
+import type { StorageObservation } from '../schemas/StorageObservation.schema';
+import type {
+  QueueBinding,
+  QueueStats,
+  QueueClearOptions,
+  QueueClearImpact,
+  QueueLimits,
+  QueueCommand,
+  QueueResult,
+  ExtractionJob,
+  StagedExtraction,
+} from '../schemas';
 import type {
   EntityNode,
   CreateEntityNode,
@@ -21,6 +33,7 @@ export interface EntitySearchResult {
 }
 
 export interface EdgeSearchResult {
+  match_evidence?: { text: boolean; vector: boolean };
   edge: EntityEdge;
   sourceEntity: EntityNode;
   targetEntity: EntityNode;
@@ -189,6 +202,25 @@ export interface StorageSchemaMigrationResult {
 }
 
 export interface IGraphStorage {
+  // Optional extraction transaction capabilities; absent on third-party adapters.
+  withExtractionDiagnostics?<T>(
+    observer: (value: StorageObservation) => void,
+    operation: () => Promise<T>,
+  ): Promise<T>;
+  supportsDurableExtraction?(): boolean;
+  extractionBackend?(): 'embedded' | 'neo4j';
+  importExtractionBackup?(input: unknown): Promise<void>;
+  previewQueueClear?(groupId?: string): Promise<QueueClearImpact>;
+  readExtractionSnapshot?(groupId?: string): Promise<GraphData>;
+  appendEpisodesWithExtraction?(
+    episodes: CreateEpisodicNode[],
+    eligible: number[],
+    binding: QueueBinding,
+    limits: QueueLimits,
+  ): Promise<{ results: AppendEpisodeResult[]; jobs: ExtractionJob[]; queue: QueueStats }>;
+  extractionQueueCommand?(command: QueueCommand): Promise<QueueResult>;
+  applyStagedExtraction?(plan: StagedExtraction): Promise<void>;
+
   // === Lifecycle ===
   initialize(): Promise<void>;
   close(): Promise<void>;
@@ -267,8 +299,8 @@ export interface IGraphStorage {
   ): Promise<EdgeSearchResult[]>;
 
   // === Graph Management ===
-  clearGroup(groupId: string): Promise<void>;
-  clearAll(): Promise<void>;
+  clearGroup(groupId: string, options?: QueueClearOptions): Promise<void>;
+  clearAll(options?: QueueClearOptions): Promise<void>;
   exportGraph(groupId?: string): Promise<GraphData>;
   importGraph(data: ImportGraphData): Promise<void>;
   getStats(groupId?: string): Promise<GraphStats>;

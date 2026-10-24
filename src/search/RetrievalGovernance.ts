@@ -6,6 +6,7 @@ import type {
   EpisodicNode,
 } from '../schemas';
 import { extractionMetadataFromAttributes } from '../schemas';
+import type { SourceHydrationBudget } from '../schemas/ExtractionPolicy.schema';
 import type { EdgeSearchResult, EntitySearchResult, IGraphStorage } from '../storage/IGraphStorage';
 
 export interface RetrievalFilters {
@@ -59,14 +60,21 @@ export class RetrievalGovernance {
   async governEntities(
     results: EntitySearchResult[],
     filters: RetrievalFilters = {},
+    budget?: SourceHydrationBudget,
   ): Promise<EntitySearchResult[]> {
-    return (await this.governEntitiesWithDecisions(results, filters)).results;
+    return (await this.governEntitiesWithDecisions(results, filters, budget)).results;
   }
 
   async governEntitiesWithDecisions(
     results: EntitySearchResult[],
     filters: RetrievalFilters = {},
+    budget?: SourceHydrationBudget,
   ): Promise<GovernedResult<EntitySearchResult>> {
+    results = this.boundReferences(
+      results,
+      (result) => this.referenceCount(result.entity.attributes),
+      budget,
+    );
     const metadataByEntity = new Map(
       results.map((result) => [
         result.entity.uuid,
@@ -124,14 +132,21 @@ export class RetrievalGovernance {
   async governEdges(
     results: EdgeSearchResult[],
     filters: RetrievalFilters = {},
+    budget?: SourceHydrationBudget,
   ): Promise<GovernedEdgeSearchResult[]> {
-    return (await this.governEdgesWithDecisions(results, filters)).results;
+    return (await this.governEdgesWithDecisions(results, filters, budget)).results;
   }
 
   async governEdgesWithDecisions(
     results: EdgeSearchResult[],
     filters: RetrievalFilters = {},
+    budget?: SourceHydrationBudget,
   ): Promise<GovernedResult<GovernedEdgeSearchResult>> {
+    results = this.boundReferences(
+      results,
+      (result) => result.edge.episodes.length + this.referenceCount(result.edge.attributes),
+      budget,
+    );
     const episodeUuids = [
       ...new Set(results.flatMap((result) => this.edgeEpisodeUuids(result.edge))),
     ];
@@ -175,6 +190,28 @@ export class RetrievalGovernance {
       decisions.push(this.decision(result.edge.uuid, 'fact', result.score, true, 'included'));
     }
     return { results: governed, decisions };
+  }
+
+  private referenceCount(attributes: Record<string, unknown>): number {
+    const metadata = attributes.engram_extraction as { episode_uuids?: unknown } | undefined;
+    return Array.isArray(metadata?.episode_uuids) ? metadata.episode_uuids.length : 0;
+  }
+
+  private boundReferences<T>(
+    results: T[],
+    count: (result: T) => number,
+    budget?: SourceHydrationBudget,
+  ): T[] {
+    if (!budget) return results;
+    return results.filter((result) => {
+      const references = count(result);
+      if (references > budget.remaining) {
+        budget.deferred++;
+        return false;
+      }
+      budget.remaining -= references;
+      return true;
+    });
   }
 
   private decision(

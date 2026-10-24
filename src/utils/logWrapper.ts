@@ -1,4 +1,4 @@
-import type { ExtractionOutcome, MemoryWriteOutcome, MemoryLoadDiagnostics } from '../schemas';
+import type { ExtractionOutcome, MemoryDeliveryOutcome, MemoryLoadDiagnostics } from '../schemas';
 import { NodeOperationError, NodeConnectionType } from 'n8n-workflow';
 import type { IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 
@@ -195,18 +195,29 @@ export function logWrapper(
             ]);
 
             if (
-              'saveContextWithOutcome' in target &&
-              typeof target.saveContextWithOutcome === 'function'
+              ('saveContextWithDelivery' in target &&
+                typeof target.saveContextWithDelivery === 'function') ||
+              ('saveContextWithOutcome' in target &&
+                typeof target.saveContextWithOutcome === 'function')
             ) {
-              const extraction = (await callMethodAsync.call(target, {
+              const hasDelivery =
+                'saveContextWithDelivery' in target &&
+                typeof target.saveContextWithDelivery === 'function';
+              const rawOutcome = (await callMethodAsync.call(target, {
                 executeFunctions,
                 connectionType,
                 currentNodeRunIndex: index,
-                method: target.saveContextWithOutcome as (
-                  ...args: unknown[]
-                ) => Promise<ExtractionOutcome>,
+                method: (hasDelivery
+                  ? target.saveContextWithDelivery
+                  : 'saveContextWithOutcome' in target
+                    ? target.saveContextWithOutcome
+                    : target.saveContext) as (...args: unknown[]) => Promise<ExtractionOutcome>,
                 arguments: [input, output],
-              })) as ExtractionOutcome;
+              })) as ExtractionOutcome | MemoryDeliveryOutcome | { extraction: ExtractionOutcome };
+              const saved = hasDelivery
+                ? (rawOutcome as MemoryDeliveryOutcome | { extraction: ExtractionOutcome })
+                : { extraction: rawOutcome as ExtractionOutcome };
+              const extraction = 'extraction' in saved ? saved.extraction : undefined;
               let chatHistory: BaseMessage[] = [];
               let historyWarning: string | undefined;
               try {
@@ -221,13 +232,16 @@ export function logWrapper(
                       json: {
                         action: 'saveContext',
                         chatHistory,
-                        extraction,
+                        ...saved,
                         ...(historyWarning ? { historyWarning } : {}),
                       },
                     },
                   ],
                 ]);
-                if (extraction.status === 'failed' || extraction.status === 'partial') {
+                if (
+                  extraction &&
+                  (extraction.status === 'failed' || extraction.status === 'partial')
+                ) {
                   executeFunctions.logger.warn(
                     'Engram extraction did not fully complete. Review the memory save extraction diagnostics and provider settings.',
                   );
@@ -270,14 +284,20 @@ export function logWrapper(
               executeFunctions,
               connectionType: connection,
               currentNodeRunIndex: index,
-              method: target.addMessagesWithOutcome as (...args: unknown[]) => unknown,
+              method: ('addMessagesWithDelivery' in target &&
+              typeof target.addMessagesWithDelivery === 'function'
+                ? target.addMessagesWithDelivery
+                : target.addMessagesWithOutcome) as (...args: unknown[]) => unknown,
               arguments: [messages],
-            })) as MemoryWriteOutcome;
+            })) as MemoryDeliveryOutcome;
             try {
               executeFunctions.addOutputData(connection, index, [
                 [{ json: { action: 'addMessages', ...result } }],
               ]);
-              if (result.extraction.status === 'failed' || result.extraction.status === 'partial')
+              if (
+                'extraction' in result &&
+                (result.extraction.status === 'failed' || result.extraction.status === 'partial')
+              )
                 executeFunctions.logger.warn(
                   'Engram bulk extraction did not fully complete. Review the memory write diagnostics.',
                 );

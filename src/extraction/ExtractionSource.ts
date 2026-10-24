@@ -6,6 +6,7 @@ export interface ExtractionSource {
   episode_kind: EpisodeKind;
   episode_uuid?: string | null;
   source_message_id?: string | null;
+  quoted_message_id?: string | null;
   sender_id?: string | null;
   sender_name?: string | null;
   trust_level?: EpisodeTrustLevel;

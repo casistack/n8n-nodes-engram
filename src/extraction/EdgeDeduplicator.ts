@@ -37,37 +37,44 @@ export class EdgeDeduplicator {
     sourceEntity: string,
     targetEntity: string,
   ): Promise<{ isDuplicate: boolean; mergedFact?: string }> {
-    // Fast path: exact fact match (case-insensitive, trimmed)
-    if (existingFact.toLowerCase().trim() === newFact.toLowerCase().trim()) {
-      this.diagnostics?.success('edge_dedup');
-      return { isDuplicate: true };
-    }
-
-    // LLM fallback for semantic deduplication
+    let operationFailed = false;
+    const end = this.diagnostics?.begin('edge_dedup');
     try {
-      const result = await this.llm.chatJson<EdgeDedupResult>([
-        { role: 'system', content: EDGE_DEDUP_SYSTEM },
-        {
-          role: 'user',
-          content: edgeDedupUser(existingFact, newFact, edgeName, sourceEntity, targetEntity),
-        },
-      ]);
-      if (
-        !result ||
-        typeof result.is_duplicate !== 'boolean' ||
-        (result.is_duplicate && typeof result.merged_fact !== 'string')
-      )
-        throw new ExtractionError('invalid_response');
-      this.diagnostics?.success('edge_dedup');
+      // Fast path: exact fact match (case-insensitive, trimmed)
+      if (existingFact.toLowerCase().trim() === newFact.toLowerCase().trim()) {
+        this.diagnostics?.success('edge_dedup');
+        return { isDuplicate: true };
+      }
 
-      return {
-        isDuplicate: result.is_duplicate === true,
-        mergedFact: result.is_duplicate ? result.merged_fact : undefined,
-      };
-    } catch (error) {
-      // If LLM fails, assume not duplicate (safer — will create new edge)
-      reportExtractionError('edge_dedup', error, this.diagnostics);
-      return { isDuplicate: false };
+      // LLM fallback for semantic deduplication
+      try {
+        const result = await this.llm.chatJson<EdgeDedupResult>([
+          { role: 'system', content: EDGE_DEDUP_SYSTEM },
+          {
+            role: 'user',
+            content: edgeDedupUser(existingFact, newFact, edgeName, sourceEntity, targetEntity),
+          },
+        ]);
+        if (
+          !result ||
+          typeof result.is_duplicate !== 'boolean' ||
+          (result.is_duplicate && typeof result.merged_fact !== 'string')
+        )
+          throw new ExtractionError('invalid_response');
+        this.diagnostics?.success('edge_dedup');
+
+        return {
+          isDuplicate: result.is_duplicate === true,
+          mergedFact: result.is_duplicate ? result.merged_fact : undefined,
+        };
+      } catch (error) {
+        operationFailed = true;
+        // If LLM fails, assume not duplicate (safer — will create new edge)
+        reportExtractionError('edge_dedup', error, this.diagnostics);
+        return { isDuplicate: false };
+      }
+    } finally {
+      end?.(operationFailed);
     }
   }
 
@@ -89,37 +96,47 @@ export class EdgeDeduplicator {
     sourceEntity: string,
     targetEntity: string,
   ): Promise<{ isDuplicate: boolean; mergedFact?: string }> {
+    let operationFailed = false;
+    const end = this.diagnostics?.begin('cross_edge_dedup');
     try {
-      const result = await this.llm.chatJson<EdgeDedupResult>([
-        { role: 'system', content: CROSS_NAME_EDGE_DEDUP_SYSTEM },
-        {
-          role: 'user',
-          content: crossNameEdgeDedupUser(
-            existingFact,
-            newFact,
-            existingEdgeName,
-            newEdgeName,
-            sourceEntity,
-            targetEntity,
-          ),
-        },
-      ]);
-      if (
-        !result ||
-        typeof result.is_duplicate !== 'boolean' ||
-        (result.is_duplicate && typeof result.merged_fact !== 'string')
-      )
-        throw new ExtractionError('invalid_response');
-      this.diagnostics?.success('cross_edge_dedup');
+      try {
+        const result = await this.llm.chatJson<EdgeDedupResult>(
+          [
+            { role: 'system', content: CROSS_NAME_EDGE_DEDUP_SYSTEM },
+            {
+              role: 'user',
+              content: crossNameEdgeDedupUser(
+                existingFact,
+                newFact,
+                existingEdgeName,
+                newEdgeName,
+                sourceEntity,
+                targetEntity,
+              ),
+            },
+          ],
+          { stage: 'cross_edge_dedup' },
+        );
+        if (
+          !result ||
+          typeof result.is_duplicate !== 'boolean' ||
+          (result.is_duplicate && typeof result.merged_fact !== 'string')
+        )
+          throw new ExtractionError('invalid_response');
+        this.diagnostics?.success('cross_edge_dedup');
 
-      return {
-        isDuplicate: result.is_duplicate === true,
-        mergedFact: result.is_duplicate ? result.merged_fact : undefined,
-      };
-    } catch (error) {
-      // If LLM fails, assume not duplicate (safer — will create new edge)
-      reportExtractionError('cross_edge_dedup', error, this.diagnostics);
-      return { isDuplicate: false };
+        return {
+          isDuplicate: result.is_duplicate === true,
+          mergedFact: result.is_duplicate ? result.merged_fact : undefined,
+        };
+      } catch (error) {
+        operationFailed = true;
+        // If LLM fails, assume not duplicate (safer — will create new edge)
+        reportExtractionError('cross_edge_dedup', error, this.diagnostics);
+        return { isDuplicate: false };
+      }
+    } finally {
+      end?.(operationFailed);
     }
   }
 }

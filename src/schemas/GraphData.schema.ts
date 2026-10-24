@@ -6,6 +6,7 @@ import { EpisodicNodeSchema } from './EpisodicNode.schema';
 export const CURRENT_GRAPH_DATA_VERSION = '2.0' as const;
 
 const GraphMetadataSchema = z.object({
+  extraction_epoch: z.string().uuid().optional(),
   checksum_sha256: z.string().optional(),
   checksum_algorithm: z.literal('sha256').optional(),
   generated_by: z.string().optional(),

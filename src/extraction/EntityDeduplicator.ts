@@ -29,48 +29,56 @@ export class EntityDeduplicator {
     newEntity: { name: string; summary: string; entity_type: string },
     existingEntity: { name: string; summary: string; entity_type: string },
   ): Promise<{ isDuplicate: boolean; mergedSummary?: string }> {
-    // Fast path: exact name match (case-insensitive)
-    if (newEntity.name.toLowerCase().trim() === existingEntity.name.toLowerCase().trim()) {
-      this.diagnostics?.success('entity_dedup');
-      // Same name = same entity. Merge summaries by keeping the longer/newer one.
-      const mergedSummary =
-        newEntity.summary.length > existingEntity.summary.length
-          ? newEntity.summary
-          : existingEntity.summary;
-      return { isDuplicate: true, mergedSummary };
-    }
-
-    // Different entity types are unlikely to be duplicates
-    if (newEntity.entity_type !== existingEntity.entity_type) {
-      this.diagnostics?.success('entity_dedup');
-      return { isDuplicate: false };
-    }
-
-    // LLM fallback for fuzzy deduplication (e.g., "Bob" vs "Robert")
+    let operationFailed = false;
+    const end = this.diagnostics?.begin('entity_dedup');
     try {
-      const result = await this.llm.chatJson<DeduplicationResult>([
-        { role: 'system', content: DEDUPLICATION_SYSTEM },
-        {
-          role: 'user',
-          content: deduplicationUser(newEntity, existingEntity),
-        },
-      ]);
-      if (
-        !result ||
-        typeof result.is_duplicate !== 'boolean' ||
-        (result.is_duplicate && typeof result.merged_summary !== 'string')
-      )
-        throw new ExtractionError('invalid_response');
-      this.diagnostics?.success('entity_dedup');
+      // Fast path: exact name match (case-insensitive)
+      if (newEntity.name.toLowerCase().trim() === existingEntity.name.toLowerCase().trim()) {
+        if (this.diagnostics) this.diagnostics.stageMetric('entity_dedup').exact_hits++;
+        this.diagnostics?.success('entity_dedup');
+        // Same name = same entity. Merge summaries by keeping the longer/newer one.
+        const mergedSummary =
+          newEntity.summary.length > existingEntity.summary.length
+            ? newEntity.summary
+            : existingEntity.summary;
+        return { isDuplicate: true, mergedSummary };
+      }
 
-      return {
-        isDuplicate: result.is_duplicate === true,
-        mergedSummary: result.is_duplicate ? result.merged_summary : undefined,
-      };
-    } catch (error) {
-      // If LLM fails, assume not duplicate (safer)
-      reportExtractionError('entity_dedup', error, this.diagnostics);
-      return { isDuplicate: false };
+      // Different entity types are unlikely to be duplicates
+      if (newEntity.entity_type !== existingEntity.entity_type) {
+        this.diagnostics?.success('entity_dedup');
+        return { isDuplicate: false };
+      }
+
+      // LLM fallback for fuzzy deduplication (e.g., "Bob" vs "Robert")
+      try {
+        const result = await this.llm.chatJson<DeduplicationResult>([
+          { role: 'system', content: DEDUPLICATION_SYSTEM },
+          {
+            role: 'user',
+            content: deduplicationUser(newEntity, existingEntity),
+          },
+        ]);
+        if (
+          !result ||
+          typeof result.is_duplicate !== 'boolean' ||
+          (result.is_duplicate && typeof result.merged_summary !== 'string')
+        )
+          throw new ExtractionError('invalid_response');
+        this.diagnostics?.success('entity_dedup');
+
+        return {
+          isDuplicate: result.is_duplicate === true,
+          mergedSummary: result.is_duplicate ? result.merged_summary : undefined,
+        };
+      } catch (error) {
+        operationFailed = true;
+        // If LLM fails, assume not duplicate (safer)
+        reportExtractionError('entity_dedup', error, this.diagnostics);
+        return { isDuplicate: false };
+      }
+    } finally {
+      end?.(operationFailed);
     }
   }
 }

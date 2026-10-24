@@ -1,3 +1,27 @@
+import { StorageAccumulator } from '../storage/StorageDiagnostics';
+import { governedContext } from '../search/GovernedContext';
+import {
+  GraphEvidenceBudgetsSchema,
+  type GraphEvidenceBudgetsInput,
+} from '../schemas/ExtractionPolicy.schema';
+import { performance } from 'perf_hooks';
+import {
+  ExtractionPolicySchema,
+  RetrievalModeSchema,
+  ExplicitTimestampSchema,
+  QueueBindingSchema,
+  QueueLimitsSchema,
+  type ExtractionPolicyInput,
+  type QueueBinding,
+  type MemoryDeliveryOutcome,
+} from '../schemas';
+import {
+  queueBinding,
+  runBoundedExtraction,
+  type ExtractionSettings,
+} from '../extraction/DurableExtraction';
+import { StagedGraph } from '../extraction/StagedGraph';
+import { queueStats } from '../extraction/QueueState';
 import {
   CurrentHumanQuerySchema,
   MemoryPolicySchema,
@@ -9,7 +33,11 @@ import {
 import { finalAssistantIndices, messageType, messageHasText } from './MessagePolicy';
 import { contentHash } from './HistorySelection';
 import type { BaseMessage } from '@langchain/core/messages';
-import { ExtractionDiagnostics, reportExtractionError } from '../extraction/ExtractionDiagnostics';
+import {
+  ExtractionDiagnostics,
+  ExtractionError,
+  reportExtractionError,
+} from '../extraction/ExtractionDiagnostics';
 import type { ExtractionOutcome } from '../schemas';
 import { BaseChatMemory } from '@langchain/classic/memory/chat_memory';
 import type { BaseChatMemoryInput } from '@langchain/classic/memory/chat_memory';
@@ -43,6 +71,12 @@ export interface EngramChatMemoryInput extends BaseChatMemoryInput {
   groupId: string;
   policy?: MemoryPolicyInput;
   currentHumanQuery?: string;
+  extractionPolicy?: ExtractionPolicyInput;
+  extractionExecution?: 'synchronous' | 'durable';
+  extractionRouteId?: string;
+  retrievalMode?: 'legacy' | 'current' | 'historical' | 'asOf';
+  retrievalAt?: string;
+  graphEvidenceBudgets?: GraphEvidenceBudgetsInput;
   memoryKey?: string;
   contextWindow?: number;
   maxFactsPerQuery?: number;
@@ -93,6 +127,11 @@ export class EngramChatMemory extends BaseChatMemory {
   private extractionPipeline: ExtractionPipeline | null = null;
   private searchEngine: HybridSearchEngine;
 
+  private queueMode = false;
+  private snapshotRead = false;
+  private binding?: QueueBinding;
+  private settings?: ExtractionSettings;
+  private fields: EngramChatMemoryInput;
   private policy: MemoryPolicy;
   private currentHumanQuery: string;
   private engramHistory: EngramChatMessageHistory;
@@ -126,7 +165,61 @@ export class EngramChatMemory extends BaseChatMemory {
       outputKey: fields.outputKey ?? 'output',
     });
 
+    const retrievalMode = RetrievalModeSchema.parse(fields.retrievalMode);
+    GraphEvidenceBudgetsSchema.parse(fields.graphEvidenceBudgets);
+    if (retrievalMode === 'asOf' && !ExplicitTimestampSchema.safeParse(fields.retrievalAt).success)
+      throw new Error('Engram retrieval: as_of_requires_timestamp');
+    this.fields = { ...fields, retrievalMode };
+    const extractionPolicy = ExtractionPolicySchema.parse(fields.extractionPolicy);
+    if (extractionPolicy.quality !== 'legacy' && extractionPolicy.mode !== 'bounded')
+      throw new Error('Knowledge Selection requires bounded extraction');
+    if (
+      extractionPolicy.mode === 'bounded' &&
+      fields.enableExtraction &&
+      ((fields.extractHuman !== false && fields.storeHumanEpisodes === false) ||
+        (fields.extractAi !== false && fields.storeAiEpisodes === false) ||
+        fields.extractSystemTool)
+    )
+      throw new Error(
+        fields.extractionExecution === 'durable'
+          ? 'Engram queue: unsupported_configuration'
+          : 'Bounded extraction requires persisted eligible human/final assistant sources',
+      );
+    this.queueMode = fields.extractionExecution === 'durable';
+    if (
+      fields.extractionExecution &&
+      !['synchronous', 'durable'].includes(fields.extractionExecution)
+    )
+      throw new Error('Invalid extraction execution');
+    if (fields.llmConfig)
+      this.settings = {
+        llm: fields.llmConfig,
+        embeddings: fields.embeddingConfig,
+        policy: extractionPolicy,
+        types: fields.entityTypes ?? ['person', 'organization', 'location', 'concept', 'event'],
+        threshold: fields.extractionThresholdPolicy,
+      };
     this.policy = MemoryPolicySchema.parse(fields.policy ?? {});
+    if (this.queueMode) {
+      if (
+        !fields.enableExtraction ||
+        !this.settings ||
+        extractionPolicy.mode !== 'bounded' ||
+        !this.policy.finalTurnWrites ||
+        fields.extractSystemTool ||
+        (fields.extractHuman !== false && fields.storeHumanEpisodes === false) ||
+        (fields.extractAi !== false && fields.storeAiEpisodes === false) ||
+        !fields.storage.supportsDurableExtraction?.() ||
+        !fields.storage.appendEpisodesWithExtraction ||
+        !fields.extractionRouteId
+      )
+        throw new Error(
+          'Engram queue: unsupported_configuration (requires Bounded resolution, Final Turns, persistent eligible sources, and a matching worker route)',
+        );
+      this.binding = QueueBindingSchema.parse(
+        queueBinding(fields.extractionRouteId, this.settings),
+      );
+    }
     this.currentHumanQuery = CurrentHumanQuerySchema.parse(fields.currentHumanQuery ?? '');
     this.storage = fields.storage;
     this.groupId = fields.groupId;
@@ -137,7 +230,7 @@ export class EngramChatMemory extends BaseChatMemory {
     this.enableExtraction = fields.enableExtraction ?? false;
     this.engramHistory = history;
     if (this.policy.finalTurnWrites)
-      history.setTurnWriter((messages) => this.saveMessagesWithOutcome(messages));
+      history.setTurnWriter((messages) => this.saveMessagesWithDelivery(messages), this.queueMode);
     this.enableTraversal = fields.enableTraversal ?? false;
     this.traversalHops = fields.traversalHops ?? 1;
     this.storeHumanEpisodes = fields.storeHumanEpisodes ?? true;
@@ -196,17 +289,56 @@ export class EngramChatMemory extends BaseChatMemory {
   async loadMemoryVariablesWithDiagnostics(
     values: InputValues,
   ): Promise<{ variables: MemoryVariables; diagnostics: MemoryLoadDiagnostics }> {
+    if (
+      !this.snapshotRead &&
+      (this.queueMode || (this.fields.retrievalMode && this.fields.retrievalMode !== 'legacy'))
+    ) {
+      if (!this.storage.readExtractionSnapshot)
+        throw new Error('Engram retrieval: snapshot_required');
+      const snapshot = await this.storage.readExtractionSnapshot!(this.groupId);
+      const reader = new EngramChatMemory({
+        ...this.fields,
+        storage: new StagedGraph(snapshot, this.groupId, false).storage,
+        extractionExecution: 'synchronous',
+        enableExtraction: false,
+      });
+      reader.snapshotRead = true;
+      const result = await reader.loadMemoryVariablesWithDiagnostics(values);
+      result.diagnostics.queue = { version: 1, ...queueStats(snapshot, this.groupId) };
+      return result;
+    }
     const { messages, history } = await this.engramHistory.getMessagesWithDiagnostics();
     const provided = this.extractInputText(values);
     const configured = Object.keys(values).length === 0 ? this.currentHumanQuery : '';
     const currentInput = provided || configured;
-    const factMessages = await this.getRelevantFacts(currentInput);
+    const mode = this.fields.retrievalMode;
+    const governed =
+      mode && mode !== 'legacy'
+        ? await governedContext(this.storage, this.searchEngine, currentInput, this.groupId, {
+            mode,
+            at: this.fields.retrievalAt,
+            evidenceBudgets: this.fields.graphEvidenceBudgets,
+            limit: this.maxFactsPerQuery,
+            minScore: this.minRelevanceScore,
+            tokenBudget: this.contextTokenBudget,
+            traversal: this.enableTraversal,
+            hops: this.traversalHops,
+            acceptedOnly: this.acceptedOnlyRetrieval,
+            filters: this.retrievalFilters,
+          })
+        : null;
+    const factMessages = governed
+      ? governed.context
+        ? [new SystemMessage(governed.context)]
+        : []
+      : await this.getRelevantFacts(currentInput);
     const diagnostics: MemoryLoadDiagnostics = {
       history,
       retrieval: {
         query_source: provided.trim() ? 'input' : configured.trim() ? 'configured' : 'none',
         query_available: currentInput.trim().length > 0,
         fact_messages: factMessages.length,
+        ...(governed ? { selection: governed.audit } : {}),
       },
     };
 
@@ -230,13 +362,28 @@ export class EngramChatMemory extends BaseChatMemory {
   }
 
   async saveContext(inputValues: InputValues, outputValues: OutputValues): Promise<void> {
-    await this.saveContextWithOutcome(inputValues, outputValues);
+    await this.saveContextWithDelivery(inputValues, outputValues);
   }
 
-  async saveContextWithOutcome(
+  async saveContextWithDelivery(
     inputValues: InputValues,
     outputValues: OutputValues,
-  ): Promise<ExtractionOutcome> {
+  ): Promise<{ extraction: ExtractionOutcome } | MemoryDeliveryOutcome> {
+    if (!this.queueMode)
+      return { extraction: await this.saveContextWithOutcome(inputValues, outputValues) };
+    const { humanInput, aiOutput } = this.contextPair(inputValues, outputValues);
+    if (inputValues[this.inputKey || 'input'] === undefined)
+      throw new Error('Engram queue: explicit_human_input_required');
+    const messages: BaseMessage[] = [new HumanMessage(humanInput), new AIMessage(aiOutput)];
+    for (const source of this.extractSystemToolSources(inputValues, outputValues)) {
+      const audit = new SystemMessage(source.content);
+      audit.additional_kwargs.engram_tool_audit = true;
+      messages.splice(messages.length - 1, 0, audit);
+    }
+    return this.saveMessagesWithDelivery(messages);
+  }
+
+  private contextPair(inputValues: InputValues, outputValues: OutputValues) {
     // n8n agents may pass multiple keys (input, system_message, formatting_instructions).
     // LangChain's BaseChatMemory.saveContext throws if it sees >1 key without an explicit
     // inputKey/outputKey. Filter down to just the keys we care about to avoid this.
@@ -261,6 +408,15 @@ export class EngramChatMemory extends BaseChatMemory {
 
     const humanInput = getInputValue(filteredInput, this.inputKey);
     const aiOutput = getOutputValue(filteredOutput, this.outputKey);
+    return { humanInput, aiOutput };
+  }
+
+  async saveContextWithOutcome(
+    inputValues: InputValues,
+    outputValues: OutputValues,
+  ): Promise<ExtractionOutcome> {
+    if (this.queueMode) throw new Error('Engram queue: use_delivery_outcome');
+    const { humanInput, aiOutput } = this.contextPair(inputValues, outputValues);
 
     if (this.policy.finalTurnWrites) {
       const messages: BaseMessage[] = [new HumanMessage(humanInput), new AIMessage(aiOutput)];
@@ -323,6 +479,11 @@ export class EngramChatMemory extends BaseChatMemory {
 
   /** Both native bulk tool saves and final-only saves share this policy and extraction owner. */
   async saveMessagesWithOutcome(messages: BaseMessage[]): Promise<MemoryWriteOutcome> {
+    if (this.queueMode) throw new Error('Engram queue: use_delivery_outcome');
+    return (await this.saveMessagesWithDelivery(messages)) as MemoryWriteOutcome;
+  }
+
+  async saveMessagesWithDelivery(messages: BaseMessage[]): Promise<MemoryDeliveryOutcome> {
     if (messages.length > 1000) throw new Error('Memory write cannot exceed 1000 messages');
     const finals = finalAssistantIndices(messages);
     const writes: EpisodeMessageWrite[] = [];
@@ -405,7 +566,48 @@ export class EngramChatMemory extends BaseChatMemory {
         extract: human ? this.extractHuman : assistant ? this.extractAi : this.extractSystemTool,
       });
     }
-    const results = await this.engramHistory.appendMessageWrites(writes);
+    const enqueueStarted = performance.now();
+    const enqueueStorage = new StorageAccumulator();
+    const appendQueue = () =>
+      this.storage.appendEpisodesWithExtraction!(
+        this.engramHistory.prepareMessageWrites(writes),
+        candidates
+          .filter(
+            (candidate) =>
+              candidate.extract &&
+              candidate.writeIndex !== null &&
+              messageHasText(candidate.message),
+          )
+          .map((candidate) => candidate.writeIndex!),
+        this.binding!,
+        QueueLimitsSchema.parse({}),
+      );
+    const queued =
+      this.queueMode && writes.length > 0
+        ? this.storage.withExtractionDiagnostics
+          ? await this.storage.withExtractionDiagnostics(
+              (value) => enqueueStorage.observe(value),
+              appendQueue,
+            )
+          : await appendQueue()
+        : null;
+    const results = queued ? queued.results : await this.engramHistory.appendMessageWrites(writes);
+    if (queued && queued.jobs.length)
+      return {
+        delivery: {
+          version: 1,
+          status: 'queued',
+          durable: true,
+          enqueue_ms: performance.now() - enqueueStarted,
+          jobs: queued.jobs.map((job) => ({ uuid: job.uuid, state: job.state })),
+          graph_fresh: queued.queue.graph_fresh,
+          storage_breakdown: enqueueStorage.snapshot(),
+        },
+        written: results.filter((result) => result.created).length,
+        duplicates: results.filter((result) => !result.created).length,
+        audit: auditCount,
+        skipped,
+      };
     const sources: ExtractionSource[] = [];
     for (const candidate of candidates) {
       if (!candidate.extract || !messageHasText(candidate.message)) continue;
@@ -550,11 +752,40 @@ export class EngramChatMemory extends BaseChatMemory {
   }
 
   private async runExtraction(sources: ExtractionSource[]): Promise<ExtractionOutcome> {
-    const diagnostics = new ExtractionDiagnostics();
+    const extractionPolicy = ExtractionPolicySchema.parse(this.fields.extractionPolicy);
+    const diagnostics = new ExtractionDiagnostics({
+      backend: this.storage.extractionBackend?.() ?? 'unknown',
+      resolution: extractionPolicy.mode,
+      quality: extractionPolicy.quality,
+      execution: 'synchronous',
+    });
+    if (
+      this.settings &&
+      ExtractionPolicySchema.parse(this.fields.extractionPolicy).mode === 'bounded'
+    ) {
+      try {
+        return await runBoundedExtraction(this.storage, this.groupId, sources, this.settings);
+      } catch (error) {
+        reportExtractionError(
+          error instanceof ExtractionError && error.kind === 'budget_exhausted'
+            ? 'entities'
+            : 'persistence',
+          error instanceof ExtractionError ? error : new ExtractionError('storage'),
+          diagnostics,
+        );
+        return diagnostics.finish();
+      }
+    }
     if (!this.extractionPipeline) return diagnostics.finish('missing_configuration');
     if (!sources.some((source) => source.content.trim())) return diagnostics.finish('no_sources');
     try {
-      await this.extractionPipeline.processSources(sources, diagnostics);
+      const operation = () => this.extractionPipeline!.processSources(sources, diagnostics);
+      if (this.storage.withExtractionDiagnostics)
+        await this.storage.withExtractionDiagnostics(
+          (value) => diagnostics.observeStorage(value),
+          operation,
+        );
+      else await operation();
     } catch (error) {
       reportExtractionError('persistence', error, diagnostics);
     }
@@ -584,6 +815,7 @@ export class EngramChatMemory extends BaseChatMemory {
       episode_kind: episode.episode_kind,
       episode_uuid: episode.uuid,
       source_message_id: episode.source_message_id,
+      quoted_message_id: episode.quoted_message_id,
       sender_id: episode.sender_id,
       sender_name: episode.sender_name,
       trust_level: episode.trust_level,

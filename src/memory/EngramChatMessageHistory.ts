@@ -5,6 +5,7 @@ import {
   MemoryPolicySchema,
   type MemoryPolicyInput,
   type MemoryWriteOutcome,
+  type MemoryDeliveryOutcome,
   type HistoryReadDiagnostics,
 } from '../schemas';
 import { selectHistory } from './HistorySelection';
@@ -52,7 +53,8 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   private metadata: EpisodeWriteMetadata;
   private humanEpisodeKind: HumanEpisodeKind;
   private policy: ReturnType<typeof MemoryPolicySchema.parse>;
-  private turnWriter?: (messages: BaseMessage[]) => Promise<MemoryWriteOutcome>;
+  private turnWriter?: (messages: BaseMessage[]) => Promise<MemoryDeliveryOutcome>;
+  private deliveryOnly = false;
 
   constructor(params: {
     storage: IGraphStorage;
@@ -78,8 +80,12 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     this.humanEpisodeKind = params.humanEpisodeKind ?? 'active_human';
   }
 
-  setTurnWriter(writer: (messages: BaseMessage[]) => Promise<MemoryWriteOutcome>): void {
+  setTurnWriter(
+    writer: (messages: BaseMessage[]) => Promise<MemoryDeliveryOutcome>,
+    deliveryOnly = false,
+  ): void {
     this.turnWriter = writer;
+    this.deliveryOnly = deliveryOnly;
   }
 
   async getMessages(): Promise<BaseMessage[]> {
@@ -120,10 +126,15 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   }
 
   async addMessages(messages: BaseMessage[]): Promise<void> {
-    await this.addMessagesWithOutcome(messages);
+    await this.addMessagesWithDelivery(messages);
   }
 
   async addMessagesWithOutcome(messages: BaseMessage[]): Promise<MemoryWriteOutcome> {
+    if (this.deliveryOnly) throw new Error('Engram queue: use_delivery_outcome');
+    return (await this.addMessagesWithDelivery(messages)) as MemoryWriteOutcome;
+  }
+
+  async addMessagesWithDelivery(messages: BaseMessage[]): Promise<MemoryDeliveryOutcome> {
     if (this.turnWriter) return this.turnWriter(messages);
     const results = await this.appendMessageWrites(messages.map((message) => ({ message })));
     return {
@@ -156,10 +167,14 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
 
   async appendMessageWrites(writes: EpisodeMessageWrite[]): Promise<AppendEpisodeResult[]> {
     if (writes.length === 0) return [];
-    const inputs = writes.map(({ message, metadata = {} }) =>
+    const inputs = this.prepareMessageWrites(writes);
+    return this.storage.appendEpisodes(inputs);
+  }
+
+  prepareMessageWrites(writes: EpisodeMessageWrite[]): CreateEpisodicNode[] {
+    return writes.map(({ message, metadata = {} }) =>
       this.messageToEpisodeInput(message, metadata),
     );
-    return this.storage.appendEpisodes(inputs);
   }
 
   private messageToEpisodeInput(

@@ -1,3 +1,4 @@
+import { advancedExtractionProperties, readExtractionPolicy } from '../../utils/advancedExtraction';
 import { ExtractionTemperatureSchema, MemoryPolicySchema } from '../../schemas';
 /* eslint-disable n8n-nodes-base/node-dirname-against-convention */
 import {
@@ -686,6 +687,77 @@ export class EngramMemory implements INodeType {
         description:
           'Number of hops to walk from matched entities. 1 = direct neighbors only, 2 = neighbors of neighbors, etc.',
       },
+      ...advancedExtractionProperties,
+      {
+        displayName: 'Extraction Execution',
+        name: 'extractionExecution',
+        type: 'options',
+        default: 'synchronous',
+        options: [
+          { name: 'Synchronous', value: 'synchronous' },
+          { name: 'Durable Queue', value: 'durable' },
+        ],
+        description:
+          'Durable Queue saves work for a separate scheduled Engram Admin worker; facts become available after processing',
+        displayOptions: { show: { '@version': [2], enableExtraction: ['enabled'] } },
+      },
+      {
+        displayName: 'Extraction Route ID',
+        name: 'extractionRouteId',
+        type: 'string',
+        default: '',
+        description: 'Nonsecret worker route identifier; must match the worker configuration',
+        displayOptions: { show: { '@version': [2], extractionExecution: ['durable'] } },
+      },
+      {
+        displayName: 'Graph Context Policy',
+        name: 'graphContextPolicy',
+        type: 'options',
+        default: 'legacy',
+        options: [
+          { name: 'Legacy', value: 'legacy' },
+          { name: 'Governed Current', value: 'current' },
+          { name: 'Governed Historical', value: 'historical' },
+          { name: 'Governed As Of', value: 'asOf' },
+        ],
+        description:
+          'Reconcile duplicate relationships and distinguish current from historical evidence',
+        displayOptions: { show: { '@version': [2] } },
+      },
+      {
+        displayName: 'Event Time',
+        name: 'graphContextAt',
+        type: 'string',
+        default: '',
+        placeholder: '2026-10-24T12:00:00Z',
+        description:
+          'Explicit timestamp for event-interval relevance, not what was known at that time',
+        displayOptions: { show: { '@version': [2], graphContextPolicy: ['asOf'] } },
+      },
+      {
+        displayName: 'Durable Fact Token Allowance',
+        name: 'graphDurableTokens',
+        type: 'number',
+        default: 4096,
+        typeOptions: { minValue: 0, maxValue: 100000 },
+        description:
+          'Estimated token allowance for durable evidence within the overall graph context cap',
+        displayOptions: {
+          show: { '@version': [2], graphContextPolicy: ['current', 'historical', 'asOf'] },
+        },
+      },
+      {
+        displayName: 'Historical Evidence Token Allowance',
+        name: 'graphHistoricalTokens',
+        type: 'number',
+        default: 2048,
+        typeOptions: { minValue: 0, maxValue: 100000 },
+        description:
+          'Estimated token allowance for temporal or legacy evidence within the overall graph context cap',
+        displayOptions: {
+          show: { '@version': [2], graphContextPolicy: ['current', 'historical', 'asOf'] },
+        },
+      },
       // Retention settings
       {
         displayName: 'Retention Policy',
@@ -894,6 +966,15 @@ export class EngramMemory implements INodeType {
 
       await storage.initialize();
 
+      const extractionExecution = usesGovernanceControls
+        ? (this.getNodeParameter('extractionExecution', itemIndex, 'synchronous') as
+            | 'synchronous'
+            | 'durable')
+        : 'synchronous';
+      if (extractionExecution === 'durable' && retentionType !== 'forever')
+        throw new Error(
+          'Durable extraction requires Keep Forever retention until jobs are explicitly resolved',
+        );
       // Apply retention policy before loading
       if (retentionType !== 'forever') {
         await storage.applyRetention(sessionId, {
@@ -997,6 +1078,31 @@ export class EngramMemory implements INodeType {
         enableExtraction: enableExtraction && !!llmConfig,
         llmConfig,
         entityTypes,
+        extractionPolicy: usesGovernanceControls
+          ? readExtractionPolicy((name, fallback) =>
+              this.getNodeParameter(name, itemIndex, fallback as string),
+            )
+          : undefined,
+        extractionExecution,
+        extractionRouteId: usesGovernanceControls
+          ? (this.getNodeParameter('extractionRouteId', itemIndex, '') as string)
+          : undefined,
+        retrievalMode: usesGovernanceControls
+          ? (this.getNodeParameter('graphContextPolicy', itemIndex, 'legacy') as
+              | 'legacy'
+              | 'current'
+              | 'historical'
+              | 'asOf')
+          : 'legacy',
+        retrievalAt: usesGovernanceControls
+          ? (this.getNodeParameter('graphContextAt', itemIndex, '') as string)
+          : undefined,
+        graphEvidenceBudgets: usesGovernanceControls
+          ? {
+              durable: this.getNodeParameter('graphDurableTokens', itemIndex, 4096) as number,
+              historical: this.getNodeParameter('graphHistoricalTokens', itemIndex, 2048) as number,
+            }
+          : undefined,
         embeddingConfig,
         enableTraversal,
         traversalHops,

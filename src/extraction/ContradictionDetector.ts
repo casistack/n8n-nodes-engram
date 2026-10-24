@@ -41,42 +41,49 @@ export class ContradictionDetector {
     existingEdgeName?: string,
     newEdgeName?: string,
   ): Promise<ContradictionResolution> {
+    let operationFailed = false;
+    const end = this.diagnostics?.begin('contradictions');
     try {
-      const result = await this.llm.chatJson<ContradictionResult>([
-        { role: 'system', content: CONTRADICTION_SYSTEM },
-        {
-          role: 'user',
-          content: contradictionUser(
-            existingFact,
-            newFact,
-            sourceEntity,
-            targetEntity,
-            existingEdgeName,
-            newEdgeName,
-          ),
-        },
-      ]);
-      if (
-        !result ||
-        typeof result.is_contradiction !== 'boolean' ||
-        (result.is_contradiction && typeof result.explanation !== 'string')
-      )
-        throw new ExtractionError('invalid_response');
-      this.diagnostics?.success('contradictions');
+      try {
+        const result = await this.llm.chatJson<ContradictionResult>([
+          { role: 'system', content: CONTRADICTION_SYSTEM },
+          {
+            role: 'user',
+            content: contradictionUser(
+              existingFact,
+              newFact,
+              sourceEntity,
+              targetEntity,
+              existingEdgeName,
+              newEdgeName,
+            ),
+          },
+        ]);
+        if (
+          !result ||
+          typeof result.is_contradiction !== 'boolean' ||
+          (result.is_contradiction && typeof result.explanation !== 'string')
+        )
+          throw new ExtractionError('invalid_response');
+        this.diagnostics?.success('contradictions');
 
-      if (result.is_contradiction) {
-        return {
-          isContradiction: true,
-          explanation: result.explanation,
-          expiredAt: nowIso(),
-        };
+        if (result.is_contradiction) {
+          return {
+            isContradiction: true,
+            explanation: result.explanation,
+            expiredAt: nowIso(),
+          };
+        }
+
+        return { isContradiction: false };
+      } catch (error) {
+        operationFailed = true;
+        // If LLM fails, assume no contradiction (safer to keep existing data)
+        reportExtractionError('contradictions', error, this.diagnostics);
+        return { isContradiction: false };
       }
-
-      return { isContradiction: false };
-    } catch (error) {
-      // If LLM fails, assume no contradiction (safer to keep existing data)
-      reportExtractionError('contradictions', error, this.diagnostics);
-      return { isContradiction: false };
+    } finally {
+      end?.(operationFailed);
     }
   }
 }
