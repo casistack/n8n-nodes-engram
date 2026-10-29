@@ -1,9 +1,15 @@
 import {
   CURRENT_GRAPH_DATA_VERSION,
-  GraphDataSchema,
   ImportGraphDataSchema,
   type GraphData,
 } from './GraphData.schema';
+
+/** Generic JSON imports cannot restore or replace operational ledger authority. */
+export function assertNoImportedAutomaticOperations(input: unknown): void {
+  if (input === null || typeof input !== 'object') return;
+  if (Object.keys(input).some((key) => key.startsWith('automatic_operations_')))
+    throw new Error('Engram automatic ledger: native_restore_required');
+}
 
 export interface GraphMigrationDefaults {
   source_type: number;
@@ -81,11 +87,14 @@ export function migrateGraphData(input: unknown): GraphMigrationResult {
     delete metadata.checksum_sha256;
     delete metadata.checksum_algorithm;
   }
-  const data = GraphDataSchema.parse({
+  // ImportGraphDataSchema already parsed exactly one version branch and applied all
+  // record defaults. Changing only the version and metadata avoids reparsing every
+  // entity, edge, and episode on the common current-v2 path.
+  const data = {
     ...source,
     version: CURRENT_GRAPH_DATA_VERSION,
-    metadata,
-  });
+    ...(metadata !== undefined ? { metadata } : {}),
+  } as GraphData;
   const warnings = integrityWarnings(data);
 
   return {

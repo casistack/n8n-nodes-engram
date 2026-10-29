@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-to-v072">Upgrade</a> &middot;
+  <a href="#upgrading-to-v073">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -98,6 +98,41 @@ Engram provides dedicated n8n nodes for AI memory, graph exploration, administra
 cd ~/.n8n
 npm install n8n-nodes-engram
 ```
+
+---
+
+## Upgrading to v0.7.3
+
+Existing saved workflows, node versions and defaults are preserved. **Automatic Memory Interpretation > Literal Preferences (Existing)** remains the default. Select **Autonomous Personal Memory** explicitly to enable the new interpretation on Admin v3 and Memory v3.
+
+With **Conservative Automatic**, useful personal statements can become accepted, attributed graph memory without a save command or routine manual review. Supported compound preferences preserve language variants, negation, scope and ordering. Eligible statements that cannot be verified as a structured preference may retain their exact wording as dated, attributed evidence. Unsupported or uncertain interpretation is not accepted merely because a model reports high confidence.
+
+### Activate Autonomous Personal Memory
+
+1. Back up workflows and the complete embedded store or Neo4j database consistently. Preserve exact namespaces, producer workflow IDs, storage paths, verified actor bindings and event IDs. A generic JSON export alone cannot restore privileged binding/ownership metadata.
+2. Install `n8n-nodes-engram@0.7.3`, restart n8n and refresh the editor. Begin with an inactive workflow copy and a separately restored store. This interpreter supports AI Agent **v3.1** on n8n **2.12.3**.
+3. Use Admin v3 **Capture Human Memory** before the agent, with **Capture Lifecycle > Replay Safe**. Connect **Proceed** to the agent and route **Stopped** separately from delivery. Map its `sourceId` into Memory v3's **Captured Human Source ID** and select **Captured Turn Lifecycle > Replay-Safe Captured Turn**.
+4. Select **Autonomous Personal Memory** on both nodes and **Memory Behaviour > Conservative Automatic**. Use the same verified issuer/actor binding, stable **Current Turn ID**, backend and namespace. For embedded storage, set Admin's **Memory Workflow ID** to the exact workflow ID owning the Memory store and preserve its storage path. Match the extraction route, model, temperature mode/value, extraction request limit and deadline across Admin and Memory. **Explicit Requests Only** additionally requires trusted save intent; quoted commands do not establish authority.
+5. Supply the complete raw human body as **Current Human Query** and **Raw Current Human Content**. If agent input adds application display labels, supply its complete formatted input and exact UTF-16 human-region boundaries. Do not mark quotations, conditions or other human content as display metadata.
+6. Set **Extraction Execution > Synchronous** on both Admin capture and Memory. On Memory, keep **Entity Resolution > Bounded**, **Message Write Policy > Final Turns**, **History Filter > Provenance**, **Human Episode Kind > Active Human**, **Retention Policy > Keep Forever** and **Memory Fact Policy > Accepted Facts Only**. Persist human and final assistant messages; disable AI/system/tool extraction. Use **Provider Default** temperature where the model requires omission.
+
+Inspect Admin's `creationSummary`, including `acceptedCoverage`, `sourceCoverage` and per-occurrence outcomes before acknowledging saved knowledge. Source persistence or workflow success alone does not establish accepted graph memory. Redelivery of the same event stops before another agent run; external delivery still needs the application's own idempotency controls.
+
+The selected interpreter replaces general extraction for that writer; it does not run the v2 free-form pipeline in parallel. Keep workflows requiring that pipeline on their existing configuration. **Review First**, passive ingestion, historical/as-of modes for new autonomous claims and durable background execution are outside this interpreter's supported configuration. Existing graph records, interpreters and queue workers retain their behavior; no worker starts automatically.
+
+Process one logical human event per execution. Tool continuations reuse admitted Memory within the same running execution. Unsupported Agent scopes fail before admission. Manual partial execution, cold resume or restart does not recreate that admission from a saved receipt. Credentials remain fixed for the admitted turn; same-credential secret rotation is read on the next turn.
+
+Tool audits preserve the messages the host forwards, separately from conversational context and human extraction. On n8n 2.12.3, sequential tool rounds forward only the latest tool pair at final completion, so these audits are not a complete tool execution trace. Use n8n execution records for that purpose.
+
+### Verify and Roll Back
+
+Verify an ordinary compound preference, negative and uncertain/quoted statements, a temporary question, a normal turn, multiple tool rounds and cross-execution redelivery. Inspect accepted graph evidence and receipt coverage. Test graph-only recall with the original assertion and revealing acknowledgements excluded from recent history. Review active and passive group writers separately before expanding rollout.
+
+Historical artifacts are not automatically relabelled or deleted. Use bounded read-only inspection or dry-run controls for any reviewed record-specific correction; ambiguous JSON remains conversation. No reset, purge, destructive merge or bulk re-extraction is required.
+
+Prefer reverting explicit policy/workflow settings on the supported new binary while preserving newly appended conversations. Old-package downgrade and mixed-version writers/workers are unsupported after new ownership or claim records are written. Never overwrite newer conversations with an old snapshot as routine rollback. The [v0.7.2 recovery boundary](#verify-and-roll-back-1) also applies.
+
+Native Admin capture using the Existing lifecycle now stops an already-owned event from a different or unknown original execution, preventing another agent run on redelivery. Provably same-execution capture and library memory-write replay retain their behavior; conflicting ownership/content still fails safely.
 
 ---
 

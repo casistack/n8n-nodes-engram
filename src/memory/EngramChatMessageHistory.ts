@@ -12,6 +12,11 @@ import { selectHistory } from './HistorySelection';
 import { isToolCall, messageType } from './MessagePolicy';
 import type { AppendEpisodeResult, IGraphStorage } from '../storage/IGraphStorage';
 import type { CreateEpisodicNode, EpisodicNode } from '../schemas';
+import type { CompositionalRuntimeReaderV3 } from '../schemas/CompositionalRuntimeReaderV3.schema';
+import {
+  getCompositionalRuntimeHistoryDataV3,
+  isLiveCompositionalRuntimeReaderV3,
+} from '../search/CompositionalRuntimeReaderV3';
 
 export type EpisodeWriteMetadata = Partial<
   Pick<
@@ -56,6 +61,12 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
   private turnWriter?: (messages: BaseMessage[]) => Promise<MemoryDeliveryOutcome>;
   private deliveryOnly = false;
   private excludedSourceId?: string;
+  private readGuard?: () => Promise<void>;
+  private compositionalReadProvider?: () => Promise<CompositionalRuntimeReaderV3>;
+  private snapshotReadProvider?: () => Promise<{
+    messages: BaseMessage[];
+    history: HistoryReadDiagnostics;
+  }>;
   excludeCurrentSource(uuid: string): void {
     this.excludedSourceId = uuid;
   }
@@ -92,6 +103,23 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     this.deliveryOnly = deliveryOnly;
   }
 
+  /** Optional current-parent validation for captured-turn context reads. */
+  setReadGuard(guard: () => Promise<void>): void {
+    this.readGuard = guard;
+  }
+
+  /** Internal provider must perform the fixed current-parent check before returning its reader. */
+  setCompositionalReadProvider(provider: () => Promise<CompositionalRuntimeReaderV3>): void {
+    this.compositionalReadProvider = provider;
+  }
+
+  /** Internal fixed native read delegate; when present it owns the whole conversation read. */
+  setSnapshotReadProvider(
+    provider: () => Promise<{ messages: BaseMessage[]; history: HistoryReadDiagnostics }>,
+  ): void {
+    this.snapshotReadProvider = provider;
+  }
+
   async getMessages(): Promise<BaseMessage[]> {
     return (await this.getMessagesWithDiagnostics()).messages;
   }
@@ -100,25 +128,45 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
     messages: BaseMessage[];
     history: HistoryReadDiagnostics;
   }> {
+    if (this.snapshotReadProvider) return this.snapshotReadProvider();
+    if (this.readGuard) await this.readGuard();
     const filtering = this.policy.historyFilter !== 'off' || this.policy.finalTurnWrites;
     const limit =
       (filtering ? this.policy.maxHistoryScan + 1 : this.contextWindow) +
       (this.excludedSourceId ? 1 : 0);
+    let snapshotReader: CompositionalRuntimeReaderV3 | undefined;
+    let recent: readonly EpisodicNode[];
+    const checkSnapshot = () => {
+      if (snapshotReader && !isLiveCompositionalRuntimeReaderV3(snapshotReader))
+        throw new Error('Engram compositional history: snapshot_not_authorized');
+    };
+    if (this.compositionalReadProvider) {
+      snapshotReader = await this.compositionalReadProvider();
+      checkSnapshot();
+      const data = getCompositionalRuntimeHistoryDataV3(snapshotReader, {
+        namespace: this.groupId,
+        limit,
+      });
+      if (data.status !== 'history_data')
+        throw new Error('Engram compositional history: snapshot_not_authorized');
+      recent = data.episodes;
+    } else {
+      recent = await this.storage.getRecentEpisodes(this.groupId, limit);
+    }
     // Detach immediately: mutations during later processing cannot change this read's evidence.
-    const episodes = JSON.parse(
-      JSON.stringify(await this.storage.getRecentEpisodes(this.groupId, limit)),
-    ) as EpisodicNode[];
+    const episodes = JSON.parse(JSON.stringify(recent)) as EpisodicNode[];
+    checkSnapshot();
     if (this.excludedSourceId) {
       const index = episodes.findIndex((episode) => episode.uuid === this.excludedSourceId);
       if (index >= 0) episodes.splice(index, 1);
       if (!filtering && episodes.length > this.contextWindow)
         episodes.splice(0, episodes.length - this.contextWindow);
     }
-    if (!filtering)
-      return {
+    if (!filtering) {
+      const result = {
         messages: episodes.map((ep) => this.episodeToMessage(ep)),
         history: {
-          mode: 'off',
+          mode: 'off' as const,
           fetched: episodes.length,
           examined: episodes.length,
           pages: episodes.length ? 1 : 0,
@@ -130,11 +178,16 @@ export class EngramChatMessageHistory extends BaseChatMessageHistory {
           scan_truncated: false,
         },
       };
+      checkSnapshot();
+      return result;
+    }
     const result = selectHistory(episodes, this.contextWindow, this.policy);
-    return {
+    const formatted = {
       messages: result.episodes.map((ep) => this.episodeToMessage(ep)),
       history: result.diagnostics,
     };
+    checkSnapshot();
+    return formatted;
   }
 
   async addMessages(messages: BaseMessage[]): Promise<void> {

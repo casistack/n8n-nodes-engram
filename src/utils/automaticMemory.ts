@@ -17,7 +17,7 @@ export const automaticProfileProperty: INodeProperties = {
       name: 'Conservative Automatic',
       value: 'conservative',
       description:
-        'Retain supported literal language and presentation preferences from verified human sources',
+        'Automatically retain supported source-grounded personal memory from verified human sources',
     },
     {
       name: 'Explicit Requests Only',
@@ -32,7 +32,7 @@ export const automaticProfileProperty: INodeProperties = {
   ],
   displayOptions: { show: { '@version': [3] } },
   description:
-    'Version 1 profiles support literal first-person language, explanation and format preferences. Other statements stay in conversation history.',
+    'The interpretation setting determines supported claims. Existing saved workflows keep their current interpretation; unselected statements remain in conversation history.',
 };
 const show = {
   '@version': [3],
@@ -40,6 +40,28 @@ const show = {
 };
 export const automaticMemoryProperties: INodeProperties[] = [
   automaticProfileProperty,
+  {
+    displayName: 'Automatic Memory Interpretation',
+    name: 'automaticPreferenceInterpreter',
+    type: 'options',
+    noDataExpression: true,
+    default: 'literalV1',
+    options: [
+      {
+        name: 'Literal Preferences (Existing)',
+        value: 'literalV1',
+        description: 'Keep the existing supported preference grammar',
+      },
+      {
+        name: 'Autonomous Personal Memory',
+        value: 'autonomousPersonalV1',
+        description: 'Interpret source-grounded personal claims with bounded model assistance',
+      },
+    ],
+    displayOptions: { show },
+    description:
+      'Autonomous Personal Memory requires Replay Safe capture, a verified actor binding and synchronous execution. Review First is not supported by this interpreter. Selecting it does not migrate existing records or activate a queue worker.',
+  },
   {
     displayName: 'Verified Actor Issuer',
     name: 'automaticIssuer',

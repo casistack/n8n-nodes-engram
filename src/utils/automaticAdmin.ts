@@ -10,9 +10,43 @@ import { captureHumanMemory } from '../memory/AutomaticCapture';
 import { readExtractionPolicy } from './advancedExtraction';
 import { ExtractionTemperatureSchema } from '../schemas';
 import { findAutomaticBinding, assertAutomaticBindingIdentity } from '../storage/AutomaticIdentity';
+import { captureReplaySafeHumanMemory } from '../memory/ReplaySafeCapture';
+import { readReplaySafeHumanCaptureRequest } from './replaySafeAutomaticAdmin';
+import { executeAutonomousPersonalAdminV4 } from './autonomousPersonalAdmin';
+import { compileAutonomousPersonalPolicyV3 } from '../schemas/AutonomousPersonalPolicyV3.schema';
 
 const show = { resource: ['automaticMemory'], '@version': [3] };
 export const automaticAdminProperties: INodeProperties[] = [
+  {
+    displayName: 'Capture Lifecycle',
+    name: 'automaticCaptureLifecycle',
+    type: 'options',
+    noDataExpression: true,
+    default: 'legacy',
+    options: [
+      { name: 'Existing', value: 'legacy' },
+      { name: 'Replay Safe', value: 'replaySafeV2' },
+    ],
+    displayOptions: { show: { '@version': [3] } },
+    description:
+      'Replay Safe requires synchronous durable human capture and separate Proceed/Stopped outputs. Select Existing before using another operation.',
+  },
+  ...[
+    ['Original Producer Workflow ID', 'automaticOriginalWorkflow'],
+    ['Original Producer Execution ID', 'automaticOriginalExecution'],
+  ].map(
+    ([displayName, name]): INodeProperties => ({
+      displayName,
+      name,
+      type: 'string',
+      default: '',
+      displayOptions: {
+        show: { ...show, operation: ['captureHuman'], automaticCaptureLifecycle: ['replaySafeV2'] },
+      },
+      description:
+        'Optional immutable original producer provenance. Leave empty when unknown; never map the current processing execution.',
+    }),
+  ),
   {
     displayName: 'Operation',
     name: 'operation',
@@ -107,11 +141,31 @@ export async function executeAutomaticAdmin(
   operation: string,
   i: number,
   storeIdentity: string,
+  safeCapture = false,
 ): Promise<IDataObject> {
   if ((ctx.getNode().typeVersion ?? 1) < 3) throw new Error('Automatic memory requires Admin v3');
   const get = (name: string, fallback: unknown) =>
     ctx.getNodeParameter(name, i, fallback as string);
   const namespace = get('automaticNamespace', '') as string;
+  const configuredLifecycle = ctx.getNode().parameters?.automaticCaptureLifecycle;
+  const autonomousPersonal =
+    ctx.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1';
+  if (operation === 'captureHuman' && autonomousPersonal) {
+    if (!safeCapture || configuredLifecycle !== 'replaySafeV2' || i !== 0)
+      throw new Error('Engram automatic capture: unsupported_mode');
+    return (await executeAutonomousPersonalAdminV4(ctx, storage)) as unknown as IDataObject;
+  }
+  if (
+    operation === 'captureHuman' &&
+    configuredLifecycle !== undefined &&
+    configuredLifecycle !== 'legacy'
+  ) {
+    if (!safeCapture) throw new Error('Engram automatic capture: unsupported_mode');
+    return (await captureReplaySafeHumanMemory(
+      storage,
+      readReplaySafeHumanCaptureRequest(ctx, i),
+    )) as unknown as IDataObject;
+  }
   if (operation === 'previewAutomatic') {
     const policy = readAutomaticPolicy(get);
     let identityReady = false;
@@ -139,17 +193,35 @@ export async function executeAutomaticAdmin(
     }
     return {
       operation,
-      effectivePolicy: policy,
+      effectivePolicy: autonomousPersonal
+        ? compileAutonomousPersonalPolicyV3({ profileId: policy.profileId })
+        : policy,
+      ...(autonomousPersonal
+        ? {
+            interpreter: 'autonomousPersonalV1',
+            interpreterSupported: policy.profileId !== 'reviewFirst',
+            executionRequirement: 'synchronous_replay_safe',
+          }
+        : {}),
       limits: readExtractionPolicy(get),
       identityReady,
-      supportedClaims: [
-        'literal first-person language, explanation, format and presentation preferences',
-      ],
-      unsupportedClaims: [
-        'automatic identity creation or alias merging',
-        'sensitive inferred facts',
-        'free-form paraphrases or temporal commitments',
-      ],
+      supportedClaims: autonomousPersonal
+        ? [
+            'source-grounded personal preferences with preserved qualifiers and ordering',
+            'attributed dated personal statements when structured meaning cannot be verified',
+          ]
+        : ['literal first-person language, explanation, format and presentation preferences'],
+      unsupportedClaims: autonomousPersonal
+        ? [
+            'automatic identity creation or alias merging',
+            'unverified model inferences or sensitive inferred facts',
+            'Review First and background extraction with this interpreter',
+          ]
+        : [
+            'automatic identity creation or alias merging',
+            'sensitive inferred facts',
+            'free-form paraphrases or temporal commitments',
+          ],
       extractionCredentialsRequired: true,
       workerReadiness: 'not_checked',
       mutation: false,
@@ -247,6 +319,7 @@ export async function executeAutomaticAdmin(
         : {}),
     },
     get('automaticInput', '') as string,
+    { executionId: ctx.getExecutionId() ?? null },
   );
   return { ...result, effectivePolicy: readAutomaticPolicy(get) } as unknown as IDataObject;
 }

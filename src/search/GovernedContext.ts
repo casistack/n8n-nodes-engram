@@ -9,6 +9,10 @@ import {
   ExplicitTimestampSchema,
 } from '../schemas';
 import { estimateContextTokens } from './ContextBudget';
+import type { CompositionalRuntimeReaderV3 } from '../schemas/CompositionalRuntimeReaderV3.schema';
+import { getCompositionalRuntimeLexicalHintV3 } from './CompositionalRuntimeSearchV3';
+import { getAutonomousPersonalRuntimeLexicalHintV4 } from './AutonomousPersonalRuntimeSearchV4';
+import { getCompositionalRuntimeAutomaticReadContextV3 } from './CompositionalRuntimeReaderV3';
 import {
   GraphEvidenceBudgetsSchema,
   type GraphEvidenceBudgetsInput,
@@ -31,13 +35,21 @@ export async function governedContext(
     hops: number;
     acceptedOnly: boolean;
     filters: RetrievalFilters;
+    compositionalReader?: CompositionalRuntimeReaderV3;
   },
 ) {
   if (options.mode === 'asOf' && !ExplicitTimestampSchema.safeParse(options.at).success)
     throw new Error('Engram retrieval: as_of_requires_timestamp');
   const evidenceBudgets = GraphEvidenceBudgetsSchema.parse(options.evidenceBudgets);
-  const hydration = { remaining: 512, deferred: 0 };
-  const automatic = {
+  const sharedAutomatic =
+    options.compositionalReader === undefined
+      ? null
+      : getCompositionalRuntimeAutomaticReadContextV3(options.compositionalReader, {
+          mode: options.mode,
+          ...(options.at === undefined ? {} : { at: options.at }),
+        });
+  const hydration = sharedAutomatic?.sources ?? { remaining: 512, deferred: 0 };
+  const automatic = sharedAutomatic ?? {
     mode: options.mode,
     at: options.at,
     conflicts: { remaining: 128 },
@@ -54,6 +66,10 @@ export async function governedContext(
     source_reference_deferred: 0,
     truncated: false,
   };
+  if (options.compositionalReader !== undefined && sharedAutomatic === null) {
+    audit.truncated = true;
+    return { context: '', audit };
+  }
   if (!query.trim()) return { context: '', audit };
   const historical = options.mode !== 'current';
   const limit = Math.min(200, Math.max(1, options.limit));
@@ -66,6 +82,9 @@ export async function governedContext(
     captureMatchEvidence: true,
     hydrationBudget: hydration,
     automaticBudget: automatic,
+    ...(options.compositionalReader === undefined
+      ? {}
+      : { compositionalReader: options.compositionalReader }),
   });
   const combined = [...found.edges];
   if (options.traversal && found.entities.length) {
@@ -98,6 +117,9 @@ export async function governedContext(
         },
         hydration,
         automatic,
+        ...(options.compositionalReader === undefined
+          ? ([] as const)
+          : ([options.compositionalReader] as const)),
       )),
     );
   }
@@ -165,8 +187,17 @@ export async function governedContext(
       .split(hit.targetEntity.name.toLowerCase())
       .join(' ');
     const automaticClaim = AutomaticClaimMetadataSchema.safeParse(edge.attributes.engram_claim_v1);
+    const wholeLexical =
+      getAutonomousPersonalRuntimeLexicalHintV4(hit) ?? getCompositionalRuntimeLexicalHintV3(hit);
+    const claimVersion = (edge.attributes.engram_claim_v1 as { version?: unknown } | undefined)
+      ?.version;
+    const protectedRich = claimVersion === 2 || claimVersion === 3;
+    if (protectedRich && (historical || wholeLexical === null)) {
+      audit.irrelevant++;
+      continue;
+    }
     const relationText =
-      withoutNames +
+      (wholeLexical?.toLowerCase() ?? withoutNames) +
       ' ' +
       edge.name.toLowerCase().replace(/_/g, ' ') +
       (automaticClaim.success
@@ -241,13 +272,15 @@ export async function governedContext(
       provenance: provenanceTier,
     });
     const tag = historical ? 'Historical evidence; event time may be uncertain' : 'Memory evidence';
-    selected.push({
-      ...hit,
-      edge: {
-        ...edge,
-        fact: `${edge.fact} [${tag}; category=${quality?.category ?? 'legacy_unknown'}; temporal=${temporal?.status ?? 'unknown'}]`,
-      },
-    });
+    if (wholeLexical !== null) selected.push(hit);
+    else
+      selected.push({
+        ...hit,
+        edge: {
+          ...edge,
+          fact: `${edge.fact} [${tag}; category=${quality?.category ?? 'legacy_unknown'}; temporal=${temporal?.status ?? 'unknown'}]`,
+        },
+      });
   }
   // Origin scores are not summed: retain governed search order, then deterministic traversal UUID order.
   const searchIds = new Set(found.edges.map((hit) => hit.edge.uuid));

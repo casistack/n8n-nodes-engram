@@ -1,15 +1,20 @@
 name: CI
 
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint & Format
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,6 +28,7 @@ jobs:
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,9 +41,10 @@ jobs:
   test:
     name: Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
-        node-version: [18, 20, 22]
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,11 +52,44 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: npm test -- --runInBand
+
+  backend:
+    name: Neo4j Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      neo4j:
+        image: neo4j:5.26.0-community
+        env:
+          NEO4J_AUTH: neo4j/synthetic-ci-only-password
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p synthetic-ci-only-password 'RETURN 1'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+    env:
+      NEO4J_TEST_URI: bolt://127.0.0.1:7687
+      NEO4J_TEST_USERNAME: neo4j
+      NEO4J_TEST_PASSWORD: synthetic-ci-only-password
+      NEO4J_TEST_DATABASE: neo4j
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --runInBand --json --outputFile=backend-results.json
+      - name: Require executed backend tests
+        run: node tests/ci/assert-backend-results.cjs backend-results.json
 
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [lint, type-check, test]
     steps:
       - uses: actions/checkout@v4
@@ -59,9 +99,50 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm pack
+      - run: git diff --exit-code
+      - name: Require a clean source checkout
+        run: test -z "$(git ls-files --others --exclude-standard)"
+      - run: npm pack --ignore-scripts
+      - run: node tests/ci/package-manifest.cjs create .
       - uses: actions/upload-artifact@v4
         with:
           name: package
-          path: "*.tgz"
+          path: |
+            *.tgz
+            package-manifest.json
           retention-days: 7
+
+  native:
+    name: Native n8n Contracts
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: package-artifact
+      - run: node tests/ci/package-manifest.cjs verify package-artifact
+      - name: Install pinned n8n
+        run: npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/engram-n8n" n8n@2.12.3
+      - name: Exercise packaged native Memory
+        env:
+          ENGRAM_N8N_RUNTIME: ${{ runner.temp }}/engram-n8n
+        run: node tests/native/run-contracts.cjs package-artifact
+
+  regression-gate:
+    name: Regression Gate
+    if: always()
+    needs: [lint, type-check, test, backend, build, native]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every mandatory check
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: node -e 'const jobs=JSON.parse(process.env.RESULTS); if(Object.values(jobs).some(job=>job.result!=="success")) process.exit(1)'

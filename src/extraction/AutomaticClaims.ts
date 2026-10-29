@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { performance } from 'perf_hooks';
+import { z } from 'zod';
 import { ExtractionBudgetError } from './ExtractionDiagnostics';
 import { v5 as uuid } from 'uuid';
 import {
@@ -21,8 +22,23 @@ import {
   AutomaticReceiptSchema,
   type AutomaticReceipt,
 } from '../schemas/AutomaticClaim.schema';
+import {
+  AutomaticClaimCommitProofSchema,
+  AutomaticClaimReadContextSchema,
+  type AutomaticClaimReadContext,
+} from '../schemas/AutomaticClaimRead.schema';
 import { compileAutomaticPolicy, parseAutomaticPreferences } from './AutomaticEvidence';
-import { assertAutomaticBinding, prepareAutomaticEpisodeInput } from '../storage/AutomaticIdentity';
+import {
+  assertAutomaticBinding,
+  automaticCaptureOperationIdentityForOwnedSource,
+  prepareAutomaticEpisodeInput,
+  reconcileAutomaticCaptureOperationIdentity,
+  WRITE_OWNER_V2_ATTRIBUTE,
+} from '../storage/AutomaticIdentity';
+import {
+  boundedAutomaticClaimReadJsonBytes,
+  projectAutomaticClaimReadContext,
+} from './AutomaticClaimCommitProof';
 import { canonical, fingerprint, graphFingerprint, sourceFingerprint } from './QueueState';
 
 export const AUTOMATIC_ENVELOPE = 'engram_source_envelope_v1';
@@ -31,8 +47,8 @@ export const AUTOMATIC_OWNER = 'engram_write_owner_v1';
 const hashText = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 const stableId = (key: unknown) => uuid(canonical(key), uuid.URL);
 
-/** Current evidence authority; a model-created attribute alone is never a claim. */
-export function validateStoredAutomaticClaim(
+/** Validates literal source evidence and current binding, without requiring a commit. */
+export function validateAutomaticClaimEvidence(
   graph: GraphData,
   edge: EntityEdge,
   check: () => void = () => {},
@@ -94,6 +110,110 @@ export function validateStoredAutomaticClaim(
       edge.episodes.includes(source.uuid) &&
       extractionMetadataFromAttributes(edge.attributes)?.episode_uuids.includes(source.uuid) ===
         true
+    );
+  } catch (error) {
+    if (error instanceof ExtractionBudgetError) throw error;
+    return false;
+  }
+}
+
+/** Verifies a capability-returned context, including the committed source dependency. */
+export function validateAutomaticClaimReadContext(
+  candidate: EntityEdge,
+  suppliedContext: AutomaticClaimReadContext,
+  check: () => void = () => {},
+  historicalEvidence = false,
+): boolean {
+  try {
+    check();
+    if (boundedAutomaticClaimReadJsonBytes(suppliedContext, 512 * 1024) > 512 * 1024) return false;
+    const parsed = AutomaticClaimReadContextSchema.safeParse(suppliedContext);
+    if (!parsed.success) return false;
+    const context = parsed.data;
+    if (canonical(context.edge) !== canonical(candidate)) return false;
+    const proofResult = AutomaticClaimCommitProofSchema.safeParse(context.proof);
+    if (!proofResult.success) return false;
+    const { proof } = context;
+    if (proof.identity.purpose !== 'human_turn_memory') return false;
+    if (
+      proof.identity.sourceId !== context.source.uuid ||
+      proof.identity.namespace !== candidate.group_id ||
+      proof.identity.binding.subjectId !== context.subject.uuid
+    )
+      return false;
+    const sourceIdentity = automaticCaptureOperationIdentityForOwnedSource(
+      context.source,
+      proof.descriptor,
+    );
+    if (!reconcileAutomaticCaptureOperationIdentity(sourceIdentity, proof.identity)) return false;
+    const envelope = AutomaticSourceEnvelopeSchema.parse(
+      context.source.attributes[AUTOMATIC_ENVELOPE],
+    );
+    if (
+      canonical(proof.identity.binding) !== canonical(envelope.bindingRef) ||
+      envelope.namespace !== candidate.group_id ||
+      proof.identity.issuer !== envelope.issuer ||
+      proof.identity.actorReference !== envelope.actorReference
+    ) {
+      return false;
+    }
+    const terminal = proof.terminalReceipt;
+    if (terminal.kind !== 'human_capture_committed') return false;
+    const matching = terminal.dependencies.filter(
+      (dependency) =>
+        dependency.sourceId === context.source.uuid && dependency.claimId === context.edge.uuid,
+    );
+    if (matching.length !== 1) return false;
+    const dependency = matching[0];
+    const item = terminal.receipt.items[dependency.itemIndex];
+    if (
+      !item ||
+      item.claimId !== context.edge.uuid ||
+      item.state !== dependency.state ||
+      item.persisted !== dependency.persisted ||
+      canonical(item.reasons) !== canonical(dependency.reasons) ||
+      !item.persisted ||
+      !['accepted', 'proposed', 'rejected', 'unchanged'].includes(item.state)
+    ) {
+      return false;
+    }
+    const graph: GraphData = {
+      version: '2.0',
+      exported_at: new Date().toISOString(),
+      group_id: candidate.group_id,
+      entities: [context.subject, context.value],
+      episodes: [context.source],
+      edges: [context.edge],
+    };
+    return validateAutomaticClaimEvidence(graph, candidate, check, historicalEvidence);
+  } catch (error) {
+    if (error instanceof ExtractionBudgetError) throw error;
+    return false;
+  }
+}
+
+/** Persisted V2 claims require an actual committed V2 human operation in the graph root. */
+export function validateStoredAutomaticClaim(
+  graph: GraphData,
+  edge: EntityEdge,
+  check: () => void = () => {},
+  historicalEvidence = false,
+): boolean {
+  try {
+    check();
+    const parsed = AutomaticClaimMetadataSchema.safeParse(edge.attributes[AUTOMATIC_CLAIM]);
+    if (!parsed.success) return false;
+    const source = graph.episodes.find(
+      (episode) => episode.uuid === parsed.data.sourceId && episode.group_id === edge.group_id,
+    );
+    if (!source) return false;
+    if (source.attributes[WRITE_OWNER_V2_ATTRIBUTE] === undefined) {
+      return validateAutomaticClaimEvidence(graph, edge, check, historicalEvidence);
+    }
+    const projected = projectAutomaticClaimReadContext(graph, edge.group_id, edge.uuid);
+    return (
+      projected.status === 'committed' &&
+      validateAutomaticClaimReadContext(edge, projected.context, check, historicalEvidence)
     );
   } catch (error) {
     if (error instanceof ExtractionBudgetError) throw error;
@@ -207,19 +327,19 @@ export function planAutomaticClaims(
         const priorClaim = AutomaticClaimMetadataSchema.safeParse(
           prior.attributes[AUTOMATIC_CLAIM],
         );
+        const validationGraph = {
+          ...graph,
+          entities: [...graph.entities, ...entities],
+          edges: [...graph.edges, ...edges],
+        };
+        const priorValid = graph.edges.includes(prior)
+          ? validateStoredAutomaticClaim(validationGraph, prior, check)
+          : validateAutomaticClaimEvidence(validationGraph, prior, check);
         if (
           !priorClaim.success ||
           priorClaim.data.key !== key ||
           prior.group_id !== group ||
-          !validateStoredAutomaticClaim(
-            {
-              ...graph,
-              entities: [...graph.entities, ...entities],
-              edges: [...graph.edges, ...edges],
-            },
-            prior,
-            check,
-          )
+          !priorValid
         )
           throw new Error('Engram automatic: identity_collision');
         const review = extractionMetadataFromAttributes(prior.attributes)?.review_status;
@@ -262,11 +382,21 @@ export function planAutomaticClaims(
         const other = AutomaticClaimMetadataSchema.safeParse(edge.attributes[AUTOMATIC_CLAIM]);
         return (
           other.success &&
-          validateStoredAutomaticClaim(
-            { ...graph, entities: [...graph.entities, ...entities] },
-            edge,
-            check,
-          ) &&
+          (graph.edges.includes(edge)
+            ? validateStoredAutomaticClaim(
+                { ...graph, entities: [...graph.entities, ...entities] },
+                edge,
+                check,
+              )
+            : validateAutomaticClaimEvidence(
+                {
+                  ...graph,
+                  entities: [...graph.entities, ...entities],
+                  edges: [...graph.edges, ...edges],
+                },
+                edge,
+                check,
+              )) &&
           other.data.claim.polarity !== claim.polarity &&
           extractionMetadataFromAttributes(edge.attributes)?.review_status !== 'rejected'
         );
@@ -394,8 +524,14 @@ export function planAutomaticClaims(
   };
 }
 
-/** Rebuild from fresh stored sources; claim attributes cannot choose their own acceptance validator. */
-export function validateAutomaticPlan(graph: GraphData, plan: StagedExtraction): boolean {
+/** Rebuild using a trusted plan timestamp; claim attributes cannot choose their own validator. */
+export function validateAutomaticPlanAt(
+  graph: GraphData,
+  plan: StagedExtraction,
+  timestamp: string,
+): boolean {
+  if (!z.string().datetime().safeParse(timestamp).success)
+    throw new Error('Engram automatic: invalid_plan');
   const sources = plan.source_guards.map((guard) =>
     graph.episodes.find((ep) => ep.uuid === guard.uuid && ep.group_id === plan.group_id),
   );
@@ -418,8 +554,6 @@ export function validateAutomaticPlan(graph: GraphData, plan: StagedExtraction):
     throw new Error('Engram automatic: failed_plan');
   const first = AutomaticSourceEnvelopeSchema.parse(sources[0]?.attributes[AUTOMATIC_ENVELOPE]);
   if (!first.policy) throw new Error('Engram automatic: missing_policy');
-  const timestamp =
-    plan.edges[0]?.created_at ?? plan.entities[0]?.created_at ?? new Date().toISOString();
   const empty: ExtractionOutcome = {
     ...plan.outcome,
     counts: {
@@ -449,6 +583,13 @@ export function validateAutomaticPlan(graph: GraphData, plan: StagedExtraction):
   )
     throw new Error('Engram automatic: invalid_plan');
   return true;
+}
+
+/** Preserve the V1 API's timestamp inference for existing callers. */
+export function validateAutomaticPlan(graph: GraphData, plan: StagedExtraction): boolean {
+  const timestamp =
+    plan.edges[0]?.created_at ?? plan.entities[0]?.created_at ?? new Date().toISOString();
+  return validateAutomaticPlanAt(graph, plan, timestamp);
 }
 
 export function committedAutomaticReceipt(outcome: ExtractionOutcome, timestamp: string): void {

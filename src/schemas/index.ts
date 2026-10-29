@@ -42,6 +42,7 @@ export {
 
 export {
   migrateGraphData,
+  assertNoImportedAutomaticOperations,
   type GraphMigrationDefaults,
   type GraphMigrationReport,
   type GraphMigrationResult,
@@ -84,5 +85,6 @@ export * from './StorageObservation.schema';
 export * from './AutomaticMemory.schema';
 export * from './AutomaticOperations.schema';
 export * from './AutomaticClaim.schema';
+export * from './AutomaticLedger.schema';
 export * from './AutomaticRuntime.schema';
 export * from './ExtractionBudget.schema';

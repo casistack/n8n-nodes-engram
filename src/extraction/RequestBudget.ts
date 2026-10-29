@@ -14,13 +14,27 @@ export class RequestBudget {
     readonly maxRequestBytes = 256 * 1024,
     readonly maxResponseBytes = 256 * 1024,
     private externalSignal?: AbortSignal,
+    absoluteMonotonicDeadlineAt?: number,
   ) {
     for (const value of [maxCalls, deadlineMs, maxRequestBytes, maxResponseBytes])
       if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid extraction budget');
+    if (absoluteMonotonicDeadlineAt !== undefined && !Number.isFinite(absoluteMonotonicDeadlineAt))
+      throw new Error('Invalid extraction budget');
     if (externalSignal?.aborted) this.controller.abort();
     else externalSignal?.addEventListener('abort', this.externalAbort, { once: true });
-    this.expires = performance.now() + deadlineMs;
-    this.timer = setTimeout(() => this.controller.abort(), deadlineMs);
+    const ordinaryDeadline = performance.now() + deadlineMs;
+    this.expires =
+      absoluteMonotonicDeadlineAt === undefined
+        ? ordinaryDeadline
+        : Math.min(ordinaryDeadline, absoluteMonotonicDeadlineAt);
+    if (absoluteMonotonicDeadlineAt !== undefined && performance.now() >= this.expires)
+      this.controller.abort();
+    this.timer = setTimeout(
+      () => this.controller.abort(),
+      absoluteMonotonicDeadlineAt === undefined
+        ? deadlineMs
+        : Math.max(0, Math.floor(this.expires - performance.now())),
+    );
   }
   check(): void {
     if (this.externalSignal?.aborted) throw new ExtractionBudgetError('cancelled');

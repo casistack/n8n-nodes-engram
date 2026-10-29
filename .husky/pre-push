@@ -16,7 +16,7 @@ npm run build || {
 
 # Full test suite
 echo "Running tests..."
-npm test || {
+npm test -- --runInBand || {
     echo ""
     echo "Tests failed! Push blocked. Fix the failing tests before pushing."
     exit 1

@@ -1,0 +1,129 @@
+{
+  "version": "2.0",
+  "exported_at": "2026-04-01T10:00:00.000Z",
+  "entities": [
+    {
+      "uuid": "00000000-0000-4000-8000-000000000001",
+      "group_id": "synthetic-compatibility",
+      "name": "Synthetic Speaker",
+      "entity_type": "person",
+      "summary": "",
+      "name_embedding": null,
+      "attributes": {
+        "compatibility_marker": "preserve"
+      },
+      "created_at": "2026-04-01T10:00:00.000Z",
+      "updated_at": "2026-04-01T10:00:00.000Z"
+    },
+    {
+      "uuid": "00000000-0000-4000-8000-000000000002",
+      "group_id": "synthetic-compatibility",
+      "name": "Concise explanations",
+      "entity_type": "concept",
+      "summary": "",
+      "name_embedding": null,
+      "attributes": {
+        "compatibility_marker": "preserve"
+      },
+      "created_at": "2026-04-01T10:00:00.000Z",
+      "updated_at": "2026-04-01T10:00:00.000Z"
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "00000000-0000-4000-8000-000000000003",
+      "group_id": "synthetic-compatibility",
+      "source_node_uuid": "00000000-0000-4000-8000-000000000001",
+      "target_node_uuid": "00000000-0000-4000-8000-000000000002",
+      "name": "PREFERS",
+      "fact": "Synthetic Speaker prefers concise explanations.",
+      "fact_embedding": [
+        0.1,
+        0.2
+      ],
+      "episodes": [
+        "00000000-0000-4000-8000-000000000004"
+      ],
+      "valid_at": "2026-04-01T10:00:00.000Z",
+      "invalid_at": null,
+      "expired_at": null,
+      "created_at": "2026-04-01T10:00:00.000Z",
+      "updated_at": "2026-04-01T10:00:00.000Z",
+      "attributes": {
+        "engram_extraction": {
+          "version": 2,
+          "source": "llm",
+          "confidence": 0.99,
+          "review_status": "accepted",
+          "threshold_decision": "auto_accepted",
+          "extracted_at": "2026-04-01T10:00:00.000Z",
+          "episode_uuids": [
+            "00000000-0000-4000-8000-000000000004"
+          ],
+          "reviewed_at": null,
+          "reviewed_by": null
+        }
+      }
+    }
+  ],
+  "episodes": [
+    {
+      "uuid": "00000000-0000-4000-8000-000000000004",
+      "group_id": "synthetic-compatibility",
+      "content": "I prefer concise explanations.",
+      "role": "human",
+      "source_type": "message",
+      "reference_time": "2026-04-01T10:00:00.000Z",
+      "previous_episode_uuid": null,
+      "created_at": "2026-04-01T10:00:00.000Z",
+      "updated_at": null,
+      "source_message_id": "synthetic-message-3",
+      "idempotency_key": null,
+      "conversation_id": "synthetic-conversation",
+      "sender_id": "synthetic-actor",
+      "sender_name": "Synthetic Speaker",
+      "episode_kind": "active_human",
+      "quoted_message_id": null,
+      "trust_level": "standard",
+      "confidence": null,
+      "review_status": "accepted",
+      "source_workflow_id": "synthetic-workflow",
+      "source_execution_id": "synthetic-execution",
+      "attributes": {
+        "evidence_offsets": [
+          0,
+          30
+        ]
+      }
+    },
+    {
+      "uuid": "00000000-0000-4000-8000-000000000005",
+      "group_id": "synthetic-compatibility",
+      "content": "Understood.",
+      "role": "ai",
+      "source_type": "message",
+      "reference_time": "2026-04-01T10:00:00.000Z",
+      "previous_episode_uuid": "00000000-0000-4000-8000-000000000004",
+      "created_at": "2026-04-01T10:00:00.000Z",
+      "updated_at": null,
+      "source_message_id": "synthetic-message-4",
+      "idempotency_key": null,
+      "conversation_id": "synthetic-conversation",
+      "sender_id": null,
+      "sender_name": null,
+      "episode_kind": "assistant_reply",
+      "quoted_message_id": null,
+      "trust_level": "unverified",
+      "confidence": null,
+      "review_status": "proposed",
+      "source_workflow_id": "synthetic-workflow",
+      "source_execution_id": "synthetic-execution",
+      "attributes": {
+        "evidence_offsets": [
+          0,
+          11
+        ]
+      }
+    }
+  ]
+}
