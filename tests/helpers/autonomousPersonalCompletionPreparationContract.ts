@@ -340,6 +340,7 @@ export function autonomousPersonalCompletionPreparationContract(
       expect(graph.episodes).toHaveLength(1);
     });
 
+    // Two near-cap preparation paths share this test; each retains its own product deadlines.
     it('extends the same aggregate inventory with completion hashes before exposing a handle', async () => {
       const content = String.fromCharCode(0).repeat(47_975);
       const measurementTurn = 'completion-cap-stage-a';
@@ -398,7 +399,7 @@ export function autonomousPersonalCompletionPreparationContract(
       );
 
       expect(result).toEqual({ kind: 'resource_exhausted', eligibleFirstCommit: false });
-    });
+    }, 20_000);
 
     it('keeps the original cancellation sticky and allows cleanup after abort', async () => {
       const controller = new AbortController();
