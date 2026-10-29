@@ -842,6 +842,7 @@ describe('Autonomous Personal Completion Plan V4', () => {
     },
   );
 
+  // Three real stage fixtures share one Jest timer; each retains its 5s work deadline.
   it('keeps overlapping exact references separate in the shared stored-relation cap', async () => {
     const first = await autonomousPersonalCompletionPlanFixtureV4({
       content: 'I prefer English.',
@@ -935,7 +936,7 @@ describe('Autonomous Personal Completion Plan V4', () => {
     } finally {
       await first.close();
     }
-  });
+  }, 20_000);
 
   it('preserves a manually rejected exact reference and its review pair', async () => {
     const content = 'I prefer concise explanations.';

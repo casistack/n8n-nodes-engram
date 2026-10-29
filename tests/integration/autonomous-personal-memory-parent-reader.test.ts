@@ -483,11 +483,22 @@ describe('actual Graphology Autonomous Personal Memory parent reader V4', () => 
     const before = await fixture.store.exportGraph(fixture.config.namespace);
     const snapshot = watchSnapshot(fixture.store);
     const indices = watchIndexConstruction();
+    // Fixture setup above includes a real C2 capture and foreign-source seed. Start the
+    // product's bounded resources only after that setup; this test-only timeout does not
+    // extend the reader's fixed five-second scope or thirty-second work deadline.
+    const resources = readResources();
+    const scopeRemaining = getAutomaticClaimReadScopeRemaining(resources.scope);
+    if (!scopeRemaining) throw new Error('Expected an owned parent read scope');
+    expect(scopeRemaining.deadlineRemainingMs).toBeGreaterThan(0);
+    expect(scopeRemaining.deadlineRemainingMs).toBeLessThanOrEqual(5_000);
+    const workRemainingMs = resources.work.absoluteMonotonicDeadlineMs - performance.now();
+    expect(workRemainingMs).toBeGreaterThan(0);
+    expect(workRemainingMs).toBeLessThanOrEqual(30_000);
     const result = await openAutonomousPersonalMemoryParentReaderV4(
       fixture.store,
       fixture.lineage,
       fixture.config,
-      readResources(),
+      resources,
     );
     expect(result.kind).toBe('reader_ready');
     if (result.kind !== 'reader_ready') return;
@@ -540,7 +551,7 @@ describe('actual Graphology Autonomous Personal Memory parent reader V4', () => 
     expect(after.edges).toEqual(before.edges);
     expect(after.entities).toEqual(before.entities);
     expect(after.automatic_operations_v1).toEqual(before.automatic_operations_v1);
-  });
+  }, 30_000);
 
   it('keeps accessor cancellation and trusted undefined failures on their original reader work', async () => {
     const fixture = await createParent();
