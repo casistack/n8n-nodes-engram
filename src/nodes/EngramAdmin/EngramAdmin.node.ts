@@ -1,6 +1,13 @@
 import { StorageAccumulator } from '../../storage/StorageDiagnostics';
 import { automaticAdminProperties, executeAutomaticAdmin } from '../../utils/automaticAdmin';
+import { AutonomousPersonalNativeAdminV4OutputSchema } from '../../schemas/AutonomousPersonalNativeAdminV4.schema';
 import { automaticProfileProperty, readAutomaticPolicy } from '../../utils/automaticMemory';
+import {
+  usesReplaySafeCaptureOutputs,
+  replaySafeCaptureOutputsExpression,
+  stoppedReplaySafeCapture,
+  readReplaySafeHumanCaptureRequest,
+} from '../../utils/replaySafeAutomaticAdmin';
 import { fingerprint } from '../../extraction/QueueState';
 import { existsSync, promises as fsPromises } from 'fs';
 import { dirname } from 'path';
@@ -60,7 +67,7 @@ export class EngramAdmin implements INodeType {
       name: 'Engram Admin',
     },
     inputs: [NodeConnectionType.Main],
-    outputs: [NodeConnectionType.Main],
+    outputs: replaySafeCaptureOutputsExpression,
     credentials: [
       {
         name: 'engramNeo4jApi',
@@ -1154,155 +1161,217 @@ export class EngramAdmin implements INodeType {
   };
 
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-    const items = this.getInputData();
-    const backend = this.getNodeParameter('backend', 0, 'embedded') as string;
-    const resource = this.getNodeParameter('resource', 0, 'monitoring') as string;
-    const operation = this.getNodeParameter('operation', 0) as string;
-
-    let storage;
-    let diagnosticsContext: DiagnosticsContext;
-
-    if (backend === 'neo4j') {
-      const credentials = await this.getCredentials('engramNeo4jApi');
-      storage = createStorage({
-        backend: 'neo4j',
-        uri: credentials.uri as string,
-        username: credentials.username as string,
-        password: credentials.password as string,
-        database: credentials.database as string,
-      });
-      diagnosticsContext = {
-        storeIdentity: fingerprint({
-          backend,
-          uri: credentials.uri,
-          database: credentials.database ?? 'neo4j',
-        }),
-        backend,
-        databaseConfigured: Boolean((credentials.database as string | undefined)?.trim()),
-      };
-    } else {
-      const workflowId =
-        resource === 'automaticMemory'
-          ? (this.getNodeParameter('automaticWorkflowId', 0, '') as string)
-          : resource === 'extractionQueue'
-            ? (this.getNodeParameter('queueStorageWorkflowId', 0, '') as string).trim()
-            : (this.getWorkflow().id ?? 'default');
-      if (resource === 'extractionQueue' && !workflowId)
-        throw new Error('Memory Workflow ID is required for an embedded worker');
-      if (resource === 'automaticMemory' && !workflowId.trim())
-        throw new Error('Memory Workflow ID is required for automatic memory administration');
-      const customPath = this.getNodeParameter('customStoragePath', 0, '') as string;
-      const persistPath = resolveStoragePath({
-        customStoragePath: customPath,
-        workflowId,
-      });
-
-      if (resource === 'extractionQueue' && !existsSync(persistPath)) {
-        if (
-          operation !== 'queueImport' ||
-          this.getNodeParameter('queueImportCreate', 0, 'disabled') !== 'enabled' ||
-          !customPath.trim()
-        )
-          throw new Error(
-            'Producer memory store not found; verify the workflow ID and storage directory',
-          );
-        await fsPromises.mkdir(dirname(persistPath), { recursive: true });
-      }
-      if (resource !== 'extractionQueue')
-        migrateStorageIfNeeded({
-          newPath: persistPath,
-          workflowId,
-          staticData: this.getWorkflowStaticData('node'),
-          logger: this.logger,
-        });
-
-      storage = createStorage({
-        backend: 'embedded',
-        persistPath,
-      });
-      diagnosticsContext = {
-        storeIdentity: fingerprint({ backend: 'embedded', persistPath }),
-        backend,
-        persistPath,
-        workflowId,
-        customStoragePathConfigured: customPath.trim().length > 0,
-      };
-    }
-    await storage.initialize();
-
-    const returnData: INodeExecutionData[] = [];
-
+    const safe = usesReplaySafeCaptureOutputs(this.getNode().parameters);
     try {
-      for (let i = 0; i < items.length; i++) {
-        try {
-          const beforeLength = returnData.length;
+      return await executeAdminCore.call(this, safe);
+    } catch (error) {
+      if (!safe) throw error;
+      return [
+        [],
+        this.getInputData().map((_item, index) => ({
+          json:
+            this.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1'
+              ? AutonomousPersonalNativeAdminV4OutputSchema.parse({
+                  version: 4,
+                  should_process: false,
+                  status: 'unconfirmed',
+                  reason: 'storage_error',
+                })
+              : stoppedReplaySafeCapture(),
+          pairedItem: { item: index },
+        })),
+      ];
+    }
+  }
+}
 
-          if (resource === 'automaticMemory') {
-            returnData.push({
-              json: await executeAutomaticAdmin(
-                this,
-                storage,
-                operation,
-                i,
-                diagnosticsContext.storeIdentity!,
-              ),
-            });
-          } else if (resource === 'extractionQueue') {
-            await executeExtractionQueue(this, storage, operation, i, returnData);
-          } else if (resource === 'monitoring') {
-            await executeMonitoring(this, storage, operation, i, returnData, diagnosticsContext);
-          } else if (resource === 'lifecycle') {
-            await executeLifecycle(this, storage, operation, i, returnData);
-          } else if (resource === 'hygiene') {
+async function executeAdminCore(
+  this: IExecuteFunctions,
+  safe: boolean,
+): Promise<INodeExecutionData[][]> {
+  const items = this.getInputData();
+  const backend = this.getNodeParameter('backend', 0, 'embedded') as string;
+  const resource = this.getNodeParameter('resource', 0, 'monitoring') as string;
+  const operation = this.getNodeParameter('operation', 0) as string;
+  if (safe && this.getNode().parameters?.automaticPreferenceInterpreter !== 'autonomousPersonalV1')
+    readReplaySafeHumanCaptureRequest(this, 0);
+
+  let storage;
+  let diagnosticsContext: DiagnosticsContext;
+
+  if (backend === 'neo4j') {
+    const credentials = await this.getCredentials('engramNeo4jApi');
+    storage = createStorage({
+      backend: 'neo4j',
+      uri: credentials.uri as string,
+      username: credentials.username as string,
+      password: credentials.password as string,
+      database: credentials.database as string,
+    });
+    diagnosticsContext = {
+      storeIdentity: fingerprint({
+        backend,
+        uri: credentials.uri,
+        database: credentials.database ?? 'neo4j',
+      }),
+      backend,
+      databaseConfigured: Boolean((credentials.database as string | undefined)?.trim()),
+    };
+  } else {
+    const workflowId =
+      resource === 'automaticMemory'
+        ? (this.getNodeParameter('automaticWorkflowId', 0, '') as string)
+        : resource === 'extractionQueue'
+          ? (this.getNodeParameter('queueStorageWorkflowId', 0, '') as string).trim()
+          : (this.getWorkflow().id ?? 'default');
+    if (resource === 'extractionQueue' && !workflowId)
+      throw new Error('Memory Workflow ID is required for an embedded worker');
+    if (resource === 'automaticMemory' && !workflowId.trim())
+      throw new Error('Memory Workflow ID is required for automatic memory administration');
+    const customPath = this.getNodeParameter('customStoragePath', 0, '') as string;
+    const persistPath = resolveStoragePath({
+      customStoragePath: customPath,
+      workflowId,
+    });
+
+    if (resource === 'extractionQueue' && !existsSync(persistPath)) {
+      if (
+        operation !== 'queueImport' ||
+        this.getNodeParameter('queueImportCreate', 0, 'disabled') !== 'enabled' ||
+        !customPath.trim()
+      )
+        throw new Error(
+          'Producer memory store not found; verify the workflow ID and storage directory',
+        );
+      await fsPromises.mkdir(dirname(persistPath), { recursive: true });
+    }
+    if (resource !== 'extractionQueue' && !safe)
+      migrateStorageIfNeeded({
+        newPath: persistPath,
+        workflowId,
+        staticData: this.getWorkflowStaticData('node'),
+        logger: this.logger,
+      });
+
+    storage = createStorage({
+      backend: 'embedded',
+      persistPath,
+    });
+    diagnosticsContext = {
+      storeIdentity: fingerprint({ backend: 'embedded', persistPath }),
+      backend,
+      persistPath,
+      workflowId,
+      customStoragePathConfigured: customPath.trim().length > 0,
+    };
+  }
+  try {
+    await storage.initialize();
+  } catch (error) {
+    if (
+      backend === 'neo4j' &&
+      this.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1'
+    ) {
+      try {
+        await storage.close();
+      } catch {
+        // The outer fixed output preserves the original initialization failure.
+      }
+    }
+    throw error;
+  }
+
+  const returnData: INodeExecutionData[] = [];
+  const stoppedData: INodeExecutionData[] = [];
+
+  try {
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const beforeLength = returnData.length;
+
+        if (resource === 'automaticMemory') {
+          const result = await executeAutomaticAdmin(
+            this,
+            storage,
+            operation,
+            i,
+            diagnosticsContext.storeIdentity!,
+            safe,
+          );
+          (safe && result.should_process !== true ? stoppedData : returnData).push({
+            json: result,
+            ...(safe ? { pairedItem: { item: i } } : {}),
+          });
+        } else if (resource === 'extractionQueue') {
+          await executeExtractionQueue(this, storage, operation, i, returnData);
+        } else if (resource === 'monitoring') {
+          await executeMonitoring(this, storage, operation, i, returnData, diagnosticsContext);
+        } else if (resource === 'lifecycle') {
+          await executeLifecycle(this, storage, operation, i, returnData);
+        } else if (resource === 'hygiene') {
+          await executeHygiene(this, storage, operation, i, returnData);
+        } else if (resource === 'portability') {
+          await executePortability(this, storage, operation, i, returnData);
+        } else if (resource === 'analysis') {
+          await executeAnalysis(this, storage, operation, i, returnData);
+        }
+
+        // Fallback for v1 workflows where resource defaults to 'monitoring'
+        // but operation may belong to a different resource
+        if (!safe && returnData.length === beforeLength) {
+          await executeLifecycle(this, storage, operation, i, returnData);
+          if (returnData.length === beforeLength) {
             await executeHygiene(this, storage, operation, i, returnData);
-          } else if (resource === 'portability') {
+          }
+          if (returnData.length === beforeLength) {
             await executePortability(this, storage, operation, i, returnData);
-          } else if (resource === 'analysis') {
+          }
+          if (returnData.length === beforeLength) {
             await executeAnalysis(this, storage, operation, i, returnData);
           }
-
-          // Fallback for v1 workflows where resource defaults to 'monitoring'
-          // but operation may belong to a different resource
-          if (returnData.length === beforeLength) {
-            await executeLifecycle(this, storage, operation, i, returnData);
-            if (returnData.length === beforeLength) {
-              await executeHygiene(this, storage, operation, i, returnData);
-            }
-            if (returnData.length === beforeLength) {
-              await executePortability(this, storage, operation, i, returnData);
-            }
-            if (returnData.length === beforeLength) {
-              await executeAnalysis(this, storage, operation, i, returnData);
-            }
-          }
-        } catch (error: unknown) {
-          if (error instanceof QueueClearRequiresReview) {
-            returnData.push({
-              json: {
-                operation,
-                dry_run: true,
-                queue_review_required: true,
-                queue_impact: error.impact,
-              },
-            });
-            continue;
-          }
-          if (error instanceof NodeOperationError) throw error;
-          throw new NodeOperationError(
-            this.getNode(),
-            `Engram Admin error: ${(error as Error).message}`,
-            { itemIndex: i },
-          );
         }
-      }
-    } finally {
-      if (backend === 'neo4j') {
-        await storage.close();
+      } catch (error: unknown) {
+        if (safe) {
+          stoppedData.push({
+            json:
+              this.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1'
+                ? AutonomousPersonalNativeAdminV4OutputSchema.parse({
+                    version: 4,
+                    should_process: false,
+                    status: 'unconfirmed',
+                    reason: 'storage_error',
+                  })
+                : stoppedReplaySafeCapture(),
+            pairedItem: { item: i },
+          });
+          continue;
+        }
+        if (error instanceof QueueClearRequiresReview) {
+          returnData.push({
+            json: {
+              operation,
+              dry_run: true,
+              queue_review_required: true,
+              queue_impact: error.impact,
+            },
+          });
+          continue;
+        }
+        if (error instanceof NodeOperationError) throw error;
+        throw new NodeOperationError(
+          this.getNode(),
+          `Engram Admin error: ${(error as Error).message}`,
+          { itemIndex: i },
+        );
       }
     }
-
-    return [returnData.length > 0 ? returnData : [{ json: {} }]];
+  } finally {
+    if (backend === 'neo4j') {
+      await storage.close();
+    }
   }
+
+  return safe ? [returnData, stoppedData] : [returnData.length > 0 ? returnData : [{ json: {} }]];
 }
 
 // =============================================

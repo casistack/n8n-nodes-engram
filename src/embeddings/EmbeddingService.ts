@@ -83,6 +83,7 @@ export class EmbeddingService {
       try {
         let response: Response;
         try {
+          this.budget?.check();
           response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -103,9 +104,7 @@ export class EmbeddingService {
 
         metric?.headers();
         if (!response.ok) {
-          const errorText = this.budget
-            ? await readBoundedResponse(response, this.budget.maxResponseBytes)
-            : await response.text();
+          // Provider bodies may echo private input. Do not expose them through search logs.
           if (this.budget)
             throw new ExtractionError(
               response.status === 401 || response.status === 403
@@ -117,7 +116,7 @@ export class EmbeddingService {
                     : 'invalid_request',
               response.status,
             );
-          throw new Error(`Embedding API error (${response.status}): ${errorText}`);
+          throw new Error(`Embedding API error (${response.status})`);
         }
 
         const data = (

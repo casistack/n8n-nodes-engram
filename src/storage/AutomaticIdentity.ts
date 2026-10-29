@@ -20,11 +20,57 @@ import { extractionMetadataFromAttributes } from '../schemas/ExtractionMetadata.
 import type { EntityNode } from '../schemas/EntityNode.schema';
 import type { CreateEpisodicNode, EpisodicNode } from '../schemas/EpisodicNode.schema';
 import type { GraphData } from '../schemas/GraphData.schema';
-import { compileAutomaticPolicy } from '../extraction/AutomaticEvidence';
+import {
+  AutomaticOperationIdentitySchema,
+  type AutomaticLedger,
+  type AutomaticOperationIdentity,
+  type StoredAutomaticOperation,
+} from '../schemas/AutomaticLedger.schema';
+import { captureEnvelope, compileAutomaticPolicy } from '../extraction/AutomaticEvidence';
+import {
+  COMPOSITIONAL_CAPTURE_V3_OWNER_ATTRIBUTE,
+  COMPOSITIONAL_CAPTURE_V2_ENVELOPE_ATTRIBUTE,
+  CompositionalAutomaticCaptureSourceOwnerV3Schema,
+  reconcileCompositionalCaptureOperationIdentityV3,
+} from '../schemas/CompositionalAutomaticCaptureV3.schema';
+import {
+  validateCompositionalAutomaticSourceTupleV3,
+  reconstructCompositionalAutomaticSourceIdentityV3,
+} from './CompositionalAutomaticCaptureSourceTupleV3';
+import {
+  AUTONOMOUS_CAPTURE_V4_OWNER_ATTRIBUTE,
+  AUTONOMOUS_CAPTURE_V3_ENVELOPE_ATTRIBUTE,
+  reconstructAutonomousPersonalStoredSourceV4,
+  reconstructAutonomousPersonalStoredSourceIdentityV4,
+} from '../schemas/AutonomousPersonalSourceV4.schema';
+import { hashAutonomousPersonalDescriptorV4 } from '../schemas/AutonomousPersonalDescriptorV4.schema';
+import {
+  AutomaticCaptureSourceOwnerV2Schema,
+  AutomaticCaptureSourceOwnerStoredV2Schema,
+  AutomaticOperationDescriptorV2Schema,
+  AutomaticOperationIdentityV2Schema,
+  hashAutomaticCaptureV2,
+  type AutomaticOperationDescriptorV2,
+  type AutomaticOperationIdentityV2,
+} from '../schemas/AutomaticCapture.schema';
 
 export const BINDINGS_ATTRIBUTE = 'engram_actor_bindings_v1';
 export const SOURCE_ENVELOPE_ATTRIBUTE = 'engram_source_envelope_v1';
 export const WRITE_OWNER_ATTRIBUTE = 'engram_write_owner_v1';
+export const WRITE_OWNER_V2_ATTRIBUTE = 'engram_write_owner_v2';
+export const WRITE_OWNER_V3_ATTRIBUTE = COMPOSITIONAL_CAPTURE_V3_OWNER_ATTRIBUTE;
+export const SOURCE_ENVELOPE_V2_ATTRIBUTE = COMPOSITIONAL_CAPTURE_V2_ENVELOPE_ATTRIBUTE;
+export const WRITE_OWNER_V4_ATTRIBUTE = AUTONOMOUS_CAPTURE_V4_OWNER_ATTRIBUTE;
+export const SOURCE_ENVELOPE_V3_ATTRIBUTE = AUTONOMOUS_CAPTURE_V3_ENVELOPE_ATTRIBUTE;
+const PROTECTED_EPISODE_ATTRIBUTES = [
+  SOURCE_ENVELOPE_ATTRIBUTE,
+  WRITE_OWNER_ATTRIBUTE,
+  WRITE_OWNER_V2_ATTRIBUTE,
+  WRITE_OWNER_V3_ATTRIBUTE,
+  SOURCE_ENVELOPE_V2_ATTRIBUTE,
+  WRITE_OWNER_V4_ATTRIBUTE,
+  SOURCE_ENVELOPE_V3_ATTRIBUTE,
+] as const;
 
 const MAX_BINDINGS_PER_SUBJECT = 32;
 const MAX_BINDING_AUDIT = 20;
@@ -90,6 +136,11 @@ export function automaticWriteOwnerIdempotencyKey(
   owner: Pick<AutomaticWriteOwner, 'turn' | 'role'>,
 ): string {
   return `automatic:${sha256(owner.turn)}:${owner.role}`;
+}
+
+/** Detached immutable copy for storage caches and returned graph snapshots. */
+export function immutableAutomaticLedgerSnapshot(ledger: AutomaticLedger): AutomaticLedger {
+  return deepFreeze(cloneJson(ledger));
 }
 
 function bindingFingerprint(record: Omit<AutomaticBindingRecord, 'fingerprint'>): string {
@@ -167,6 +218,14 @@ function allBindings(graph: GraphData, check?: () => void): LocatedBinding[] {
     }
   }
   return records;
+}
+
+/** Read-only whole-registry validation before private indexed projections. */
+export function assertAutomaticBindingRegistryIntegrity(
+  graph: GraphData,
+  check?: () => void,
+): void {
+  allBindings(graph, check);
 }
 
 function immutableRecord(record: AutomaticBindingRecord): AutomaticBindingRecord {
@@ -479,10 +538,30 @@ export function protectAutomaticEntity(entity: EntityNode): EntityNode {
 }
 
 function isOwnedEpisode(episode: { attributes?: Record<string, unknown> }): boolean {
-  return (
-    hasOwn(episode.attributes, SOURCE_ENVELOPE_ATTRIBUTE) ||
-    hasOwn(episode.attributes, WRITE_OWNER_ATTRIBUTE)
+  return Object.keys(episode.attributes ?? {}).some(
+    (key) => key.startsWith('engram_write_owner_v') || key.startsWith('engram_source_envelope_v'),
   );
+}
+
+/** Presence protects a source even when its operation/receipt cannot be recovered. */
+export function hasAutonomousSourceOwnership(episode: {
+  attributes?: Record<string, unknown>;
+}): boolean {
+  return (
+    hasOwn(episode.attributes, WRITE_OWNER_V4_ATTRIBUTE) ||
+    hasOwn(episode.attributes, SOURCE_ENVELOPE_V3_ATTRIBUTE)
+  );
+}
+
+function assertKnownEpisodeOwnerVersions(attributes: Record<string, unknown>): void {
+  for (const key of Object.keys(attributes)) {
+    if (
+      (key.startsWith('engram_write_owner_v') || key.startsWith('engram_source_envelope_v')) &&
+      !PROTECTED_EPISODE_ATTRIBUTES.some((known) => known === key)
+    ) {
+      fail('invalid_write_owner');
+    }
+  }
 }
 
 function policyMatches(value: unknown): boolean {
@@ -493,9 +572,25 @@ function validateEpisodeProtectedAttributes<T extends CreateEpisodicNode | Episo
   episode: T,
 ): T {
   const attributes = episode.attributes ?? {};
+  assertKnownEpisodeOwnerVersions(attributes);
+  if (
+    hasOwn(attributes, WRITE_OWNER_V4_ATTRIBUTE) ||
+    hasOwn(attributes, SOURCE_ENVELOPE_V3_ATTRIBUTE)
+  ) {
+    const reconstructed = reconstructAutonomousPersonalStoredSourceV4(episode);
+    return { ...episode, attributes: reconstructed.source.attributes };
+  }
   const hasEnvelope = hasOwn(attributes, SOURCE_ENVELOPE_ATTRIBUTE);
   const hasOwner = hasOwn(attributes, WRITE_OWNER_ATTRIBUTE);
-  if (!hasEnvelope && !hasOwner) return episode;
+  const hasV2Owner = hasOwn(attributes, WRITE_OWNER_V2_ATTRIBUTE);
+  if (
+    hasOwn(attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+    hasOwn(attributes, SOURCE_ENVELOPE_V2_ATTRIBUTE)
+  ) {
+    const tuple = validateCompositionalAutomaticSourceTupleV3(episode);
+    return { ...episode, attributes: tuple.source.attributes };
+  }
+  if (!hasEnvelope && !hasOwner && !hasV2Owner) return episode;
   if (hasEnvelope && !hasOwner) fail('invalid_write_owner');
 
   const copiedAttributes = cloneJson(attributes);
@@ -585,6 +680,95 @@ function validateEpisodeProtectedAttributes<T extends CreateEpisodicNode | Episo
     }
     copiedAttributes[WRITE_OWNER_ATTRIBUTE] = cloneJson(owner);
   }
+  if (hasV2Owner) {
+    const parsed = AutomaticCaptureSourceOwnerStoredV2Schema.safeParse(
+      copiedAttributes[WRITE_OWNER_V2_ATTRIBUTE],
+    );
+    if (!parsed.success) fail('invalid_write_owner');
+    const owner = parsed.data;
+    if (
+      episode.content.length === 0 ||
+      episode.content.length > 65_536 ||
+      Buffer.byteLength(episode.content, 'utf8') > 65_536 ||
+      (episode.source_type ?? 'message') !== 'message' ||
+      owner.namespace !== episode.group_id ||
+      owner.sourceContentHash !== sha256(episode.content) ||
+      episode.idempotency_key !== automaticWriteOwnerIdempotencyKey(owner)
+    ) {
+      fail('invalid_write_owner');
+    }
+    for (let index = 0; index < episode.content.length; index++) {
+      const unit = episode.content.charCodeAt(index);
+      if (unit >= 0xd800 && unit <= 0xdbff) {
+        const next = episode.content.charCodeAt(++index);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) fail('invalid_write_owner');
+      } else if (unit >= 0xdc00 && unit <= 0xdfff) fail('invalid_write_owner');
+    }
+    if (owner.purpose === 'human_turn_memory') {
+      if (
+        !hasOwner ||
+        !envelope ||
+        episode.role !== 'human' ||
+        episode.episode_kind !== 'active_human'
+      )
+        fail('invalid_write_owner');
+      const legacy = AutomaticWriteOwnerSchema.parse(copiedAttributes[WRITE_OWNER_ATTRIBUTE]);
+      if (
+        owner.storeHash !== legacy.store ||
+        owner.turn !== legacy.turn ||
+        owner.issuer !== legacy.issuer ||
+        owner.actorReference !== legacy.actor ||
+        canonical(owner.binding) !== canonical(legacy.binding) ||
+        canonical(owner.policy) !== canonical(legacy.policy) ||
+        owner.intentEvidence !== envelope.explicitIntent
+      ) {
+        fail('invalid_write_owner');
+      }
+      const captured = captureEnvelope(
+        episode.content.slice(envelope.humanRegion.start, envelope.humanRegion.end),
+        episode.content,
+        {
+          namespace: owner.namespace,
+          issuer: owner.issuer,
+          actorReference: owner.actorReference,
+          quoteRegions: envelope.quoteRegions,
+          ...(envelope.mappingAuthority === 'application_region'
+            ? { applicationOwnedWrapper: true as const, humanRegion: envelope.humanRegion }
+            : {}),
+        },
+        owner.binding,
+        owner.intentSetting,
+        owner.policy,
+      );
+      if (!captured.ok || canonical(captured.envelope) !== canonical(envelope))
+        fail('invalid_write_owner');
+    } else if (
+      hasOwner ||
+      hasEnvelope ||
+      episode.role !== 'ai' ||
+      episode.episode_kind !== 'assistant_reply'
+    ) {
+      fail('invalid_write_owner');
+    }
+    const stableProducerHash = hashAutomaticCaptureV2({
+      source_workflow_id: episode.source_workflow_id ?? null,
+      source_message_id: episode.source_message_id ?? null,
+      conversation_id: episode.conversation_id ?? null,
+      sender_id: episode.sender_id ?? null,
+      source_type: episode.source_type ?? 'message',
+      episode_kind: episode.episode_kind,
+      quoted_message_id: episode.quoted_message_id ?? null,
+    });
+    const referenceTime = Date.parse(episode.reference_time);
+    if (!Number.isFinite(referenceTime)) fail('invalid_write_owner');
+    const eventTimeHash = hashAutomaticCaptureV2({
+      mode: owner.eventTimeMode,
+      normalizedReferenceTime: new Date(referenceTime).toISOString(),
+    });
+    if (owner.stableProducerHash !== stableProducerHash || owner.eventTimeHash !== eventTimeHash)
+      fail('invalid_write_owner');
+    copiedAttributes[WRITE_OWNER_V2_ATTRIBUTE] = cloneJson(owner);
+  }
   return { ...episode, attributes: copiedAttributes };
 }
 
@@ -594,10 +778,587 @@ export function prepareAutomaticEpisodeInput<T extends CreateEpisodicNode | Epis
   return validateEpisodeProtectedAttributes(episode);
 }
 
+/** Derive immutable ledger identity only from an already stored, validated owner source. */
+export function automaticOperationIdentityForOwnedSource(
+  episode: EpisodicNode,
+  expectedOwner: AutomaticWriteOwner,
+): AutomaticOperationIdentity {
+  const validated = prepareAutomaticEpisodeInput(episode);
+  if (
+    hasOwn(validated.attributes, WRITE_OWNER_V2_ATTRIBUTE) ||
+    hasOwn(validated.attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+    hasOwn(validated.attributes, WRITE_OWNER_V4_ATTRIBUTE)
+  )
+    fail('unsupported_capture_version');
+  if (!hasOwn(validated.attributes, WRITE_OWNER_ATTRIBUTE)) fail('legacy_source_not_owned');
+  const owner = AutomaticWriteOwnerSchema.parse(validated.attributes[WRITE_OWNER_ATTRIBUTE]);
+  const parsedExpectedOwner = AutomaticWriteOwnerSchema.parse(expectedOwner);
+  if (canonical(owner) !== canonical(parsedExpectedOwner)) fail('owned_source_mismatch');
+
+  const sourceAttributes = { ...validated.attributes };
+  // Queue ownership is operational state; it is not part of the immutable source payload.
+  delete sourceAttributes.engram_extraction_queue_v1;
+  const sourceFields = Object.fromEntries(
+    Object.entries({ ...validated, attributes: sourceAttributes }).filter(
+      ([key]) => key !== 'updated_at',
+    ),
+  );
+  const sourceHash = sha256(canonical(sourceFields));
+  const envelope = hasOwn(validated.attributes, SOURCE_ENVELOPE_ATTRIBUTE)
+    ? validated.attributes[SOURCE_ENVELOPE_ATTRIBUTE]
+    : null;
+  // Preserve the original producer provenance even if an operator later reviews or
+  // changes mutable trust, confidence, or display metadata on the stored episode.
+  const producerProvenance = {
+    uuid: validated.uuid,
+    group_id: validated.group_id,
+    role: validated.role,
+    source_type: validated.source_type,
+    episode_kind: validated.episode_kind,
+    reference_time: validated.reference_time,
+    previous_episode_uuid: validated.previous_episode_uuid,
+    source_message_id: validated.source_message_id,
+    idempotency_key: validated.idempotency_key,
+    conversation_id: validated.conversation_id,
+    sender_id: validated.sender_id,
+    source_workflow_id: validated.source_workflow_id,
+    source_execution_id: validated.source_execution_id,
+    quoted_message_id: validated.quoted_message_id,
+  };
+
+  return AutomaticOperationIdentitySchema.parse({
+    storeHash: owner.store,
+    namespace: owner.namespace,
+    issuer: owner.issuer,
+    actorReference: owner.actor,
+    turn: owner.turn,
+    role: owner.role,
+    sourceId: validated.uuid,
+    sourceHash,
+    originalProducerHash: sha256(canonical({ owner, envelope, producerProvenance })),
+    binding: owner.binding,
+  });
+}
+
+/** Reuse the captured full-source fingerprint after mutable review-state changes. */
+export function reconcileAutomaticOperationIdentity(
+  observed: AutomaticOperationIdentity,
+  captured: AutomaticOperationIdentity,
+): AutomaticOperationIdentity | null {
+  const observedImmutable = Object.fromEntries(
+    Object.entries(observed).filter(([key]) => key !== 'sourceHash'),
+  );
+  const capturedImmutable = Object.fromEntries(
+    Object.entries(captured).filter(([key]) => key !== 'sourceHash'),
+  );
+  if (canonical(observedImmutable) !== canonical(capturedImmutable)) return null;
+  return AutomaticOperationIdentitySchema.parse({ ...observed, sourceHash: captured.sourceHash });
+}
+
+function deriveAutomaticCaptureOperationIdentityForOwnedSource(
+  episode: EpisodicNode,
+  suppliedDescriptor: AutomaticOperationDescriptorV2,
+  allowStoredV4AssistantReference = false,
+): AutomaticOperationIdentityV2 {
+  const validated = prepareAutomaticEpisodeInput(episode);
+  if (
+    hasOwn(validated.attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+    hasAutonomousSourceOwnership(validated)
+  )
+    fail('unsupported_capture_version');
+  const owner = (
+    allowStoredV4AssistantReference
+      ? AutomaticCaptureSourceOwnerStoredV2Schema
+      : AutomaticCaptureSourceOwnerV2Schema
+  ).parse(validated.attributes[WRITE_OWNER_V2_ATTRIBUTE]);
+  const descriptor = AutomaticOperationDescriptorV2Schema.parse(suppliedDescriptor);
+  if (
+    owner.purpose !== descriptor.purpose ||
+    owner.settingsHash !== descriptor.settingsHash ||
+    owner.requestedTrustLevel !== descriptor.requestedTrustLevel ||
+    owner.intentSetting !== descriptor.intentSetting ||
+    canonical(owner.policy) !== canonical(descriptor.policy) ||
+    canonical(owner.assistantWriteAuthority) !== canonical(descriptor.assistantWriteAuthority)
+  ) {
+    fail('invalid_source_owner');
+  }
+  const sourceAttributes = { ...validated.attributes };
+  delete sourceAttributes.engram_extraction_queue_v1;
+  const sourceFields = Object.fromEntries(
+    Object.entries({ ...validated, attributes: sourceAttributes }).filter(
+      ([key]) => key !== 'updated_at',
+    ),
+  );
+  const immutableProducerProvenance = {
+    uuid: validated.uuid,
+    group_id: validated.group_id,
+    content: validated.content,
+    role: validated.role,
+    source_type: validated.source_type,
+    episode_kind: validated.episode_kind,
+    reference_time: validated.reference_time,
+    previous_episode_uuid: validated.previous_episode_uuid,
+    source_message_id: validated.source_message_id,
+    idempotency_key: validated.idempotency_key,
+    conversation_id: validated.conversation_id,
+    sender_id: validated.sender_id,
+    source_workflow_id: validated.source_workflow_id,
+    source_execution_id: validated.source_execution_id,
+    quoted_message_id: validated.quoted_message_id,
+    created_at: validated.created_at,
+  };
+  const requestedAuthorityHash = hashAutomaticCaptureV2({
+    lifecycle: owner.lifecycle,
+    storeHash: owner.storeHash,
+    namespace: owner.namespace,
+    issuer: owner.issuer,
+    actorReference: owner.actorReference,
+    turn: owner.turn,
+    role: owner.role,
+    purpose: owner.purpose,
+    sourceId: validated.uuid,
+    sourceContentHash: owner.sourceContentHash,
+    stableProducerHash: owner.stableProducerHash,
+    eventTimeMode: owner.eventTimeMode,
+    eventTimeHash: owner.eventTimeHash,
+    settingsHash: owner.settingsHash,
+    binding: owner.binding,
+  });
+  return AutomaticOperationIdentityV2Schema.parse({
+    lifecycle: owner.lifecycle,
+    storeHash: owner.storeHash,
+    namespace: owner.namespace,
+    issuer: owner.issuer,
+    actorReference: owner.actorReference,
+    turn: owner.turn,
+    role: owner.role,
+    purpose: owner.purpose,
+    binding: owner.binding,
+    sourceId: validated.uuid,
+    sourceHash: sha256(canonical(sourceFields)),
+    originalProducerHash: hashAutomaticCaptureV2({
+      v2Owner: owner,
+      exactV1OwnerOrNull: validated.attributes[WRITE_OWNER_ATTRIBUTE] ?? null,
+      exactV1EnvelopeOrNull: validated.attributes[SOURCE_ENVELOPE_ATTRIBUTE] ?? null,
+      immutableProducerProvenance,
+    }),
+    stableProducerHash: owner.stableProducerHash,
+    requestedAuthorityHash,
+  });
+}
+
+/** Derive v2 hashes from a native validated record; this is not a write capability. */
+export function automaticCaptureOperationIdentityForOwnedSource(
+  episode: EpisodicNode,
+  suppliedDescriptor: AutomaticOperationDescriptorV2,
+): AutomaticOperationIdentityV2 {
+  return deriveAutomaticCaptureOperationIdentityForOwnedSource(episode, suppliedDescriptor);
+}
+
+/** Explicit stored-assistant identity DATA. This grants no native invocation or write authority. */
+export function autonomousPersonalAssistantOperationIdentityV4(
+  episode: EpisodicNode,
+  suppliedDescriptor: AutomaticOperationDescriptorV2,
+): AutomaticOperationIdentityV2 {
+  const owner = AutomaticCaptureSourceOwnerStoredV2Schema.parse(
+    episode.attributes[WRITE_OWNER_V2_ATTRIBUTE],
+  );
+  const descriptor = AutomaticOperationDescriptorV2Schema.parse(suppliedDescriptor);
+  if (
+    owner.purpose !== 'assistant_final_save' ||
+    owner.assistantWriteAuthority.kind !== 'owned_human_turn_v4' ||
+    descriptor.purpose !== 'assistant_final_save' ||
+    descriptor.assistantWriteAuthority.kind !== 'owned_human_turn_v4'
+  )
+    fail('unsupported_capture_version');
+  return deriveAutomaticCaptureOperationIdentityForOwnedSource(episode, descriptor, true);
+}
+
+/** Preserve the original full-source hash after explicitly mutable review/display updates. */
+export function reconcileAutomaticCaptureOperationIdentity(
+  observed: AutomaticOperationIdentityV2,
+  captured: AutomaticOperationIdentityV2,
+): AutomaticOperationIdentityV2 | null {
+  const immutable = (value: AutomaticOperationIdentityV2) =>
+    Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'sourceHash'));
+  if (canonical(immutable(observed)) !== canonical(immutable(captured))) return null;
+  return AutomaticOperationIdentityV2Schema.parse({ ...observed, sourceHash: captured.sourceHash });
+}
+
+/** Reject deletion of an operation source or either adjacent source-chain episode. */
+export function assertNoAutomaticOperationChainImpact(
+  ledger: AutomaticLedger | undefined,
+  episodes: EpisodicNode[],
+  deletingSourceIds: string[],
+  namespace?: string,
+): void {
+  if (deletingSourceIds.length === 0) return;
+  const deleting = new Set(deletingSourceIds);
+  const episodesById = new Map(episodes.map((episode) => [episode.uuid, episode]));
+  const deletingPredecessors = new Set(
+    episodes
+      .filter((episode) => deleting.has(episode.uuid) && episode.previous_episode_uuid)
+      .map((episode) => episode.previous_episode_uuid!),
+  );
+  const protectedSources = episodes.filter(
+    (episode) =>
+      (namespace === undefined || episode.group_id === namespace) &&
+      hasAutonomousSourceOwnership(episode),
+  );
+  for (const source of protectedSources) {
+    if (
+      deleting.has(source.uuid) ||
+      (source.previous_episode_uuid && deleting.has(source.previous_episode_uuid)) ||
+      deletingPredecessors.has(source.uuid)
+    )
+      fail('source_delete_forbidden');
+  }
+  for (const operation of ledger?.operations ?? []) {
+    if (namespace !== undefined && operation.identity.namespace !== namespace) continue;
+    const source = episodesById.get(operation.identity.sourceId);
+    if (!source) fail('invalid_source_reference');
+    if (
+      deleting.has(source.uuid) ||
+      (source.previous_episode_uuid && deleting.has(source.previous_episode_uuid)) ||
+      deletingPredecessors.has(source.uuid)
+    ) {
+      fail('source_delete_forbidden');
+    }
+  }
+}
+
+/** Check native ledger source linkage without treating mutable review/trust fields as source identity. */
+export function assertAutomaticLedgerSourceIntegrity(
+  graph: GraphData,
+  codeOwnedCheck?: () => void,
+): void {
+  const checkedWork = <T>(work: () => T): T => {
+    codeOwnedCheck?.();
+    let result!: T;
+    let failed = false;
+    let failure: unknown;
+    try {
+      result = work();
+    } catch (error) {
+      failed = true;
+      failure = error;
+    }
+    codeOwnedCheck?.();
+    if (failed) throw failure;
+    return result;
+  };
+  const attemptCheckedWork = <T>(
+    work: () => T,
+  ): { readonly ok: true; readonly value: T } | { readonly ok: false } => {
+    codeOwnedCheck?.();
+    let value!: T;
+    let failed = false;
+    try {
+      value = work();
+    } catch {
+      failed = true;
+    }
+    codeOwnedCheck?.();
+    return failed ? { ok: false } : { ok: true, value };
+  };
+
+  codeOwnedCheck?.();
+  const ledger = graph.automatic_operations_v1 as AutomaticLedger | undefined;
+  let hasV4 = false;
+  codeOwnedCheck?.();
+  for (let index = 0; index < graph.episodes.length; index += 1) {
+    codeOwnedCheck?.();
+    if (!(index in graph.episodes)) continue;
+    const episode = graph.episodes[index]!;
+    if (hasAutonomousSourceOwnership(episode)) {
+      hasV4 = true;
+      break;
+    }
+  }
+  codeOwnedCheck?.();
+  if (!hasV4 && ledger) {
+    codeOwnedCheck?.();
+    for (let index = 0; index < ledger.operations.length; index += 1) {
+      codeOwnedCheck?.();
+      if (!(index in ledger.operations)) continue;
+      const operation = ledger.operations[index]!;
+      if (operation.version === 4) {
+        hasV4 = true;
+        break;
+      }
+    }
+    codeOwnedCheck?.();
+  }
+  if (hasV4) {
+    const identifiers = new Set<string>();
+    codeOwnedCheck?.();
+    for (const record of graph.entities) {
+      codeOwnedCheck?.();
+      if (identifiers.has(record.uuid)) fail('duplicate_global_id');
+      identifiers.add(record.uuid);
+    }
+    codeOwnedCheck?.();
+    for (const record of graph.edges) {
+      codeOwnedCheck?.();
+      if (identifiers.has(record.uuid)) fail('duplicate_global_id');
+      identifiers.add(record.uuid);
+    }
+    codeOwnedCheck?.();
+    for (const episode of graph.episodes) {
+      codeOwnedCheck?.();
+      if (identifiers.has(episode.uuid)) fail('duplicate_global_id');
+      identifiers.add(episode.uuid);
+    }
+    codeOwnedCheck?.();
+    for (const operation of ledger?.operations ?? []) {
+      codeOwnedCheck?.();
+      if (identifiers.has(operation.operationId)) fail('duplicate_global_id');
+      identifiers.add(operation.operationId);
+    }
+    codeOwnedCheck?.();
+  }
+  const episodes = new Map<string, (typeof graph.episodes)[number]>();
+  codeOwnedCheck?.();
+  for (const episode of graph.episodes) {
+    codeOwnedCheck?.();
+    episodes.set(episode.uuid, episode);
+  }
+  codeOwnedCheck?.();
+  const entities = new Map<string, (typeof graph.entities)[number]>();
+  codeOwnedCheck?.();
+  for (const entity of graph.entities) {
+    codeOwnedCheck?.();
+    entities.set(entity.uuid, entity);
+  }
+  codeOwnedCheck?.();
+  const operationsBySource = new Map<string, StoredAutomaticOperation>();
+  codeOwnedCheck?.();
+  for (const operation of ledger?.operations ?? []) {
+    codeOwnedCheck?.();
+    operationsBySource.set(operation.identity.sourceId, operation);
+  }
+  codeOwnedCheck?.();
+  for (const episode of graph.episodes) {
+    codeOwnedCheck?.();
+    assertKnownEpisodeOwnerVersions(episode.attributes);
+    if (hasAutonomousSourceOwnership(episode)) {
+      const reconstructed = checkedWork(() => reconstructAutonomousPersonalStoredSourceV4(episode));
+      const owner = reconstructed.tuple.owner;
+      if (entities.get(owner.binding.subjectId)?.group_id !== owner.namespace)
+        fail('invalid_source_reference');
+      if (episode.previous_episode_uuid) {
+        const previous = episodes.get(episode.previous_episode_uuid);
+        if (!previous || previous.group_id !== episode.group_id) fail('invalid_source_reference');
+      }
+      continue;
+    }
+    if (
+      hasOwn(episode.attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+      hasOwn(episode.attributes, SOURCE_ENVELOPE_V2_ATTRIBUTE)
+    ) {
+      const tuple = checkedWork(() => validateCompositionalAutomaticSourceTupleV3(episode));
+      if (entities.get(tuple.owner.binding.subjectId)?.group_id !== tuple.owner.namespace)
+        fail('invalid_source_reference');
+      continue;
+    }
+    if (!hasOwn(episode.attributes, WRITE_OWNER_V2_ATTRIBUTE)) continue;
+    checkedWork(() => prepareAutomaticEpisodeInput(episode));
+    const owner = checkedWork(() =>
+      AutomaticCaptureSourceOwnerStoredV2Schema.parse(episode.attributes[WRITE_OWNER_V2_ATTRIBUTE]),
+    );
+    if (
+      owner.purpose === 'human_turn_memory' &&
+      entities.get(owner.binding.subjectId)?.group_id !== owner.namespace
+    ) {
+      fail('invalid_source_reference');
+    }
+    if (owner.purpose === 'assistant_final_save') {
+      const authority = owner.assistantWriteAuthority;
+      const human = operationsBySource.get(authority.sourceId);
+      const humanEpisode = episodes.get(authority.sourceId);
+      const matchesV4Parent =
+        authority.kind === 'owned_human_turn_v4' &&
+        authority.parentFamily === 'autonomous-personal-v1' &&
+        human?.version === 4 &&
+        human.state === 'committed' &&
+        human.descriptor.purpose === 'human_turn_memory' &&
+        human.identity.role === 'human' &&
+        human.identity.purpose === 'human_turn_memory' &&
+        human.operationId === authority.parentOperationId &&
+        human.identity.storeHash === owner.storeHash &&
+        human.identity.namespace === owner.namespace &&
+        human.identity.issuer === owner.issuer &&
+        human.identity.actorReference === owner.actorReference &&
+        human.identity.turn === owner.turn &&
+        human.identity.sourceId === authority.sourceId &&
+        human.identity.sourceHash === authority.sourceHash &&
+        human.identity.descriptorHash === authority.descriptorHash &&
+        human.identity.requestedAuthorityHash === authority.requestedAuthorityHash &&
+        humanEpisode !== undefined &&
+        humanEpisode.role === 'human' &&
+        humanEpisode.group_id === owner.namespace &&
+        hasAutonomousSourceOwnership(humanEpisode) &&
+        (() => {
+          const reconstructed = attemptCheckedWork(() => {
+            const sourceIdentity = reconstructAutonomousPersonalStoredSourceIdentityV4({
+              source: humanEpisode,
+              descriptor: human.descriptor,
+            });
+            return {
+              identityMatches:
+                canonical(sourceIdentity.tuple.identity) === canonical(human.identity),
+              descriptorHash: hashAutonomousPersonalDescriptorV4(human.descriptor),
+            };
+          });
+          const receipt = human.terminalReceipt;
+          return (
+            reconstructed.ok &&
+            reconstructed.value.identityMatches &&
+            reconstructed.value.descriptorHash === authority.descriptorHash &&
+            (receipt.kind === 'human_autonomous_capture_committed' ||
+              receipt.kind === 'human_autonomous_source_deferred_committed' ||
+              receipt.kind === 'human_autonomous_source_verdict_committed') &&
+            receipt.operationId === authority.parentOperationId &&
+            receipt.operationId === human.operationId &&
+            receipt.sourceId === authority.sourceId &&
+            receipt.sourceHash === authority.sourceHash &&
+            receipt.descriptorHash === authority.descriptorHash
+          );
+        })();
+      const matchesV2OrV3Parent =
+        authority.kind === 'owned_human_turn' &&
+        ((human?.version === 2 &&
+          human.identity.purpose === 'human_turn_memory' &&
+          human.state === 'committed' &&
+          human.terminalReceipt.kind === 'human_capture_committed' &&
+          human.identity.storeHash === owner.storeHash &&
+          human.identity.namespace === owner.namespace &&
+          human.identity.issuer === owner.issuer &&
+          human.identity.actorReference === owner.actorReference &&
+          human.identity.turn === owner.turn &&
+          human.identity.sourceHash === authority.sourceHash &&
+          hashAutomaticCaptureV2(human.descriptor) === authority.descriptorHash &&
+          human.identity.requestedAuthorityHash === authority.requestedAuthorityHash) ||
+          (human?.version === 3 &&
+            human.identity.purpose === 'human_turn_memory' &&
+            human.state === 'committed' &&
+            (human.terminalReceipt.kind === 'human_compositional_capture_committed' ||
+              human.terminalReceipt.kind === 'human_compositional_source_verdict_committed') &&
+            human.identity.storeHash === owner.storeHash &&
+            human.identity.namespace === owner.namespace &&
+            human.identity.issuer === owner.issuer &&
+            human.identity.actorReference === owner.actorReference &&
+            human.identity.turn === owner.turn &&
+            human.identity.sourceHash === authority.sourceHash &&
+            human.identity.descriptorHash === authority.descriptorHash &&
+            human.identity.requestedAuthorityHash === authority.requestedAuthorityHash));
+      const matchesCommittedHuman = matchesV4Parent || matchesV2OrV3Parent;
+      if (!matchesCommittedHuman) {
+        fail('invalid_source_reference');
+      }
+    }
+  }
+  codeOwnedCheck?.();
+  if (!ledger) return;
+  for (const operation of ledger.operations) {
+    codeOwnedCheck?.();
+    const episode = episodes.get(operation.identity.sourceId);
+    if (
+      !episode ||
+      episode.group_id !== operation.identity.namespace ||
+      (operation.identity.role === 'human' && episode.role !== 'human') ||
+      (operation.identity.role === 'assistant' && episode.role !== 'ai')
+    ) {
+      fail('invalid_source_reference');
+    }
+
+    if (operation.version === 4) {
+      const result = attemptCheckedWork(() => {
+        const reconstructed = reconstructAutonomousPersonalStoredSourceIdentityV4({
+          source: episode,
+          descriptor: operation.descriptor,
+        });
+        return canonical(reconstructed.tuple.identity) === canonical(operation.identity);
+      });
+      if (!result.ok || !result.value) {
+        fail('invalid_source_owner');
+      }
+      continue;
+    }
+    if (operation.version === 3) {
+      const result = attemptCheckedWork(() => {
+        const observed = reconstructCompositionalAutomaticSourceIdentityV3(
+          episode,
+          operation.descriptor,
+        );
+        return Boolean(
+          reconcileCompositionalCaptureOperationIdentityV3(observed.identity, operation.identity),
+        );
+      });
+      if (!result.ok || !result.value) {
+        fail('invalid_source_owner');
+      }
+      continue;
+    }
+    if (operation.version === 2) {
+      const result = attemptCheckedWork(() =>
+        operation.descriptor.purpose === 'assistant_final_save' &&
+        operation.descriptor.assistantWriteAuthority.kind === 'owned_human_turn_v4'
+          ? deriveAutomaticCaptureOperationIdentityForOwnedSource(
+              episode,
+              operation.descriptor,
+              true,
+            )
+          : automaticCaptureOperationIdentityForOwnedSource(episode, operation.descriptor),
+      );
+      if (!result.ok) {
+        fail('invalid_source_owner');
+      }
+      const observed: AutomaticOperationIdentityV2 = result.value;
+      if (!reconcileAutomaticCaptureOperationIdentity(observed, operation.identity))
+        fail('invalid_source_owner');
+      continue;
+    }
+
+    const result = attemptCheckedWork(() => {
+      const owner = AutomaticWriteOwnerSchema.parse(episode.attributes[WRITE_OWNER_ATTRIBUTE]);
+      const sourceIdentity = automaticOperationIdentityForOwnedSource(episode, owner);
+      return { owner, sourceIdentity };
+    });
+    if (!result.ok) {
+      fail('invalid_source_owner');
+    }
+    const { owner, sourceIdentity } = result.value;
+    if (
+      operation.identity.storeHash !== owner.store ||
+      operation.identity.namespace !== owner.namespace ||
+      operation.identity.issuer !== owner.issuer ||
+      operation.identity.actorReference !== owner.actor ||
+      operation.identity.turn !== owner.turn ||
+      operation.identity.role !== owner.role ||
+      canonical(operation.identity.binding) !== canonical(owner.binding) ||
+      operation.identity.originalProducerHash !== sourceIdentity.originalProducerHash ||
+      (operation.descriptor && canonical(operation.descriptor.policy) !== canonical(owner.policy))
+    ) {
+      fail('invalid_source_owner');
+    }
+  }
+  codeOwnedCheck?.();
+}
+
 export function assertAutomaticEpisodeTrustedPath(
   episode: CreateEpisodicNode | EpisodicNode,
   trustedPath: boolean,
 ): void {
+  assertKnownEpisodeOwnerVersions(episode.attributes ?? {});
+  // The legacy trusted boolean is never a replay-safe v2 creation capability.
+  if (
+    hasOwn(episode.attributes, WRITE_OWNER_V2_ATTRIBUTE) ||
+    hasOwn(episode.attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+    hasOwn(episode.attributes, SOURCE_ENVELOPE_V2_ATTRIBUTE) ||
+    hasAutonomousSourceOwnership(episode)
+  )
+    fail('trusted_capture_writer_required');
   if (!trustedPath && isOwnedEpisode(episode)) fail('trusted_writer_required');
 }
 
@@ -629,25 +1390,54 @@ const EPISODE_REPLAY_FIELDS: EpisodeSourceField[] = [
   'sender_id',
   'sender_name',
   'source_workflow_id',
-  'source_execution_id',
   'quoted_message_id',
   'trust_level',
   'confidence',
 ];
-const EPISODE_IMPORT_FIELDS: Array<EpisodeSourceField | 'reference_time'> = [
-  ...EPISODE_REPLAY_FIELDS,
+// Redelivery may run in another execution; the original stored execution stays immutable.
+// Import invariants are independent so replay's attempt-field exclusions cannot weaken them.
+const EPISODE_IMPORT_FIELDS: Array<Exclude<keyof EpisodicNode, 'attributes'>> = [
+  'uuid',
+  'group_id',
+  'content',
+  'role',
+  'source_type',
+  'episode_kind',
+  'source_message_id',
+  'idempotency_key',
+  'conversation_id',
+  'sender_id',
+  'sender_name',
+  'source_workflow_id',
+  'source_execution_id',
+  'quoted_message_id',
+  'trust_level',
+  'confidence',
+  'review_status',
   'reference_time',
+  'previous_episode_uuid',
+  'created_at',
+  'updated_at',
 ];
 
 function assertSameEpisodeSource(
   existing: EpisodicNode,
   incoming: CreateEpisodicNode | EpisodicNode,
 ): void {
+  // New-family producer provenance is already separated from delivery attempts.
+  // Keep its explicit original execution immutable; legacy replay compatibility
+  // retains its independently reviewed exclusion.
+  if (
+    (hasOwn(existing.attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+      hasAutonomousSourceOwnership(existing)) &&
+    existing.source_execution_id !== incoming.source_execution_id
+  )
+    fail('owned_source_mismatch');
   for (const field of EPISODE_REPLAY_FIELDS) {
     if (canonical(existing[field]) !== canonical(incoming[field])) fail('owned_source_mismatch');
   }
   const incomingAttributes = incoming.attributes ?? {};
-  for (const key of [SOURCE_ENVELOPE_ATTRIBUTE, WRITE_OWNER_ATTRIBUTE]) {
+  for (const key of PROTECTED_EPISODE_ATTRIBUTES) {
     const incomingHas = hasOwn(incomingAttributes, key);
     const existingHas = hasOwn(existing.attributes, key);
     if (incomingHas !== existingHas) fail('owned_source_mismatch');
@@ -674,9 +1464,10 @@ export function prepareAutomaticEpisodeUpdate<
   T extends { content?: string; attributes?: Record<string, unknown> },
 >(existing: EpisodicNode, updates: T): T {
   const hasExistingOwner = isOwnedEpisode(existing);
-  const hasIncomingReserved =
-    hasOwn(updates.attributes, SOURCE_ENVELOPE_ATTRIBUTE) ||
-    hasOwn(updates.attributes, WRITE_OWNER_ATTRIBUTE);
+  assertKnownEpisodeOwnerVersions(updates.attributes ?? {});
+  const hasIncomingReserved = PROTECTED_EPISODE_ATTRIBUTES.some((key) =>
+    hasOwn(updates.attributes, key),
+  );
   if (!hasExistingOwner && hasIncomingReserved) fail('reserved_attribute');
   if (!hasExistingOwner) return updates;
   prepareAutomaticEpisodeInput(existing);
@@ -684,7 +1475,7 @@ export function prepareAutomaticEpisodeUpdate<
     fail('owned_source_immutable');
   const attributes = updates.attributes;
   if (!attributes) return updates;
-  for (const key of [SOURCE_ENVELOPE_ATTRIBUTE, WRITE_OWNER_ATTRIBUTE]) {
+  for (const key of PROTECTED_EPISODE_ATTRIBUTES) {
     if (
       hasOwn(attributes, key) &&
       canonical(attributes[key]) !== canonical(existing.attributes[key])
@@ -702,6 +1493,29 @@ export function prepareAutomaticEpisodeUpdate<
       ...(hasOwn(existing.attributes, WRITE_OWNER_ATTRIBUTE)
         ? { [WRITE_OWNER_ATTRIBUTE]: cloneJson(existing.attributes[WRITE_OWNER_ATTRIBUTE]) }
         : {}),
+      ...(hasOwn(existing.attributes, WRITE_OWNER_V2_ATTRIBUTE)
+        ? { [WRITE_OWNER_V2_ATTRIBUTE]: cloneJson(existing.attributes[WRITE_OWNER_V2_ATTRIBUTE]) }
+        : {}),
+      ...(hasOwn(existing.attributes, WRITE_OWNER_V3_ATTRIBUTE)
+        ? { [WRITE_OWNER_V3_ATTRIBUTE]: cloneJson(existing.attributes[WRITE_OWNER_V3_ATTRIBUTE]) }
+        : {}),
+      ...(hasOwn(existing.attributes, SOURCE_ENVELOPE_V2_ATTRIBUTE)
+        ? {
+            [SOURCE_ENVELOPE_V2_ATTRIBUTE]: cloneJson(
+              existing.attributes[SOURCE_ENVELOPE_V2_ATTRIBUTE],
+            ),
+          }
+        : {}),
+      ...(hasOwn(existing.attributes, WRITE_OWNER_V4_ATTRIBUTE)
+        ? { [WRITE_OWNER_V4_ATTRIBUTE]: cloneJson(existing.attributes[WRITE_OWNER_V4_ATTRIBUTE]) }
+        : {}),
+      ...(hasOwn(existing.attributes, SOURCE_ENVELOPE_V3_ATTRIBUTE)
+        ? {
+            [SOURCE_ENVELOPE_V3_ATTRIBUTE]: cloneJson(
+              existing.attributes[SOURCE_ENVELOPE_V3_ATTRIBUTE],
+            ),
+          }
+        : {}),
     },
   };
 }
@@ -718,6 +1532,20 @@ export function assertAutomaticEpisodeBinding(
 ): void {
   const parsed = validateEpisodeProtectedAttributes(episode);
   const attributes = parsed.attributes ?? {};
+  if (hasAutonomousSourceOwnership(parsed)) fail('unsupported_capture_version');
+  if (hasOwn(attributes, WRITE_OWNER_V3_ATTRIBUTE)) {
+    const owner = CompositionalAutomaticCaptureSourceOwnerV3Schema.parse(
+      attributes[WRITE_OWNER_V3_ATTRIBUTE],
+    );
+    assertAutomaticBindingIdentity(
+      graph,
+      owner.namespace,
+      owner.issuer,
+      owner.actorReference,
+      owner.binding,
+    );
+    return;
+  }
   const envelope = hasOwn(attributes, SOURCE_ENVELOPE_ATTRIBUTE)
     ? (attributes[SOURCE_ENVELOPE_ATTRIBUTE] as AutomaticSourceEnvelope)
     : undefined;
@@ -776,6 +1604,16 @@ export function prepareAutomaticImport(incoming: GraphData, existing: GraphData)
   const episodes = incoming.episodes.map((episode) => {
     const validatedIncoming = prepareAutomaticEpisodeInput(episode);
     const current = existingEpisodes.get(episode.uuid);
+    if (
+      hasOwn(validatedIncoming.attributes, WRITE_OWNER_V2_ATTRIBUTE) ||
+      hasOwn(current?.attributes, WRITE_OWNER_V2_ATTRIBUTE) ||
+      hasOwn(validatedIncoming.attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+      hasOwn(current?.attributes, WRITE_OWNER_V3_ATTRIBUTE) ||
+      hasAutonomousSourceOwnership(validatedIncoming) ||
+      (current !== undefined && hasAutonomousSourceOwnership(current))
+    ) {
+      fail('owned_source_import_forbidden');
+    }
     if (!current) {
       if (isOwnedEpisode(validatedIncoming)) fail('owned_source_import_forbidden');
       return protectAutomaticEpisode(validatedIncoming);
@@ -789,7 +1627,7 @@ export function prepareAutomaticImport(incoming: GraphData, existing: GraphData)
       if (canonical(current[field]) !== canonical(validatedIncoming[field]))
         fail('owned_source_import_forbidden');
     }
-    for (const key of [SOURCE_ENVELOPE_ATTRIBUTE, WRITE_OWNER_ATTRIBUTE]) {
+    for (const key of PROTECTED_EPISODE_ATTRIBUTES) {
       if (
         hasOwn(validatedIncoming.attributes, key) &&
         canonical(validatedIncoming.attributes[key]) !== canonical(current.attributes[key])
@@ -797,20 +1635,21 @@ export function prepareAutomaticImport(incoming: GraphData, existing: GraphData)
         fail('owned_source_import_forbidden');
       }
     }
-    return protectAutomaticEpisode({
-      ...validatedIncoming,
-      attributes: {
-        ...validatedIncoming.attributes,
-        ...(hasOwn(current.attributes, SOURCE_ENVELOPE_ATTRIBUTE)
-          ? {
-              [SOURCE_ENVELOPE_ATTRIBUTE]: cloneJson(current.attributes[SOURCE_ENVELOPE_ATTRIBUTE]),
-            }
-          : {}),
-        ...(hasOwn(current.attributes, WRITE_OWNER_ATTRIBUTE)
-          ? { [WRITE_OWNER_ATTRIBUTE]: cloneJson(current.attributes[WRITE_OWNER_ATTRIBUTE]) }
-          : {}),
-      },
-    });
+    const attributes = {
+      ...validatedIncoming.attributes,
+      ...(hasOwn(current.attributes, SOURCE_ENVELOPE_ATTRIBUTE)
+        ? {
+            [SOURCE_ENVELOPE_ATTRIBUTE]: cloneJson(current.attributes[SOURCE_ENVELOPE_ATTRIBUTE]),
+          }
+        : {}),
+      ...(hasOwn(current.attributes, WRITE_OWNER_ATTRIBUTE)
+        ? { [WRITE_OWNER_ATTRIBUTE]: cloneJson(current.attributes[WRITE_OWNER_ATTRIBUTE]) }
+        : {}),
+    };
+    if (canonical(attributes) !== canonical(current.attributes)) {
+      fail('owned_source_import_forbidden');
+    }
+    return protectAutomaticEpisode({ ...validatedIncoming, attributes });
   });
   return { ...incoming, entities, episodes };
 }

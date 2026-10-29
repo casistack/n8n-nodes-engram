@@ -68,6 +68,64 @@ describe('automatic memory entry-point ownership and useful recall', () => {
     jest.restoreAllMocks();
     await storage.close();
   });
+  it('preserves original human and final-assistant provenance on another execution', async () => {
+    const configured = (execution: string) => ({
+      ...fields,
+      episodeMetadata: {
+        ...fields.episodeMetadata,
+        source_workflow_id: 'synthetic-producer',
+        source_execution_id: execution,
+      },
+    });
+    const messages = () => [new HumanMessage(text), new AIMessage('Synthetic final answer.')];
+    await new EngramChatMemory(configured('synthetic-attempt-one')).saveMessagesWithOutcome(
+      messages(),
+    );
+    const original = await storage.exportGraph('scope');
+    const retry = await new EngramChatMemory(
+      configured('synthetic-attempt-two'),
+    ).saveMessagesWithOutcome(messages());
+    expect(retry).toMatchObject({ written: 0, duplicates: 2 });
+    const after = await storage.exportGraph('scope');
+    expect(after.entities).toEqual(original.entities);
+    expect(after.edges).toEqual(original.edges);
+    expect(after.episodes).toEqual(original.episodes);
+    expect(after.episodes.every((ep) => ep.source_execution_id === 'synthetic-attempt-one')).toBe(
+      true,
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('reuses a source-only capture across executions without inventing its lost receipt', async () => {
+    const first = await captureHumanMemory(
+      {
+        ...fields,
+        episodeMetadata: {
+          source_workflow_id: 'synthetic-producer',
+          source_execution_id: 'synthetic-attempt-one',
+        },
+      },
+      text,
+    );
+    const retry = await captureHumanMemory(
+      {
+        ...fields,
+        episodeMetadata: {
+          source_workflow_id: 'synthetic-producer',
+          source_execution_id: 'synthetic-attempt-two',
+        },
+      },
+      text,
+    );
+    expect(first.acknowledgement).toBe('facts_accepted');
+    expect(retry.sourceId).toBe(first.sourceId);
+    expect(retry.acknowledgement).toBe('unconfirmed');
+    const graph = await storage.exportGraph('scope');
+    expect(graph.episodes).toHaveLength(1);
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.episodes[0].source_execution_id).toBe('synthetic-attempt-one');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
   it.each(['normal', 'bulk'])(
     'writes one attributed accepted preference through %s',
     async (mode) => {

@@ -4,12 +4,16 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { EngramAdmin } from '../../../src/nodes/EngramAdmin/EngramAdmin.node';
 import { createStorage } from '../../../src/storage/StorageFactory';
+import * as storageFactory from '../../../src/storage/StorageFactory';
+import { GraphologyStorage } from '../../../src/storage/GraphologyStorage';
 import { resolveStoragePath } from '../../../src/utils/helpers';
+import { jobs } from '../../../src/extraction/QueueState';
 
 function createExecuteContext(options: {
   tempDir: string;
   operation: string;
   parameters?: Record<string, unknown>;
+  executionId?: string | null;
 }) {
   const parameters: Record<string, unknown> = {
     backend: 'embedded',
@@ -30,6 +34,12 @@ function createExecuteContext(options: {
     getWorkflow() {
       return { id: 'wf-admin-test' };
     },
+    getExecutionId() {
+      return options.executionId ?? null;
+    },
+    async getCredentials() {
+      return { apiKey: 'synthetic-only', baseUrl: 'https://provider.invalid/v1' };
+    },
     getWorkflowStaticData() {
       return {};
     },
@@ -39,7 +49,7 @@ function createExecuteContext(options: {
       debug: jest.fn(),
     },
     getNode() {
-      return { name: 'Engram Admin' };
+      return { name: 'Engram Admin', typeVersion: 3, parameters };
     },
   } as never;
 }
@@ -47,6 +57,49 @@ function createExecuteContext(options: {
 describe('EngramAdmin', () => {
   let tempDir: string;
   let persistPath: string;
+
+  it('closes a new autonomous Neo4j owner when initialization fails and emits only a fixed stopped result', async () => {
+    const owner = {
+      initialize: jest.fn().mockRejectedValue(new Error('synthetic private backend detail')),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+    const factory = jest
+      .spyOn(storageFactory, 'createStorage')
+      .mockReturnValue(owner as unknown as ReturnType<typeof createStorage>);
+    try {
+      const output = await new EngramAdmin().execute.call(
+        createExecuteContext({
+          tempDir,
+          operation: 'captureHuman',
+          parameters: {
+            backend: 'neo4j',
+            resource: 'automaticMemory',
+            automaticCaptureLifecycle: 'replaySafeV2',
+            automaticPreferenceInterpreter: 'autonomousPersonalV1',
+          },
+        }),
+      );
+      expect(owner.initialize).toHaveBeenCalledTimes(1);
+      expect(owner.close).toHaveBeenCalledTimes(1);
+      expect(output).toEqual([
+        [],
+        [
+          {
+            json: {
+              version: 4,
+              should_process: false,
+              status: 'unconfirmed',
+              reason: 'storage_error',
+            },
+            pairedItem: { item: 0 },
+          },
+        ],
+      ]);
+      expect(JSON.stringify(output)).not.toContain('synthetic private backend detail');
+    } finally {
+      factory.mockRestore();
+    }
+  });
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-admin-'));
@@ -62,9 +115,246 @@ describe('EngramAdmin', () => {
       persistPath,
     });
     await storage.initialize();
-    await storage.clearAll();
+    await storage.clearAll({ allowQueued: true });
     await storage.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  async function seedAutomaticMemory(groupId: string) {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const now = new Date().toISOString();
+    const subject = await storage.addEntity({
+      group_id: groupId,
+      name: 'Synthetic verified subject',
+      entity_type: 'person',
+      attributes: {
+        engram_extraction: {
+          version: 2,
+          source: 'manual',
+          confidence: null,
+          review_status: 'accepted',
+          threshold_decision: 'manually_reviewed',
+          extracted_at: now,
+          episode_uuids: [],
+          reviewed_at: now,
+          reviewed_by: 'test-operator',
+        },
+      },
+    });
+    await storage.automaticBindingCommand!({
+      action: 'create',
+      namespace: groupId,
+      issuer: 'test-app',
+      actorReference: 'synthetic-actor',
+      subjectId: subject.uuid,
+      authorizedBy: 'test-operator',
+      reason: 'synthetic Native Admin test identity',
+    });
+    await storage.close();
+  }
+
+  function nativeCaptureContext(
+    groupId: string,
+    executionId: string | null,
+    automaticInput = 'I prefer concise explanations.',
+    extraParameters: Record<string, unknown> = {},
+  ) {
+    return createExecuteContext({
+      tempDir,
+      operation: 'captureHuman',
+      executionId,
+      parameters: {
+        backend: 'embedded',
+        resource: 'automaticMemory',
+        customStoragePath: tempDir,
+        automaticWorkflowId: 'wf-admin-test',
+        automaticNamespace: groupId,
+        automaticMemoryProfile: 'conservative',
+        automaticTurn: 'native-admin-turn',
+        automaticIssuer: 'test-app',
+        automaticActor: 'synthetic-actor',
+        automaticIntent: 'disabled',
+        automaticWrapper: 'disabled',
+        automaticInput,
+        automaticExecution: 'synchronous',
+        advancedExtractionPolicy: 'bounded',
+        knowledgeSelection: 'durableTemporal',
+        ...extraParameters,
+      },
+    });
+  }
+
+  async function readAutomaticGraph(groupId: string) {
+    const storage = createStorage({ backend: 'embedded', persistPath });
+    await storage.initialize();
+    const graph = await storage.readExtractionSnapshot!(groupId);
+    await storage.close();
+    return graph;
+  }
+
+  it('blocks Native Admin cross-execution duplicates after exact source validation', async () => {
+    const groupId = 'native-admin-legacy-guard';
+    await seedAutomaticMemory(groupId);
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockRejectedValue(new Error('Native Admin literal capture must not call a provider'));
+    const admin = new EngramAdmin();
+
+    try {
+      await expect(admin.execute.call(nativeCaptureContext(groupId, null))).rejects.toThrow(
+        'Engram automatic: legacy_cross_execution_duplicate',
+      );
+      expect(
+        (await readAutomaticGraph(groupId)).episodes.filter(
+          (episode) => episode.attributes.engram_write_owner_v1,
+        ),
+      ).toHaveLength(0);
+
+      const first = await admin.execute.call(nativeCaptureContext(groupId, 'execution-first'));
+      const firstResult = first[0][0].json;
+      expect(firstResult.acknowledgement).toBe('facts_accepted');
+
+      const afterFirst = await readAutomaticGraph(groupId);
+      expect(
+        afterFirst.episodes.filter((episode) => episode.attributes.engram_write_owner_v1),
+      ).toHaveLength(1);
+      expect(afterFirst.edges.filter((edge) => edge.attributes.engram_claim_v1)).toHaveLength(1);
+
+      const sameExecutionReplay = await admin.execute.call(
+        nativeCaptureContext(groupId, 'execution-first'),
+      );
+      expect(sameExecutionReplay[0][0].json).toEqual(
+        expect.objectContaining({
+          sourceId: firstResult.sourceId,
+          outcome: expect.objectContaining({ duplicates: 1 }),
+        }),
+      );
+
+      await expect(
+        admin.execute.call(nativeCaptureContext(groupId, 'execution-second')),
+      ).rejects.toThrow('Engram automatic: legacy_cross_execution_duplicate');
+
+      let sourceConflict: unknown;
+      try {
+        await admin.execute.call(
+          nativeCaptureContext(groupId, 'execution-first', 'I prefer verbose explanations.'),
+        );
+      } catch (error) {
+        sourceConflict = error;
+      }
+      expect(sourceConflict).toBeInstanceOf(Error);
+      expect((sourceConflict as Error).message).toContain(
+        'Engram automatic: legacy_source_conflict',
+      );
+      expect((sourceConflict as Error).message).not.toContain(String(firstResult.sourceId));
+      expect((sourceConflict as Error).message).not.toContain('synthetic-actor');
+
+      await expect(
+        admin.execute.call(
+          nativeCaptureContext(groupId, 'execution-first', undefined, {
+            automaticActor: 'different-actor',
+          }),
+        ),
+      ).rejects.toThrow('Engram automatic: legacy_source_conflict');
+
+      const afterReplays = await readAutomaticGraph(groupId);
+      expect(afterReplays.entities).toEqual(afterFirst.entities);
+      expect(afterReplays.edges).toEqual(afterFirst.edges);
+      expect(afterReplays.episodes).toEqual(afterFirst.episodes);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('lets only the persisted execution win a two-instance Native Admin race', async () => {
+    const groupId = 'native-admin-legacy-race';
+    await seedAutomaticMemory(groupId);
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockRejectedValue(new Error('Native Admin literal capture must not call a provider'));
+    const admin = new EngramAdmin();
+    let releaseAppend!: () => void;
+    const bothPrepared = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const instances: GraphologyStorage[] = [];
+    let appendArrivals = 0;
+    const factorySpy = jest.spyOn(storageFactory, 'createStorage').mockImplementation((config) => {
+      if (config.backend !== 'embedded')
+        throw new Error('Synthetic race requires embedded storage');
+      const instance = new GraphologyStorage(config.persistPath);
+      instances.push(instance);
+      const append = instance.appendAutomaticEpisodesWithExtraction.bind(instance);
+      instance.appendAutomaticEpisodesWithExtraction = async (...args) => {
+        // Both independent instances finish their absent-source preflight before
+        // either may enter the actual persistent append transaction.
+        if (++appendArrivals === 2) releaseAppend();
+        await bothPrepared;
+        return append(...args);
+      };
+      return instance;
+    });
+
+    try {
+      const outcomes = await Promise.allSettled([
+        admin.execute.call(
+          nativeCaptureContext(groupId, 'race-execution-a', undefined, {
+            automaticExecution: 'durable',
+            extractionRouteId: 'native-admin-race-route',
+            queueModel: 'unused-model',
+          }),
+        ),
+        admin.execute.call(
+          nativeCaptureContext(groupId, 'race-execution-b', undefined, {
+            automaticExecution: 'durable',
+            extractionRouteId: 'native-admin-race-route',
+            queueModel: 'unused-model',
+          }),
+        ),
+      ]);
+      expect(instances).toHaveLength(2);
+      expect(instances[0]).not.toBe(instances[1]);
+      expect(appendArrivals).toBe(2);
+      const fulfilled = outcomes.filter(
+        (outcome): outcome is PromiseFulfilledResult<Awaited<ReturnType<EngramAdmin['execute']>>> =>
+          outcome.status === 'fulfilled',
+      );
+      const rejected = outcomes.filter((outcome) => outcome.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+        message: expect.stringContaining('Engram automatic: legacy_cross_execution_duplicate'),
+      });
+
+      const graph = await readAutomaticGraph(groupId);
+      const ownedSources = graph.episodes.filter(
+        (episode) => episode.attributes.engram_write_owner_v1 !== undefined,
+      );
+      expect(ownedSources).toHaveLength(1);
+      expect(ownedSources[0].source_execution_id).toMatch(/^race-execution-[ab]$/);
+      expect(fulfilled[0].value[0][0].json.sourceId).toBe(ownedSources[0].uuid);
+      expect(jobs(graph)).toHaveLength(1);
+      expect(graph.edges).toHaveLength(0);
+
+      await expect(
+        admin.execute.call(
+          nativeCaptureContext(groupId, 'race-execution-replay', undefined, {
+            automaticExecution: 'durable',
+            extractionRouteId: 'native-admin-race-route',
+            queueModel: 'unused-model',
+          }),
+        ),
+      ).rejects.toThrow('Engram automatic: legacy_cross_execution_duplicate');
+      const afterReplay = await readAutomaticGraph(groupId);
+      expect(afterReplay.episodes).toEqual(graph.episodes);
+      expect(jobs(afterReplay)).toHaveLength(1);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      factorySpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
   });
 
   it('requires confirmation before clearAll executes', async () => {

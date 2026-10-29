@@ -4,6 +4,10 @@ import type {
   AutomaticBindingRecord,
 } from '../schemas/AutomaticOperations.schema';
 import type {
+  AutomaticLegacyObservationRequest,
+  AutomaticLegacyObservationResult,
+} from '../schemas/AutomaticLedger.schema';
+import type {
   QueueBinding,
   QueueStats,
   QueueClearOptions,
@@ -14,6 +18,40 @@ import type {
   ExtractionJob,
   StagedExtraction,
 } from '../schemas';
+import type { AutomaticClaimReadScope } from './AutomaticClaimReadScope';
+import type { AutomaticClaimReadResult } from '../schemas/AutomaticClaimRead.schema';
+import type { CompositionalRetrievalSnapshotResultV3 } from '../schemas/CompositionalRetrievalSnapshotV3.schema';
+import type { AutomaticCaptureBeginRequestV2 } from '../schemas/AutomaticCapture.schema';
+import type {
+  AutomaticCaptureBeginInternalResultV2,
+  AutomaticHumanCompletionInternalResultV2,
+  AutomaticCaptureAdminFenceRequestV2,
+  AutomaticCaptureReadRequestV2,
+  AutomaticCaptureReadResultV2,
+  AutomaticCaptureResumeInternalResultV2,
+  AutomaticCaptureCancelInternalResultV2,
+} from '../schemas/AutomaticCaptureApi.schema';
+import type { PrivateOneUseAutomaticLeaseHandle } from './AutomaticCaptureHandles';
+import type {
+  AutomaticAssistantCaptureIntentV2,
+  AutomaticAssistantFinalWriterResultV2,
+} from '../schemas/AutomaticAssistantCapture.schema';
+import type { PrivateAutonomousPersonalAssistantFinalInvocationV4 } from './AutonomousPersonalAssistantFinalInvocationV4';
+import type { AutomaticAssistantWorkBudgetV2 } from '../schemas/AutomaticAssistantWorkBudget.schema';
+import type { CompositionalCaptureBeginMethodRequestV3 } from '../schemas/CompositionalAutomaticCaptureLifecycleV3.schema';
+import type {
+  CompositionalCaptureBeginInternalResultV3,
+  CompositionalCaptureCompletionInternalResultV3,
+  PrivateOneUseCompositionalCaptureLeaseHandleV3,
+} from '../schemas/CompositionalAutomaticCaptureRegistryV3.schema';
+import type {
+  CompositionalClaimReviewRequestV3,
+  CompositionalClaimReviewResultV3,
+} from '../schemas/CompositionalClaimReviewV3.schema';
+import type { AutonomousPersonalCaptureBeginV4InternalResult } from './AutonomousPersonalCaptureHandlesV4';
+import type { AutonomousPersonalCompletionStorageV4Result } from '../schemas/AutonomousPersonalCompletionStorageV4.schema';
+import type { PrivateAutonomousPersonalCompletionBackendOutcomeV4 } from './AutonomousPersonalCompletionBackendRegistryV4';
+import type { AutonomousPersonalCaptureProviderPreflightV4 } from '../schemas/AutonomousPersonalCaptureProviderV4.schema';
 import type {
   EntityNode,
   CreateEntityNode,
@@ -111,6 +149,7 @@ export interface StorageMutationDiagnostics {
   rollback_restore_ms: number;
   total_ms: number;
   snapshot_bytes: number | null;
+  rollback_diagnostic?: 'rollback_persistence_failed';
 }
 
 export interface EpisodeFilterOptions {
@@ -206,7 +245,67 @@ export interface StorageSchemaMigrationResult {
 }
 
 export interface IGraphStorage {
+  /** Fixed native V4 entry only; the opaque attempt is not JSON or permission. */
+  beginAndClaimAutonomousPersonalCaptureV4?(
+    input: unknown,
+    attempt: unknown,
+  ): Promise<AutonomousPersonalCaptureBeginV4InternalResult>;
+  /** Fixed native provider preparation; consumes its initial handle before backend I/O. */
+  prepareAutonomousPersonalCaptureProviderV4?(
+    handle: unknown,
+  ): Promise<AutonomousPersonalCaptureProviderPreflightV4>;
+  /** Native completion observation only; the result grants no continuation authority. */
+  completeAutonomousPersonalCaptureV4?(
+    handle: unknown,
+  ): Promise<AutonomousPersonalCompletionStorageV4Result>;
+  /** Fixed native completion path; returns an opaque, one-use backend outcome token. */
+  completeAutonomousPersonalCaptureForNativeV4?(
+    handle: unknown,
+  ): Promise<PrivateAutonomousPersonalCompletionBackendOutcomeV4>;
+  /** Opt-in richer human capture; an initial lease is not agent permission. */
+  beginAndClaimCompositionalCaptureV3?(
+    input: CompositionalCaptureBeginMethodRequestV3,
+  ): Promise<CompositionalCaptureBeginInternalResultV3>;
+  completeCompositionalHumanCaptureV3?(
+    handle: PrivateOneUseCompositionalCaptureLeaseHandleV3,
+  ): Promise<CompositionalCaptureCompletionInternalResultV3>;
+  /** Explicit operator review; atomically updates an attributed claim/value pair. */
+  reviewCompositionalClaimV3?(
+    request: CompositionalClaimReviewRequestV3,
+  ): Promise<CompositionalClaimReviewResultV3>;
+  /** Internal write-only final saving. Never grants agent or delivery permission. */
+  saveAssistantFinalV2?(
+    intent: AutomaticAssistantCaptureIntentV2,
+    budget?: AutomaticAssistantWorkBudgetV2,
+  ): Promise<AutomaticAssistantFinalWriterResultV2>;
+  /** Fixed native V4 final writer; only a genuine one-use invocation is accepted. */
+  saveAssistantFinalV4?(
+    invocation: PrivateAutonomousPersonalAssistantFinalInvocationV4,
+  ): Promise<AutomaticAssistantFinalWriterResultV2>;
+  /** Internal opt-in capture capability; a claimed lease is not processing permission. */
+  beginAndClaimAutomaticCaptureV2?(
+    request: AutomaticCaptureBeginRequestV2,
+    mode?: 'existingStore',
+  ): Promise<AutomaticCaptureBeginInternalResultV2>;
+  completeHumanCaptureV2?(
+    handle: PrivateOneUseAutomaticLeaseHandle<'human_turn_memory'>,
+    plan: StagedExtraction,
+  ): Promise<AutomaticHumanCompletionInternalResultV2>;
+  /** Explicit authorized operator controls; none may grant agent processing. */
+  resumeAutomaticCaptureV2?(
+    request: AutomaticCaptureAdminFenceRequestV2,
+  ): Promise<AutomaticCaptureResumeInternalResultV2>;
+  cancelAutomaticCaptureV2?(
+    request: AutomaticCaptureAdminFenceRequestV2,
+  ): Promise<AutomaticCaptureCancelInternalResultV2>;
+  getAutomaticCaptureOutcomeV2?(
+    request: AutomaticCaptureReadRequestV2,
+  ): Promise<AutomaticCaptureReadResultV2>;
   automaticBindingCommand?(command: AutomaticBindingCommand): Promise<AutomaticBindingRecord>;
+  /** Explicitly records bounded legacy-unconfirmed observation; never grants processing permission. */
+  observeLegacyAutomaticSource?(
+    request: AutomaticLegacyObservationRequest,
+  ): Promise<AutomaticLegacyObservationResult>;
   // Optional extraction transaction capabilities; absent on third-party adapters.
   withExtractionDiagnostics?<T>(
     observer: (value: StorageObservation) => void,
@@ -214,9 +313,21 @@ export interface IGraphStorage {
   ): Promise<T>;
   supportsDurableExtraction?(): boolean;
   extractionBackend?(): 'embedded' | 'neo4j';
+  /** Read-only configured-store identity DATA; it grants no graph access or write authority. */
+  getNativeAutomaticCaptureStoreIdentityV4?(): string | null;
   importExtractionBackup?(input: unknown): Promise<void>;
   previewQueueClear?(groupId?: string): Promise<QueueClearImpact>;
   readExtractionSnapshot?(groupId?: string): Promise<GraphData>;
+  /** Internal coherent V2 commitment read; no caller receipt or processing permit. */
+  readAutomaticClaimContext?(
+    groupId: string,
+    edgeId: string,
+    scope: AutomaticClaimReadScope,
+  ): Promise<AutomaticClaimReadResult>;
+  /** Internal coherent full-root V3 retrieval snapshot; never grants processing permission. */
+  readCompositionalRetrievalSnapshotV3?(
+    scope: AutomaticClaimReadScope,
+  ): Promise<CompositionalRetrievalSnapshotResultV3>;
   appendEpisodesWithExtraction?(
     episodes: CreateEpisodicNode[],
     eligible: number[],

@@ -151,6 +151,35 @@ for (const backend of ['embedded', 'neo4j'] as const) {
       expect(jobs(graph)[0].outcome?.automatic?.persisted).toBe(true);
       expect(global.fetch).not.toHaveBeenCalled();
     });
+    it('reuses the immutable source across executions after reopening without inventing a receipt', async () => {
+      const content = 'I prefer concise explanations.';
+      const first = await captureHumanMemory(
+        { ...fields, episodeMetadata: { source_execution_id: 'synthetic-attempt-a' } },
+        content,
+      );
+      expect(first.acknowledgement).toBe('facts_accepted');
+      const original = await storage.exportGraph(group);
+      await storage.close();
+      storage = create();
+      await storage.initialize();
+      const replay = await captureHumanMemory(
+        { ...fields, storage, episodeMetadata: { source_execution_id: 'synthetic-attempt-b' } },
+        content,
+      );
+      expect(replay.sourceId).toBe(first.sourceId);
+      // Existing captures have no persisted terminal receipt. A matching source is not one.
+      expect(replay.acknowledgement).toBe('unconfirmed');
+      const current = await storage.exportGraph(group);
+      for (const collection of ['episodes', 'entities', 'edges'] as const) {
+        expect([...current[collection]].sort((a, b) => a.uuid.localeCompare(b.uuid))).toEqual(
+          [...original[collection]].sort((a, b) => a.uuid.localeCompare(b.uuid)),
+        );
+      }
+      expect((await storage.getEpisode(first.sourceId))?.source_execution_id).toBe(
+        'synthetic-attempt-a',
+      );
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
     it('rechecks revoked ownership at atomic apply and leaves the graph unchanged', async () => {
       await captureHumanMemory(
         { ...fields, extractionExecution: 'durable', extractionRouteId: 'synthetic-route' },
@@ -180,7 +209,6 @@ for (const backend of ['embedded', 'neo4j'] as const) {
       );
     });
     it('caps bidirectional high-degree edge hydration at the requested sentinel limit', async () => {
-      jest.setTimeout(120000);
       const source = await storage.addEntity({
         group_id: group,
         name: 'High-degree source',
@@ -207,6 +235,6 @@ for (const backend of ['embedded', 'neo4j'] as const) {
         new Set([source.uuid, target.uuid]),
       );
       expect(await storage.getEdgesBetween(source.uuid, target.uuid, 129)).toHaveLength(129);
-    });
+    }, 120_000);
   });
 }

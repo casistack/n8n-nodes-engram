@@ -1,0 +1,3518 @@
+[
+  {
+    "label": "british-order",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I prefer explanations in plain British English, with one practical example before any technical terminology.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:british-order",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "44579c46747ddba8a1d5d70847b15288c58545c952218966913c9ec4dd81d7ab",
+            "producerHash": "f0b4730c706b9c052938b527680b15328be809bd7214361e39a25c2f67fec8e2",
+            "geometryHash": "4b6e3ee60288f3ae9ce3d279dd007fe313bf1f99e307d1647efee7c9465f06e0",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "ddbab221b5b495bfc4c612c331e0e3991d4b34c734091a27b1e2a65f70b0c97c",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "44579c46747ddba8a1d5d70847b15288c58545c952218966913c9ec4dd81d7ab",
+              "mappedContentHash": "44579c46747ddba8a1d5d70847b15288c58545c952218966913c9ec4dd81d7ab",
+              "rawUtf16Length": 108,
+              "mappedUtf16Length": 108,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "ddbab221b5b495bfc4c612c331e0e3991d4b34c734091a27b1e2a65f70b0c97c"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "e260d827859a4648ea7b2db0eaa45a31993ea015d5e08f86aa2129848e73f792",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "a38103745a2a378eeed310d66d027d4f920e4cf208a6f80949236f1ca448605e",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "4b6e3ee60288f3ae9ce3d279dd007fe313bf1f99e307d1647efee7c9465f06e0",
+      "sourceScanHash": "8e6e5ddc33b9876c1e91661033503a0aba7f37ace8c9bed22338d0c91b9a2700",
+      "framingHash": "69e4ae676e9430f5a730f7b43144470489303e557fffac657c58dc3672ffcd86",
+      "typedSyntaxHash": "3c3d3fa946e5c3b98ff166f4e50c40673d2dffb5b38024324d513bb26bb6648e",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "e260d827859a4648ea7b2db0eaa45a31993ea015d5e08f86aa2129848e73f792",
+          "outcome": "candidate",
+          "kind": "typed_preference",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "typed_preference",
+          "category": "preference",
+          "key": "14d3b9edd6a142a79121eb04178086d7480a94dc827a03aa41cfef206a253b6a",
+          "evidenceHash": "c15df21a0635e9c7a7423207db3e6de3eb7ab71806a994c034f5f7650f92fff4",
+          "meaningHash": "dbd3aeb55416ecfc10d359f859d35a2659380550cb80c2c57ab02683f6935293",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "8468cdccce88d9394378923efc5872e1add66c617fc5a665069f573e50e64b09"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 107
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 107
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "australian-order",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I prefer plain Australian English and examples before technical terms.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:australian-order",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "53941bd3cda31ff2be4f0db459243df3904ecc9dcb6f45ff85bec1e74cf0f71c",
+            "producerHash": "2c4ab7059feedb8c903c767cf128e6f598f9a62f4fea52e576a77bc70289a507",
+            "geometryHash": "1af2c63507890d697c7b48b8ac7f9c95457b03dcaf5b9844ce807e506b6ceedf",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "dcdcc6ee47938088a30824d1355c7afc3ae08759a2a0eabbb647c125561417a5",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "53941bd3cda31ff2be4f0db459243df3904ecc9dcb6f45ff85bec1e74cf0f71c",
+              "mappedContentHash": "53941bd3cda31ff2be4f0db459243df3904ecc9dcb6f45ff85bec1e74cf0f71c",
+              "rawUtf16Length": 70,
+              "mappedUtf16Length": 70,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "dcdcc6ee47938088a30824d1355c7afc3ae08759a2a0eabbb647c125561417a5"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "34444678669edc255d8754e8509e8e097496c061bc4feaf5d2781e1b2adcfbcd",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "acf58cd4e203edb31275bd1651abd26b85aa3476335c473463435aa27ae078dc",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "1af2c63507890d697c7b48b8ac7f9c95457b03dcaf5b9844ce807e506b6ceedf",
+      "sourceScanHash": "7799d195bc0ae88d4f0ef3f9cbf86c08b4cc8da85890d282c2ecdc7d35c31bba",
+      "framingHash": "86b871880f527f3e5581e6330686062e0f38c1a7484ebf6d58cc184a753bc575",
+      "typedSyntaxHash": "ab853fc1d84286d208e540e4b139abae5ee90bf9364652075d62348474b9305c",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "34444678669edc255d8754e8509e8e097496c061bc4feaf5d2781e1b2adcfbcd",
+          "outcome": "candidate",
+          "kind": "source_statement_record",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "source_statement_record",
+          "category": "preference",
+          "key": "96ec38427751e53206522e9ea845e6352be062a7a41714d498661c337aa91384",
+          "evidenceHash": "e89a4cee88de9189f65c2c331e54bbfee1db72c46cdb8c9c9731e040614bc578",
+          "meaningHash": "34e0b081ac829b1bcb710ca40ef09169b41ee79071673f323f662476a603644b",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "42cc92244d931ed2dcb4f9417ad43ad287548be8cb921243a63b693c81e4b752"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 70
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 70
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "negative",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I do not like long explanations.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:negative",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "a4c75707420c266bdb09313cc2bd9c01d2dc0b2bf27875516d4c522bcdde7a60",
+            "producerHash": "153fbf182d2ca71fa007fbf1f87382ef7e9819c8b91c6068e368900d6dd4babd",
+            "geometryHash": "7c73a5231bcd61ad21b98d135ca61dd845d66c4c69e5c8a61eab171a14953ed1",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "7fc2034f62a8168be7e62e94271356bd1973a86a19f8290961ca3f33b1240ff2",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "a4c75707420c266bdb09313cc2bd9c01d2dc0b2bf27875516d4c522bcdde7a60",
+              "mappedContentHash": "a4c75707420c266bdb09313cc2bd9c01d2dc0b2bf27875516d4c522bcdde7a60",
+              "rawUtf16Length": 32,
+              "mappedUtf16Length": 32,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "7fc2034f62a8168be7e62e94271356bd1973a86a19f8290961ca3f33b1240ff2"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "1fb4d6f3de815dae450f47e2f3f000398fed1cc5e1d013d9021f0a18804b2054",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "a1780b645ceeda3704d17fcf30e33871003f0ce5c8a89eba16891c46959e77bf",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "7c73a5231bcd61ad21b98d135ca61dd845d66c4c69e5c8a61eab171a14953ed1",
+      "sourceScanHash": "989d2d379c3e0a92d26b957f7a4f73716d8351a21775cc48ab96eeb00c284e96",
+      "framingHash": "2a422b95877edf7f27f9bba5bd259c64292c044c3c7a026a35f47f3037e1da12",
+      "typedSyntaxHash": "a754934a66514bdf69fe0f28c15e83bc6565fac47c767a2eb1b6756fa14b0a3e",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "1fb4d6f3de815dae450f47e2f3f000398fed1cc5e1d013d9021f0a18804b2054",
+          "outcome": "candidate",
+          "kind": "typed_preference",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "typed_preference",
+          "category": "preference",
+          "key": "5fc602a7b464d7988fb4a851ff078bc7ca145b97e97af92f8d7cd06fb8f50121",
+          "evidenceHash": "f6bbcdfb38a96ee3d9ca0327a380f6c97553cdb96e6fc5286d9a3c0d15e44ab0",
+          "meaningHash": "05517929d773d69082ad438e46a00e4cedca374ee70ac43faff0a89eff9f38d3",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "bba8032c5829174594b4b8084758286c55efd7a1789259fe1f1496a0a1e8ac4f"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 31
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 31
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "compound",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I prefer short explanations with examples and tables.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:compound",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "25b56d68710e0b52de19ac627a46935ef858c9aa29dc8595122afed789667cc0",
+            "producerHash": "8be1d6ae282e7bc9971b7e589c53271a7a16ba49916090f8e1ae160f1569608e",
+            "geometryHash": "72567d25b695c4b2d53f18290fd49aa963f415ea90dd15c746bc61f1867081b0",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "3d83e2fccaa4043d02a7c22381d741ff3e6aef4f0a847f21724971c6efdc881c",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "25b56d68710e0b52de19ac627a46935ef858c9aa29dc8595122afed789667cc0",
+              "mappedContentHash": "25b56d68710e0b52de19ac627a46935ef858c9aa29dc8595122afed789667cc0",
+              "rawUtf16Length": 53,
+              "mappedUtf16Length": 53,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "3d83e2fccaa4043d02a7c22381d741ff3e6aef4f0a847f21724971c6efdc881c"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "358793877cfeab540cc5e986a6612308af7896c0bacb04ba754db0b2ad223055",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "237b6deb1582b385b08e213ed470988eb829bbcf87037c1656203d584597bf67",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "72567d25b695c4b2d53f18290fd49aa963f415ea90dd15c746bc61f1867081b0",
+      "sourceScanHash": "ac94bf2ecdcae0440522d2d886bdffcab92a62f358353f1130d69c839bdea71f",
+      "framingHash": "3436bbe8e7c140703879422d1e71cfef0dc2dd42a55c8914dd2de907ba2f8605",
+      "typedSyntaxHash": "c5e2e7595f67d9abbc36e521d03c72e32475d0b9b93f7955546ab1690b16bb76",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "358793877cfeab540cc5e986a6612308af7896c0bacb04ba754db0b2ad223055",
+          "outcome": "candidate",
+          "kind": "source_statement_record",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "source_statement_record",
+          "category": "preference",
+          "key": "c733576d74c252252dac4fcaac49f572e3fce1ccb440edcd6690c1c8acac1687",
+          "evidenceHash": "f0cc6c77ed7754770400d1d8daa541cc5331d93303a124d3579c63578fc86d78",
+          "meaningHash": "1d0cfcefe246c8b966572c0ba51560c463c4c368241cb4ec3b6307d521b12ac3",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "e960ba29d01abe48c8d06de77e572e6ae7acf174946f465a7895965f1e7bc96b"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 53
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 53
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "open-work",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I work as a ceramicist.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:open-work",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "ee8f708a41db44cebb7db84214ecc1cbfc2040c27e20350f76f42ae8aae58ac4",
+            "producerHash": "35ee8082dc1d6092a6322747b1af8e6c89fd0f004c46f3fa888e4b0f9070f9d5",
+            "geometryHash": "2031188ba32a0a9ec16a90af3743e52f50e62e5a7ae3c922992b8ce501d2c566",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "00c1dae21a4e69d192feb2ea7f27248d6a72578a15d2025eade4109a8e4dd3f8",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "ee8f708a41db44cebb7db84214ecc1cbfc2040c27e20350f76f42ae8aae58ac4",
+              "mappedContentHash": "ee8f708a41db44cebb7db84214ecc1cbfc2040c27e20350f76f42ae8aae58ac4",
+              "rawUtf16Length": 23,
+              "mappedUtf16Length": 23,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "00c1dae21a4e69d192feb2ea7f27248d6a72578a15d2025eade4109a8e4dd3f8"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "7330dcff7d97de55515368d8b81ac68132a9c98704aa60e35f29d8c9975b6741",
+          "category": "work_role",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "111621fba31d7c64f64fcd54b8ed5236b7540a7743dc44bb7d1609cda03ef0fc",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "2031188ba32a0a9ec16a90af3743e52f50e62e5a7ae3c922992b8ce501d2c566",
+      "sourceScanHash": "19c00690853eae950377d40a7c81b8aa87fb211254924c3e3ac26b43aeb96f5e",
+      "framingHash": "17e3ec80c23fea36f65d2920613be165edfb9fc55dc78f3e0f9a696310a8c8db",
+      "typedSyntaxHash": "925b83174314a3a2722abbf33e3a3de1cf87b6f58f85619efe7f36e21d76a400",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "7330dcff7d97de55515368d8b81ac68132a9c98704aa60e35f29d8c9975b6741",
+          "outcome": "candidate",
+          "kind": "source_statement_record",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "source_statement_record",
+          "category": "work_role",
+          "key": "d91e005e932bff741a4b8e61400e68e8716b013e03098aefd8400907d17200d2",
+          "evidenceHash": "acc30748a605f9ce1be0ac4a8ee8b791ac31a303fbd35b9322c8d1099bcf2930",
+          "meaningHash": "630d7a9be31018486d14314ba70e314aab15fc565be66fb9712d0e1d34da7039",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "ae9e44b447d9437d52762db720300a619955382ab5f6e3b512a5df8b905da9d0"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 23
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 23
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "open-preference",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I prefer moonlit workshops.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:open-preference",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "415cd65461919e5c6294198182dc4d1a7839c44872ec93a244734f6b054793d6",
+            "producerHash": "5739b53cd545ac2a720db9f315f1825ceb3ac972c100c1bc085e3c87c837ab65",
+            "geometryHash": "ca8aeae0aac7af2e0688d390e3f4143b9686680270d4982b06ee5be0dbc50f5c",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "cb45a5058571525c79884a92834a31062387e14abed14e943d9acfaa3bc150ec",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "415cd65461919e5c6294198182dc4d1a7839c44872ec93a244734f6b054793d6",
+              "mappedContentHash": "415cd65461919e5c6294198182dc4d1a7839c44872ec93a244734f6b054793d6",
+              "rawUtf16Length": 27,
+              "mappedUtf16Length": 27,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "cb45a5058571525c79884a92834a31062387e14abed14e943d9acfaa3bc150ec"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "fd9957d84814134ecc9d590dd479a9a26769f2f324d1b6e243bed9b02518fe5f",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "2a49558b2c3fc98ec2e2734dce045bcce978d7dffb8cd6d3b02de43aa159f84f",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "ca8aeae0aac7af2e0688d390e3f4143b9686680270d4982b06ee5be0dbc50f5c",
+      "sourceScanHash": "3439c65630cbd87cdd10f426ab3a4649c784fa444a5d890b0055eeb809b27d7b",
+      "framingHash": "a367c2698d938d5c15f50062c4d0bf2fd2884bc3ab8902c049d8a422a6e2e162",
+      "typedSyntaxHash": "f57b875895b9431d23b6dd8d5191f87c47ba014bcbca832973a0951b7ad5e478",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "fd9957d84814134ecc9d590dd479a9a26769f2f324d1b6e243bed9b02518fe5f",
+          "outcome": "candidate",
+          "kind": "source_statement_record",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "source_statement_record",
+          "category": "preference",
+          "key": "64639519fd22ae3eb2ac54f4cd0f191ebcc3a2800ae4e3edccabae2b274c8399",
+          "evidenceHash": "3b31a95e89ff1922cb65dabc3e18feaf6b93c5fb2226eed50263b7d4b2f4cc5e",
+          "meaningHash": "cb7bfd4a38bf1d59adf11e0423904b1ca2e6d0c3ced8ba411091af11a991b323",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "7e23bb734f1814d78d2a802c8bda6094fc54d9b0593193504c65d2cab2f57d15"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 27
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 27
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "duplicate",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I prefer concise explanations. I prefer concise explanations.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:duplicate",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "76369821838a899017133c77777ad9552f2a103f8c35e6cc05327a602ffc6e48",
+            "producerHash": "939f37ec90d251146a362527f8dd64c7668771db255d95bbb1da30d07ef69caa",
+            "geometryHash": "34c657df6ff2b62b0abba0e0842b9a8870e73e76f61f99721dc5905a6567c0d1",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "d7babe6319cb0f479e04d246a9b7ce7662b2b0dfc680a8710557a0c258a1e9f5",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "76369821838a899017133c77777ad9552f2a103f8c35e6cc05327a602ffc6e48",
+              "mappedContentHash": "76369821838a899017133c77777ad9552f2a103f8c35e6cc05327a602ffc6e48",
+              "rawUtf16Length": 61,
+              "mappedUtf16Length": 61,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "d7babe6319cb0f479e04d246a9b7ce7662b2b0dfc680a8710557a0c258a1e9f5"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "fd9333b14750b7ff476bb928ce6fea9bfe8ca57f9e4e1133bd4efd5e0181d94f",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        },
+        {
+          "unitId": "2b8c237076964ffb9785c762f4d95f7930b49e43db77fd538fa0b5290e1ea90f",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "7c6f1ad9e10cdb4efbb34a8eb2bd6372000b4077394308b0a002dcee9369ea1b",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "34c657df6ff2b62b0abba0e0842b9a8870e73e76f61f99721dc5905a6567c0d1",
+      "sourceScanHash": "c05a6d48d08dcea9aa1a99899515a95624bf3317d7dc634548b95fbb8451809f",
+      "framingHash": "ba1bcb155ba495200bea0c23dc0a6bf8c34524451cb0be1ce8c847992f645055",
+      "typedSyntaxHash": "fa32e3b1759885781ac89a4bcaf4f73248ceddabb95738798af000e139a7409c",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 2,
+        "candidateUnitCount": 2,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "fd9333b14750b7ff476bb928ce6fea9bfe8ca57f9e4e1133bd4efd5e0181d94f",
+          "outcome": "candidate",
+          "kind": "typed_preference",
+          "reason": null
+        },
+        {
+          "unitIndex": 1,
+          "unitId": "2b8c237076964ffb9785c762f4d95f7930b49e43db77fd538fa0b5290e1ea90f",
+          "outcome": "candidate",
+          "kind": "typed_preference",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "typed_preference",
+          "category": "preference",
+          "key": "6243b21d92350e1fa13fa26c443e9d2394d5aa879ba0c5ddcecbd332a725c83a",
+          "evidenceHash": "ff6722c98ea35836feb76626269610c9c4b2bb38b3fc66f916ac9a9fbfdc5296",
+          "meaningHash": "fe930e01461f481b06b9b1d21e8667265b535d7ea3d5bca1430ec3c428ea2a20",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "5709d70e19f5468839523c9b6bb30431633161f2ad3e2ce2d9a6ae4141137fd3"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 29
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 29
+          }
+        },
+        {
+          "candidateIndex": 1,
+          "unitIndex": 1,
+          "kind": "typed_preference",
+          "category": "preference",
+          "key": "6243b21d92350e1fa13fa26c443e9d2394d5aa879ba0c5ddcecbd332a725c83a",
+          "evidenceHash": "091aa9e17fa226f3d455cd25a5241030afa7d155ceaa2b696c2b635903b4029f",
+          "meaningHash": "fe930e01461f481b06b9b1d21e8667265b535d7ea3d5bca1430ec3c428ea2a20",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "5709d70e19f5468839523c9b6bb30431633161f2ad3e2ce2d9a6ae4141137fd3"
+            }
+          ],
+          "rawSpan": {
+            "start": 31,
+            "end": 60
+          },
+          "mappedSpan": {
+            "start": 31,
+            "end": 60
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "mixed-question",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I prefer concise explanations. What time is it?",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:mixed-question",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "3f75f77c38d89bd03b49d2e1f16b7038be1eefd8bc7a49983d70f06767159e36",
+            "producerHash": "b7a25c60c489819ce8b8896edc5a29502964ad279daa6cfae0e058c57d8edf39",
+            "geometryHash": "40ff0b6194dc1d1c6be4789cdd60ce62bfb5e2393fcbfe7855c8aa48a39fcb2c",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "f07a052fa3a6fc28568465744839b6313e2ab4248c484ea4cc1e106de9183ed9",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "3f75f77c38d89bd03b49d2e1f16b7038be1eefd8bc7a49983d70f06767159e36",
+              "mappedContentHash": "3f75f77c38d89bd03b49d2e1f16b7038be1eefd8bc7a49983d70f06767159e36",
+              "rawUtf16Length": 47,
+              "mappedUtf16Length": 47,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "f07a052fa3a6fc28568465744839b6313e2ab4248c484ea4cc1e106de9183ed9"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "afc8c297e4c9249f091d67da6bbb4ee75fecdc0bd87d5b5c775a43bb94edfa7b",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        },
+        {
+          "unitId": "f3e2a5fc098f941ed44ba837dba084317467d19b66e99bdb599c1c691aad8474",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "ba81765f72460abc421a997073533dc5fdfa1cbdc3588c18c219987686a4465b",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "40ff0b6194dc1d1c6be4789cdd60ce62bfb5e2393fcbfe7855c8aa48a39fcb2c",
+      "sourceScanHash": "093a1d672f0ee6cb8481c936cad948aa62b10b09d81f1dae00b2fa6c80236f82",
+      "framingHash": "9dd85cc105680bd27b406509d9e8230941d88a925d3fb8ff827a55fff4a38143",
+      "typedSyntaxHash": "a229ab62e9e660d8c7bf506b26ded43cc5259c74a09e01dc8570d910903b6b9c",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 2,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 1,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "afc8c297e4c9249f091d67da6bbb4ee75fecdc0bd87d5b5c775a43bb94edfa7b",
+          "outcome": "candidate",
+          "kind": "typed_preference",
+          "reason": null
+        },
+        {
+          "unitIndex": 1,
+          "unitId": "f3e2a5fc098f941ed44ba837dba084317467d19b66e99bdb599c1c691aad8474",
+          "outcome": "withheld",
+          "kind": null,
+          "reason": "question_terminal"
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "typed_preference",
+          "category": "preference",
+          "key": "6243b21d92350e1fa13fa26c443e9d2394d5aa879ba0c5ddcecbd332a725c83a",
+          "evidenceHash": "42646719b1516a1f2b2f3d5206a2bede2c91e2dfb1bb2e623e9ba2f9335537e1",
+          "meaningHash": "fe930e01461f481b06b9b1d21e8667265b535d7ea3d5bca1430ec3c428ea2a20",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "5709d70e19f5468839523c9b6bb30431633161f2ad3e2ce2d9a6ae4141137fd3"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 29
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 29
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "quoted",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I prefer concise explanations. \"I prefer long explanations.\"",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:quoted",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "5a5856a36f4add565966c875662650849b1676799d2e6e8c4c997e768241d915",
+            "producerHash": "6bd1f4a2a1333d0518a1676611dddebcd0fdabf1e9b1cf7492144cc8d0a6e4b5",
+            "geometryHash": "8d766fb0d9a319d45f584bd0ecfeff102dfc4d7ab43a8c31425b5f21b571812e",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "c107ee538eefd6fb5f5f5bb7f8ed69d002c7188085631ec21d34ec6075bc25ce",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "5a5856a36f4add565966c875662650849b1676799d2e6e8c4c997e768241d915",
+              "mappedContentHash": "5a5856a36f4add565966c875662650849b1676799d2e6e8c4c997e768241d915",
+              "rawUtf16Length": 60,
+              "mappedUtf16Length": 60,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "c107ee538eefd6fb5f5f5bb7f8ed69d002c7188085631ec21d34ec6075bc25ce"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "4be79ca19da81302540c5be17a886a59c2c5907b30713f2c0fe91959e0c37f13",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        },
+        {
+          "unitId": "b22c81ef9d852f384c6234ad20096c769b1226b633582097906a9c6ff54fac89",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "80ed131cc5723466102585260b039725deb107a4d9c1f18df0354be4ee6f5170",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "8d766fb0d9a319d45f584bd0ecfeff102dfc4d7ab43a8c31425b5f21b571812e",
+      "sourceScanHash": "1764944f4b8628631f7421b57e5cddcbf3436a0b1c98453e669ebe5c0d356d96",
+      "framingHash": "7812d0bedb54109b0a2403fcffd2f241997d8b5c292ba2d7ac6170da570b0737",
+      "typedSyntaxHash": "141513ed6f56e55bfdb74a85dd7bcf2457f1e8d80573bf6dc7f4eec777faf464",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 2,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 1,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "4be79ca19da81302540c5be17a886a59c2c5907b30713f2c0fe91959e0c37f13",
+          "outcome": "candidate",
+          "kind": "typed_preference",
+          "reason": null
+        },
+        {
+          "unitIndex": 1,
+          "unitId": "b22c81ef9d852f384c6234ad20096c769b1226b633582097906a9c6ff54fac89",
+          "outcome": "withheld",
+          "kind": null,
+          "reason": "source_frame"
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "typed_preference",
+          "category": "preference",
+          "key": "6243b21d92350e1fa13fa26c443e9d2394d5aa879ba0c5ddcecbd332a725c83a",
+          "evidenceHash": "0444b4ccb52454e1b6e7dce1fb59a446cb24aa6b3e68a86cb1c537cb4367a698",
+          "meaningHash": "fe930e01461f481b06b9b1d21e8667265b535d7ea3d5bca1430ec3c428ea2a20",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "5709d70e19f5468839523c9b6bb30431633161f2ad3e2ce2d9a6ae4141137fd3"
+            }
+          ],
+          "rawSpan": {
+            "start": 0,
+            "end": 29
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 29
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "unknown-prefix",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "My notebook says I prefer tables. I prefer concise explanations.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:unknown-prefix",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "c6b591c0d72d2d0644892c61af9fc4ce01ac40f1a243c059933cf17e75c7920f",
+            "producerHash": "e1c2dcb457c25ec089ec409283b96e50a4288a54065eed22a80999163c12f8d7",
+            "geometryHash": "fe0b811ea9f91eb8c13ab9e0ef2f765a9c823714ad7a53b9e444c4e805fd65e5",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "6f05a07da16054bfef8d59752d9c276a4945c4612867ecd9451b19fa2b852be3",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "c6b591c0d72d2d0644892c61af9fc4ce01ac40f1a243c059933cf17e75c7920f",
+              "mappedContentHash": "c6b591c0d72d2d0644892c61af9fc4ce01ac40f1a243c059933cf17e75c7920f",
+              "rawUtf16Length": 64,
+              "mappedUtf16Length": 64,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "6f05a07da16054bfef8d59752d9c276a4945c4612867ecd9451b19fa2b852be3"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "a606f5da491d4dd12a6f4bf5691819f8d9cb7ef45c304ce8554b444b00c22de2",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        },
+        {
+          "unitId": "4b196945e6e000da3e10c32cbd9b55324b3f94095d67b16930da2b87001ddbb3",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "be3cd15f789d2cadd8cd2520b59b39bcfcd6c741ddda95c005f5567c466af06f",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "fe0b811ea9f91eb8c13ab9e0ef2f765a9c823714ad7a53b9e444c4e805fd65e5",
+      "sourceScanHash": "aaf72dc69026ab136d0b3a70f6790dc1e8119cc45a185c0ed53fba3eb146f977",
+      "framingHash": "efb5c2cb620ee566f4bb37216569ab36c1cb5d34f3c1f13e7c91dff45f075718",
+      "typedSyntaxHash": "fd798c7432f4c7c9994192c4061ea3f50fb4fb8638ec9e8c79c7617a43ec2120",
+      "sourceCoverage": {
+        "status": "unknown",
+        "scanStatus": "complete",
+        "sourceUnitCount": 2,
+        "candidateUnitCount": 0,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 2,
+        "unresolvedReason": "multiple"
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "a606f5da491d4dd12a6f4bf5691819f8d9cb7ef45c304ce8554b444b00c22de2",
+          "outcome": "unresolved",
+          "kind": null,
+          "reason": "statement_structure"
+        },
+        {
+          "unitIndex": 1,
+          "unitId": "4b196945e6e000da3e10c32cbd9b55324b3f94095d67b16930da2b87001ddbb3",
+          "outcome": "unresolved",
+          "kind": null,
+          "reason": "ambiguous_scope"
+        }
+      ],
+      "occurrences": []
+    }
+  },
+  {
+    "label": "punctuation-head",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I @ adore ink.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:punctuation-head",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "9313049d23d8a1d550e35a2ce5a473eb1700ed597c1b9ec8f28bc9f0fc137ab0",
+            "producerHash": "3d81360275d1c1bf80c7d80f98b5bb05244d650ce5a02aa2aacefabbce119fb5",
+            "geometryHash": "bf0951a2348f3e2b195679b6d6f457e9a5a2f4051a1d41ba5f783163c82bd886",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "d0afbc9e745113d55e276f43ef5f46138ea8fa7a14e66354888f6bfd210de47e",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "9313049d23d8a1d550e35a2ce5a473eb1700ed597c1b9ec8f28bc9f0fc137ab0",
+              "mappedContentHash": "9313049d23d8a1d550e35a2ce5a473eb1700ed597c1b9ec8f28bc9f0fc137ab0",
+              "rawUtf16Length": 14,
+              "mappedUtf16Length": 14,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "d0afbc9e745113d55e276f43ef5f46138ea8fa7a14e66354888f6bfd210de47e"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "3e599c39aca75b19137ffa2e8098d7f8dab69012efe760a59f22eb2e9997ab40",
+          "category": "personal_assertion",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "fcce51a3b76a95a22ea15ab2f87debb9162dc38a1d80280890d4f30be5b19d31",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "bf0951a2348f3e2b195679b6d6f457e9a5a2f4051a1d41ba5f783163c82bd886",
+      "sourceScanHash": "54bb6082fd66010d08698e31ab9e8657d03e7c12a6a42e959dbfcf0b651583cf",
+      "framingHash": "f8655fe1661d5e6ab032d21b79b3785c7e0f84416c4903ccb773c9b7baf9d62c",
+      "typedSyntaxHash": "5ba895ff75d481dc72928ea99f63a910c94e082400dacc6423a71db607c88bc9",
+      "sourceCoverage": {
+        "status": "unknown",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 0,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 1,
+        "unresolvedReason": "unsupported_scope"
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "3e599c39aca75b19137ffa2e8098d7f8dab69012efe760a59f22eb2e9997ab40",
+          "outcome": "unresolved",
+          "kind": null,
+          "reason": "statement_structure"
+        }
+      ],
+      "occurrences": []
+    }
+  },
+  {
+    "label": "literal-capacity",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "I adore aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:literal-capacity",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "41b1dd331bed2290011ac39235304033a4cea31db1e20e9ad37f9571f8a806ce",
+            "producerHash": "14fc0d07e4453cec8dd61348db1ddde0b281db8bd5a8040efb7897d76b390917",
+            "geometryHash": "0833f41f0b285cba0d90a1176290a468ed552f28add2336fc2b4bc9045364913",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "a7eb060b8d7c094cb1a6ef6c6d01ebe0c68a58f7274571606e8ee65273e210d3",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "full_body",
+              "rawContentHash": "41b1dd331bed2290011ac39235304033a4cea31db1e20e9ad37f9571f8a806ce",
+              "mappedContentHash": "41b1dd331bed2290011ac39235304033a4cea31db1e20e9ad37f9571f8a806ce",
+              "rawUtf16Length": 4109,
+              "mappedUtf16Length": 4109,
+              "humanRegion": null,
+              "mappings": [],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": null
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "a7eb060b8d7c094cb1a6ef6c6d01ebe0c68a58f7274571606e8ee65273e210d3"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "d2ebed7f5d48878a0367c6b5bc842ac1526ad646c9e647fdeae2d2a8041689a6",
+          "category": "personal_assertion",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "6045b08faf4305b5269d789ef81bd6f2c758de0900bfd1f4a25cf4b2e972e304",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "0833f41f0b285cba0d90a1176290a468ed552f28add2336fc2b4bc9045364913",
+      "sourceScanHash": "7bd247c9a5b86d0c1a14f02d3084a700b12dfdc5ffca533dc0b842903365f921",
+      "framingHash": "fc9abf7e4ae234b5bc835edb3fb47cf46af61a722725b612117756cd50d08919",
+      "typedSyntaxHash": "e3b281efdda9763593c573a83b1ba215988b0ee7373d9e70720db22801fb65fa",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 0,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 1,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "d2ebed7f5d48878a0367c6b5bc842ac1526ad646c9e647fdeae2d2a8041689a6",
+          "outcome": "withheld",
+          "kind": null,
+          "reason": "claim_capacity"
+        }
+      ],
+      "occurrences": []
+    }
+  },
+  {
+    "label": "utf16-wrapper",
+    "input": {
+      "source": {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "group_id": "synthetic:selector-golden",
+        "content": "Speaker 🧭: I prefer concise explanations.",
+        "role": "human",
+        "source_type": "message",
+        "episode_kind": "active_human",
+        "reference_time": "2026-10-27T11:12:13.000Z",
+        "previous_episode_uuid": null,
+        "source_message_id": "synthetic-message",
+        "idempotency_key": "synthetic-idempotency",
+        "conversation_id": "synthetic-conversation",
+        "sender_id": "synthetic-sender",
+        "source_workflow_id": "synthetic-workflow",
+        "source_execution_id": "synthetic-original-execution",
+        "quoted_message_id": null,
+        "created_at": "2026-10-27T11:12:13.000Z",
+        "updated_at": null,
+        "sender_name": null,
+        "trust_level": "standard",
+        "confidence": null,
+        "review_status": "accepted",
+        "attributes": {
+          "engram_write_owner_v4": {
+            "version": 4,
+            "family": "autonomous-personal-v1",
+            "lifecycle": "replaySafeV2",
+            "storeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "namespace": "synthetic:selector-golden",
+            "issuer": "n8n",
+            "actorReference": "synthetic-user",
+            "turn": "golden:utf16-wrapper",
+            "role": "human",
+            "purpose": "human_turn_memory",
+            "sourceId": "10000000-0000-4000-8000-000000000001",
+            "binding": {
+              "bindingId": "10000000-0000-4000-8000-000000000002",
+              "revision": 1,
+              "subjectId": "10000000-0000-4000-8000-000000000003",
+              "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "contentHash": "baf05e07de2e8abb254620326480e3f0abd3ed22474a39da682e1265a3647ad4",
+            "producerHash": "954b92ef3016f3ebd31b42a30e249fa0a029c3a70c8a781befffac7af048119b",
+            "geometryHash": "eb3efa3881864bfe20418491e5aafd6b82f90c30687873c06613d981bb0f767f",
+            "eventTimeMode": "explicit",
+            "eventTimeHash": "1278af00952ec60a2609f7fcb390600abff13fdedf566a835c99cb3d76f6e65f",
+            "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68",
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+            "requestedAuthorityHash": "a8697bdccd144e6e4cc0840df1675ff3002e7a5b00c9b23ca06fcaf099e0ba8d",
+            "requestedTrustLevel": "standard"
+          },
+          "engram_source_envelope_v3": {
+            "version": 3,
+            "family": "autonomous-personal-v1",
+            "geometry": {
+              "version": 3,
+              "mode": "application_region",
+              "rawContentHash": "baf05e07de2e8abb254620326480e3f0abd3ed22474a39da682e1265a3647ad4",
+              "mappedContentHash": "2ec0900ef8a5cdfe9f7c940e2219f5ba4929233fcabdb1c561b75ccca3144fea",
+              "rawUtf16Length": 42,
+              "mappedUtf16Length": 30,
+              "humanRegion": {
+                "start": 12,
+                "end": 42
+              },
+              "mappings": [
+                {
+                  "rawStart": 12,
+                  "rawEnd": 42,
+                  "mappedStart": 0,
+                  "mappedEnd": 30
+                }
+              ],
+              "quoteRegionSpace": "mapped_utf16",
+              "quoteRegions": [],
+              "applicationWrapper": {
+                "configurationFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              }
+            },
+            "policyRef": {
+              "version": 3,
+              "policyId": "autonomous-personal-memory",
+              "policyVersion": 1,
+              "profileId": "conservative",
+              "profileVersion": 2,
+              "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+            },
+            "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+            "requestedAuthorityHash": "a8697bdccd144e6e4cc0840df1675ff3002e7a5b00c9b23ca06fcaf099e0ba8d"
+          }
+        }
+      },
+      "descriptor": {
+        "version": 4,
+        "lifecycle": "replaySafeV2",
+        "executionMode": "synchronous",
+        "purpose": "human_turn_memory",
+        "interpreterId": "autonomous-personal-memory",
+        "interpretationFamily": "autonomous-personal-v1",
+        "interpretationVersion": 1,
+        "preferenceInterpreter": {
+          "interpreterId": "compositional-preferences",
+          "semanticVersion": 2,
+          "grammarVersion": 2,
+          "lexiconVersion": 2
+        },
+        "statementGrammarVersion": 1,
+        "compositionVersion": 1,
+        "providerContractVersion": 1,
+        "policy": {
+          "version": 3,
+          "policyId": "autonomous-personal-memory",
+          "policyVersion": 1,
+          "profileId": "conservative",
+          "profileVersion": 2,
+          "interpretationFamily": "autonomous-personal-v1",
+          "preferenceInterpreter": {
+            "interpreterId": "compositional-preferences",
+            "semanticVersion": 2,
+            "grammarVersion": 2,
+            "lexiconVersion": 2
+          },
+          "statementGrammarVersion": 1,
+          "compositionVersion": 1,
+          "usefulnessPolicyVersion": 1,
+          "riskPolicyVersion": 1,
+          "consistencyPolicyVersion": 1,
+          "materializerVersion": 1,
+          "autoAccept": true,
+          "requiresProtectedIntent": false,
+          "limits": {
+            "sourceBytes": 65536,
+            "envelopeBytes": 16384,
+            "geometryEntries": 32,
+            "sourceUnits": 128,
+            "lexicalTokens": 8192,
+            "occurrences": 32,
+            "dependencyRoots": 32,
+            "preferencePredicates": 32,
+            "preferenceNodes": 128,
+            "preferenceEdges": 128,
+            "preferenceDepth": 8,
+            "statementCodePoints": 2048,
+            "statementBytes": 4096,
+            "policyBytes": 4096,
+            "descriptorBytes": 4096,
+            "preflightBytes": 16384,
+            "claimMetadataBytes": 32768,
+            "planBytes": 524288,
+            "cachedStageBytes": 589824,
+            "receiptBytes": 16384,
+            "operationBytes": 32768,
+            "guards": 130,
+            "candidateProjections": 128,
+            "rootRecords": 100000,
+            "rootBytes": 104857600,
+            "readMilliseconds": 5000,
+            "readAttempts": 128,
+            "sourceHydrations": 512,
+            "conflicts": 128,
+            "conflictRefsPerClaim": 8,
+            "readContextBytes": 8388608,
+            "qualifiedContextBytes": 524288,
+            "minimalProofBytes": 24576,
+            "diagnosticReferences": 8,
+            "providerMaxAttempts": 2,
+            "providerRequestBytes": 262144,
+            "providerResponseBytes": 65536
+          },
+          "finalizationReserve": {
+            "minMs": 20,
+            "maxMs": 1000,
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceil"
+          },
+          "fingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d"
+        },
+        "requestedTrustLevel": "standard",
+        "intentSetting": false,
+        "invocationDeadlineMs": 30000,
+        "provider": {
+          "routeId": "synthetic-route",
+          "configurationFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "protocol": "openai-compatible-json-v1",
+          "configuredRequestLimit": 2,
+          "configuredTimeoutMs": 30000,
+          "configuredRequestBytes": 262144,
+          "configuredResponseBytes": 65536,
+          "temperature": {
+            "mode": "providerDefault"
+          },
+          "responseFormat": "json_object",
+          "outputTokenLimit": {
+            "mode": "omit"
+          },
+          "structuredContractVersion": 1,
+          "promptVersion": 1,
+          "effectiveRequestLimit": 2,
+          "effectiveTimeoutMs": 30000,
+          "effectiveRequestBytes": 262144,
+          "effectiveResponseBytes": 65536
+        },
+        "finalizationReserveMs": 1000,
+        "assistantWriteAuthority": null,
+        "settingsHash": "316b18e2b760eb894820ae9ac9c767222a1908b0ae9cd2be29b184216eb50e68"
+      }
+    },
+    "response": {
+      "version": 1,
+      "units": [
+        {
+          "unitId": "7ee077b92337ee8bddfad40db7de3a2bffcb1e80de6eb8018e54e3836258490d",
+          "category": "preference",
+          "risk": "ordinary",
+          "usefulness": "personal_memory",
+          "downgrade": []
+        }
+      ]
+    },
+    "expected": {
+      "version": 1,
+      "sourceId": "10000000-0000-4000-8000-000000000001",
+      "sourceHash": "a5d8187b7f7aac83a57352f35ae8afa37e4309c092b65dde26f4aad3472683a5",
+      "descriptorHash": "15fa1ba8273a70da36c4918e1acd33c0f569193b46b4a8cb68da5cccd51102c2",
+      "policyFingerprint": "4cbbe760432c51a478786dd32d644ac628ccfc311314d44e099d26fa79b9976d",
+      "geometryHash": "eb3efa3881864bfe20418491e5aafd6b82f90c30687873c06613d981bb0f767f",
+      "sourceScanHash": "f5c932f21aa785b7dc267e71ab7d1506b18e2310db2de9a232501a70ffab5b45",
+      "framingHash": "70b1fa66abfacd2328a862cdc9f63427812c6ebdc0b0bec0f2e3444a3e609b5f",
+      "typedSyntaxHash": "6b14e414e5286ed684975a09df5aaf87c244a3552fcd027583f4e0a36d9d0c70",
+      "sourceCoverage": {
+        "status": "complete",
+        "scanStatus": "complete",
+        "sourceUnitCount": 1,
+        "candidateUnitCount": 1,
+        "neutralUnitCount": 0,
+        "withheldUnitCount": 0,
+        "unresolvedUnitCount": 0,
+        "unresolvedReason": null
+      },
+      "status": "complete",
+      "units": [
+        {
+          "unitIndex": 0,
+          "unitId": "7ee077b92337ee8bddfad40db7de3a2bffcb1e80de6eb8018e54e3836258490d",
+          "outcome": "candidate",
+          "kind": "typed_preference",
+          "reason": null
+        }
+      ],
+      "occurrences": [
+        {
+          "candidateIndex": 0,
+          "unitIndex": 0,
+          "kind": "typed_preference",
+          "category": "preference",
+          "key": "6243b21d92350e1fa13fa26c443e9d2394d5aa879ba0c5ddcecbd332a725c83a",
+          "evidenceHash": "d86b18aff4e55ed56f6620b9cd2fc7d562fa508343b31556dc71bd7cdb600105",
+          "meaningHash": "fe930e01461f481b06b9b1d21e8667265b535d7ea3d5bca1430ec3c428ea2a20",
+          "dependencies": [
+            {
+              "index": 0,
+              "dependencyHash": "5709d70e19f5468839523c9b6bb30431633161f2ad3e2ce2d9a6ae4141137fd3"
+            }
+          ],
+          "rawSpan": {
+            "start": 12,
+            "end": 41
+          },
+          "mappedSpan": {
+            "start": 0,
+            "end": 29
+          }
+        }
+      ]
+    }
+  }
+]

@@ -23,11 +23,24 @@ import {
   type EpisodicNode,
   type GraphData,
   type StagedExtraction,
+  assertNoImportedAutomaticOperations,
 } from '../schemas';
 import type { AppendEpisodeResult } from '../storage/IGraphStorage';
+import { COMPOSITIONAL_CAPTURE_V3_OWNER_ATTRIBUTE } from '../schemas/CompositionalAutomaticCaptureV3.schema';
+import {
+  AUTONOMOUS_CAPTURE_V3_ENVELOPE_ATTRIBUTE,
+  AUTONOMOUS_CAPTURE_V4_OWNER_ATTRIBUTE,
+} from '../schemas/AutonomousPersonalSourceV4.schema';
 import { isDurableAssertion } from './AssertionEvidence';
-import { validateAutomaticPlan, committedAutomaticReceipt } from './AutomaticClaims';
-import { assertNoAutomaticBindingMutation } from '../storage/AutomaticIdentity';
+import {
+  AUTOMATIC_CLAIM,
+  validateAutomaticPlan,
+  committedAutomaticReceipt,
+} from './AutomaticClaims';
+import {
+  assertNoAutomaticBindingMutation,
+  WRITE_OWNER_V2_ATTRIBUTE,
+} from '../storage/AutomaticIdentity';
 
 export const QUEUE_ATTRIBUTE = 'engram_extraction_queue_v1';
 const terminal = new Set(['completed', 'cancelled']);
@@ -145,6 +158,104 @@ export function enforceCapacity(graph: GraphData, group: string, limits: QueueLi
   )
     throw new Error('Engram queue: capacity');
 }
+
+function assertLegacyExtractionSource(episode: EpisodicNode): void {
+  if (
+    Object.prototype.hasOwnProperty.call(episode.attributes, WRITE_OWNER_V2_ATTRIBUTE) ||
+    Object.prototype.hasOwnProperty.call(
+      episode.attributes,
+      COMPOSITIONAL_CAPTURE_V3_OWNER_ATTRIBUTE,
+    ) ||
+    Object.prototype.hasOwnProperty.call(
+      episode.attributes,
+      AUTONOMOUS_CAPTURE_V4_OWNER_ATTRIBUTE,
+    ) ||
+    Object.prototype.hasOwnProperty.call(
+      episode.attributes,
+      AUTONOMOUS_CAPTURE_V3_ENVELOPE_ATTRIBUTE,
+    )
+  ) {
+    throw new Error('Engram automatic memory: capture_operation_required');
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Read provenance from the stored target, never from the staged replacement. */
+function isCapturedStoredTarget(graph: GraphData, target: EntityNode | EntityEdge): boolean {
+  // A new-family protected marker is itself a reason to decline legacy
+  // mutation. Missing source rows must not turn an incomplete proof into an
+  // unowned overwrite fallback.
+  for (const key of [AUTOMATIC_CLAIM, 'engram_literal_v1']) {
+    const marker = target.attributes[key];
+    if (isRecord(marker) && (marker.version === 2 || marker.version === 3)) return true;
+  }
+  const sourceIds = new Set<string>();
+  for (const sourceId of extractionMetadataFromAttributes(target.attributes)?.episode_uuids ?? []) {
+    sourceIds.add(sourceId);
+  }
+  if ('episodes' in target) {
+    for (const sourceId of target.episodes) sourceIds.add(sourceId);
+  }
+  const claim = target.attributes[AUTOMATIC_CLAIM];
+  if (isRecord(claim) && typeof claim.sourceId === 'string') sourceIds.add(claim.sourceId);
+  const quality = target.attributes.engram_memory_quality;
+  if (isRecord(quality) && Array.isArray(quality.evidence)) {
+    for (const evidence of quality.evidence) {
+      if (isRecord(evidence) && typeof evidence.source_id === 'string') {
+        sourceIds.add(evidence.source_id);
+      }
+    }
+  }
+
+  return [...sourceIds].some((sourceId) => {
+    const source = graph.episodes.find(
+      (episode) => episode.uuid === sourceId && episode.group_id === target.group_id,
+    );
+    return (
+      source !== undefined &&
+      (Object.prototype.hasOwnProperty.call(source.attributes, WRITE_OWNER_V2_ATTRIBUTE) ||
+        Object.prototype.hasOwnProperty.call(
+          source.attributes,
+          COMPOSITIONAL_CAPTURE_V3_OWNER_ATTRIBUTE,
+        ) ||
+        Object.prototype.hasOwnProperty.call(
+          source.attributes,
+          AUTONOMOUS_CAPTURE_V4_OWNER_ATTRIBUTE,
+        ) ||
+        Object.prototype.hasOwnProperty.call(
+          source.attributes,
+          AUTONOMOUS_CAPTURE_V3_ENVELOPE_ATTRIBUTE,
+        ))
+    );
+  });
+}
+
+function assertNoLegacyCaptureTargetMutation(graph: GraphData, plan: StagedExtraction): void {
+  for (const target of plan.entities) {
+    const stored = graph.entities.find((entity) => entity.uuid === target.uuid);
+    if (
+      stored &&
+      canonical(stored) !== canonical(target) &&
+      isCapturedStoredTarget(graph, stored)
+    ) {
+      throw new Error('Engram automatic memory: capture_operation_required');
+    }
+  }
+  for (const target of plan.edges) {
+    const stored = graph.edges.find((edge) => edge.uuid === target.uuid);
+    if (
+      stored &&
+      canonical(stored) !== canonical(target) &&
+      isCapturedStoredTarget(graph, stored)
+    ) {
+      throw new Error('Engram automatic memory: capture_operation_required');
+    }
+  }
+}
+
 export function enqueue(
   graph: GraphData,
   results: AppendEpisodeResult[],
@@ -155,6 +266,14 @@ export function enqueue(
   jobUuid: string = randomUUID(),
 ): ExtractionJob[] {
   const settings = QueueLimitsSchema.parse(limits);
+  const eligibleIndices = [...new Set(eligible)];
+  for (const index of eligibleIndices) {
+    const result = results[index];
+    if (!result) throw new Error('Engram queue: invalid_source_index');
+    const episode = graph.episodes.find((item) => item.uuid === result.episode.uuid);
+    if (!episode) throw new Error('Engram queue: source_changed');
+    assertLegacyExtractionSource(episode);
+  }
   const group = results[0]?.episode.group_id;
   for (const job of jobs(graph)) {
     if (
@@ -165,7 +284,7 @@ export function enqueue(
   }
   const refs = new Map<string, ExtractionJob>();
   const selected: EpisodicNode[] = [];
-  for (const index of [...new Set(eligible)]) {
+  for (const index of eligibleIndices) {
     const result = results[index];
     if (!result) throw new Error('Engram queue: invalid_source_index');
     const ep = graph.episodes.find((e) => e.uuid === result.episode.uuid)!;
@@ -229,13 +348,15 @@ export function applyPlan(graph: GraphData, input: StagedExtraction, queued = fa
     const ep = graph.episodes.find(
       (item) => item.uuid === guard.uuid && item.group_id === plan.group_id,
     );
-    if (!ep || sourceFingerprint(ep) !== guard.hash)
-      throw new Error('Engram queue: source_changed');
+    if (!ep) throw new Error('Engram queue: source_changed');
+    assertLegacyExtractionSource(ep);
+    if (sourceFingerprint(ep) !== guard.hash) throw new Error('Engram queue: source_changed');
     if (!queued && ownership(ep)) throw new Error('Engram queue: queued_source_requires_job');
   }
   if (graphFingerprint(graph, plan.group_id) !== plan.graph_hash)
     throw new Error('Engram queue: graph_changed');
   if (Buffer.byteLength(canonical(plan)) > 512 * 1024) throw new Error('Engram queue: plan_size');
+  assertNoLegacyCaptureTargetMutation(graph, plan);
   const automatic = validateAutomaticPlan(graph, plan);
   if (
     [...plan.entities, ...plan.edges].some(
@@ -623,19 +744,22 @@ export function assertNoQueueMutation(episodes: EpisodicNode[]): void {
 
 /** Explicit operational backup; source/job dependencies must be complete. */
 export function exportQueueBackup(graph: GraphData): QueueBackup {
-  validateQueueGraph(graph);
-  const episodeIds = new Set(graph.episodes.map((ep) => ep.uuid));
+  // Preserve native operation state for inspection and checksum integrity. Import
+  // still rejects operational roots because queue JSON is not a native restore path.
+  const backupGraph = { ...graph };
+  validateQueueGraph(backupGraph);
+  const episodeIds = new Set(backupGraph.episodes.map((ep) => ep.uuid));
   return {
     format: 'engram-extraction-backup',
     version: 1,
-    graph,
-    sha256: fingerprint(graph),
+    graph: backupGraph,
+    sha256: fingerprint(backupGraph),
     warnings: {
-      missing_fact_source_references: graph.edges.reduce(
+      missing_fact_source_references: backupGraph.edges.reduce(
         (count, edge) => count + edge.episodes.filter((uuid) => !episodeIds.has(uuid)).length,
         0,
       ),
-      missing_chain_predecessors: graph.episodes.filter(
+      missing_chain_predecessors: backupGraph.episodes.filter(
         (ep) => ep.previous_episode_uuid && !episodeIds.has(ep.previous_episode_uuid),
       ).length,
     },
@@ -688,6 +812,11 @@ function validateQueueGraph(graph: GraphData): void {
   }
 }
 export function prepareQueueImport(input: unknown, existing: GraphData, now: string): GraphData {
+  const rawGraph =
+    input !== null && typeof input === 'object'
+      ? (input as Record<string, unknown>).graph
+      : undefined;
+  assertNoImportedAutomaticOperations(rawGraph);
   const backup = QueueBackupSchema.parse(input);
   if (fingerprint(backup.graph) !== backup.sha256) throw new Error('Engram queue: backup_checksum');
   const graph = JSON.parse(JSON.stringify(backup.graph)) as GraphData;

@@ -18,6 +18,7 @@ import {
   sourceFingerprint,
   exportQueueBackup,
   fingerprint,
+  prepareQueueImport,
 } from '../../src/extraction/QueueState';
 import { StagedGraph } from '../../src/extraction/StagedGraph';
 
@@ -465,6 +466,32 @@ function suite(name: string, create: (path: string) => IGraphStorage) {
           ] as any
         ).job.state,
       ).toBe('paused');
+    });
+
+    it('preserves automatic operation roots in inspection exports and rejects importing authority', async () => {
+      const snapshot = await storage.readExtractionSnapshot!(group);
+      const graphWithLedger = {
+        ...snapshot,
+        automatic_operations_v1: { version: 1 as const, operations: [] },
+      };
+      const backup = exportQueueBackup(graphWithLedger);
+      expect(backup.graph.automatic_operations_v1).toEqual(graphWithLedger.automatic_operations_v1);
+      expect(backup.sha256).toBe(fingerprint(backup.graph));
+      expect(() => prepareQueueImport(backup, snapshot, new Date().toISOString())).toThrow(
+        'native_restore_required',
+      );
+
+      const graphWithUnknownRoot = {
+        ...backup.graph,
+        automatic_operations_v2: { version: 2, operations: [] },
+      };
+      await expect(
+        storage.importExtractionBackup!({
+          ...backup,
+          graph: graphWithUnknownRoot,
+          sha256: fingerprint(graphWithUnknownRoot),
+        }),
+      ).rejects.toThrow('native_restore_required');
     });
     it('requires reviewed clear and permits a reviewed configuration repair without changing source identities', async () => {
       const saved = await storage.appendEpisodesWithExtraction!(

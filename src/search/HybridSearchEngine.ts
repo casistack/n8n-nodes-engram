@@ -6,7 +6,7 @@ import type {
   EdgeSearchOptions,
 } from '../storage/IGraphStorage';
 import type { EmbeddingService } from '../embeddings';
-import { extractionMetadataFromAttributes } from '../schemas';
+import { extractionMetadataFromAttributes, ExplicitTimestampSchema } from '../schemas';
 import {
   RetrievalGovernance,
   type GovernedEdgeSearchResult,
@@ -17,6 +17,63 @@ import { formatBudgetedItems, type BudgetedSectionResult } from './ContextBudget
 import type { EntityEdge } from '../schemas';
 import type { SourceHydrationBudget } from '../schemas/ExtractionPolicy.schema';
 import type { AutomaticReadContext } from '../schemas/AutomaticRuntime.schema';
+import type { CompositionalRuntimeReaderV3 } from '../schemas/CompositionalRuntimeReaderV3.schema';
+import {
+  getCompositionalRuntimeCandidateDataV3,
+  isLiveCompositionalRuntimeReaderV3,
+  isCompositionalCompatibilityRuntimeReaderV4,
+  getCompositionalRuntimeAutomaticReadContextV3,
+} from './CompositionalRuntimeReaderV3';
+import { cloneBoundedAutomaticCaptureJson } from '../storage/BoundedAutomaticCaptureJson';
+import { getCompositionalRuntimeLexicalHintV3 } from './CompositionalRuntimeSearchV3';
+import { EntityEdgeSchema } from '../schemas/EntityEdge.schema';
+import { getAutonomousPersonalRuntimeDisplayV4 } from './AutonomousPersonalRuntimeSearchV4';
+import {
+  getAutonomousPersonalMemoryParentReadStopV4,
+  type PrivateAutonomousPersonalMemoryParentReaderV4,
+} from '../memory/AutonomousPersonalMemoryParentReaderV4';
+
+type NativeSearchRouteV4 = Readonly<{
+  owner: IGraphStorage;
+  parent: PrivateAutonomousPersonalMemoryParentReaderV4;
+  compatibilityReader: CompositionalRuntimeReaderV3;
+  namespace: string;
+  sources: SourceHydrationBudget;
+  conflicts: AutomaticReadContext['conflicts'];
+}>;
+const nativeSearchRoutesV4 = new WeakMap<object, NativeSearchRouteV4>();
+
+function nativeRouteLiveV4(route: NativeSearchRouteV4): boolean {
+  return (
+    isCompositionalCompatibilityRuntimeReaderV4(
+      route.owner,
+      route.parent,
+      route.compatibilityReader,
+    ) && getAutonomousPersonalMemoryParentReadStopV4(route.owner, route.parent) === null
+  );
+}
+
+function nativeReadContextV4(
+  route: NativeSearchRouteV4,
+  requested?: AutomaticReadContext,
+): AutomaticReadContext | null {
+  if (!nativeRouteLiveV4(route)) return null;
+  const mode = requested?.mode ?? 'current';
+  const at = requested?.at;
+  if (mode === 'asOf' && !ExplicitTimestampSchema.safeParse(at).success) return null;
+  const context = getCompositionalRuntimeAutomaticReadContextV3(route.compatibilityReader, {
+    mode,
+    ...(at === undefined ? {} : { at }),
+  });
+  if (
+    !context ||
+    context.sources !== route.sources ||
+    context.conflicts !== route.conflicts ||
+    !nativeRouteLiveV4(route)
+  )
+    return null;
+  return context;
+}
 
 export interface HybridSearchOptions {
   limit?: number;
@@ -34,6 +91,7 @@ export interface HybridSearchOptions {
   captureMatchEvidence?: boolean;
   hydrationBudget?: SourceHydrationBudget;
   automaticBudget?: AutomaticReadContext;
+  compositionalReader?: CompositionalRuntimeReaderV3;
 }
 
 export interface HybridSearchResults {
@@ -101,6 +159,36 @@ export class HybridSearchEngine {
     this.governance = new RetrievalGovernance(storage);
   }
 
+  /** @internal Fixed native construction; no caller graph, callback or mode can bind a route. */
+  static forAutonomousPersonalMemoryV4(
+    owner: IGraphStorage,
+    parent: PrivateAutonomousPersonalMemoryParentReaderV4,
+    compatibilityReader: CompositionalRuntimeReaderV3,
+    embeddingService?: EmbeddingService,
+  ): Readonly<{ engine: HybridSearchEngine; storage: IGraphStorage }> | null {
+    const bound = RetrievalGovernance.forAutonomousPersonalMemoryV4(
+      owner,
+      parent,
+      compatibilityReader,
+    );
+    if (!bound) return null;
+    const automatic = getCompositionalRuntimeAutomaticReadContextV3(compatibilityReader);
+    if (!automatic) return null;
+    const route: NativeSearchRouteV4 = Object.freeze({
+      owner,
+      parent,
+      compatibilityReader,
+      namespace: bound.namespace,
+      sources: automatic.sources,
+      conflicts: automatic.conflicts,
+    });
+    if (!nativeRouteLiveV4(route)) return null;
+    const engine = new HybridSearchEngine(bound.storage, embeddingService);
+    engine.governance = bound.governance;
+    nativeSearchRoutesV4.set(engine, route);
+    return Object.freeze({ engine, storage: bound.storage });
+  }
+
   /**
    * Search for relevant entities and edges matching the query.
    * When embeddings are enabled, runs text + vector search in parallel and merges with RRF.
@@ -110,6 +198,26 @@ export class HybridSearchEngine {
     groupId: string,
     options?: HybridSearchOptions,
   ): Promise<HybridSearchResults> {
+    const native = nativeSearchRoutesV4.get(this);
+    if (native) {
+      if (groupId !== native.namespace || !nativeRouteLiveV4(native))
+        return { entities: [], edges: [] };
+      const automatic = nativeReadContextV4(native, options?.automaticBudget);
+      const requestedLimit = options?.limit ?? 10;
+      if (
+        !automatic ||
+        !Number.isInteger(requestedLimit) ||
+        requestedLimit < 1 ||
+        requestedLimit > 200
+      )
+        return { entities: [], edges: [] };
+      options = {
+        ...options,
+        hydrationBudget: automatic.sources,
+        automaticBudget: automatic,
+        compositionalReader: native.compatibilityReader,
+      };
+    }
     const limit = options?.limit ?? 10;
     const minScore = options?.minScore ?? 0;
     const retrievalFilters: RetrievalFilters = {
@@ -119,6 +227,9 @@ export class HybridSearchEngine {
         : options?.retrievalFilters?.review_statuses,
     };
 
+    // The opt-in native route normalizes a preference word family for candidate
+    // matching only. Embeddings and diagnostics keep the original query.
+    const textQuery = native ? query.replace(/\b(?:preferences?|preferred)\b/gi, 'prefer') : query;
     // Always run text search
     const textPromise = Promise.all([
       this.storage.searchEntities(query, groupId, {
@@ -128,7 +239,7 @@ export class HybridSearchEngine {
         created_after: options?.createdAfter,
         created_before: options?.createdBefore,
       }),
-      this.storage.searchEdges(query, groupId, {
+      this.storage.searchEdges(textQuery, groupId, {
         limit: limit * 2,
         min_score: minScore,
         include_expired: options?.includeExpired ?? false,
@@ -147,6 +258,7 @@ export class HybridSearchEngine {
     ) {
       try {
         const embeddingResult = await this.embeddingService.embed(query);
+        if (native && !nativeRouteLiveV4(native)) return { entities: [], edges: [] };
         const vector = embeddingResult.embedding;
 
         const [textResults, vectorResults] = await Promise.all([
@@ -162,6 +274,7 @@ export class HybridSearchEngine {
             }),
           ]),
         ]);
+        if (native && !nativeRouteLiveV4(native)) return { entities: [], edges: [] };
 
         const [rawTextEntities, rawTextEdges] = textResults;
         const [rawVectorEntities, rawVectorEdges] = vectorResults;
@@ -202,13 +315,23 @@ export class HybridSearchEngine {
           preliminaryDecisions,
         );
       } catch (error) {
-        // Embedding failed — fall back to text-only
-        console.warn('Engram: Embedding search failed, using text-only:', (error as Error).message);
+        if (native) {
+          // This also rethrows any sticky trusted-reader failure with its exact identity.
+          if (!nativeRouteLiveV4(native)) return { entities: [], edges: [] };
+          console.warn('Engram: Embedding search failed, using text-only');
+        } else {
+          // Embedding failed — fall back to text-only
+          console.warn(
+            'Engram: Embedding search failed, using text-only:',
+            (error as Error).message,
+          );
+        }
       }
     }
 
     // Text-only path
     const [rawEntities, rawEdges] = await textPromise;
+    if (native && !nativeRouteLiveV4(native)) return { entities: [], edges: [] };
     const entities = this.filterAcceptedEntities(rawEntities, options?.acceptedOnly);
     const edges = this.filterAcceptedEdges(rawEdges, options?.acceptedOnly);
     const preliminaryDecisions = options?.includeDiagnostics
@@ -243,6 +366,13 @@ export class HybridSearchEngine {
     options: HybridSearchOptions | undefined,
     preliminaryDecisions: RetrievalCandidateDecision[],
   ): Promise<HybridSearchResults> {
+    const native = nativeSearchRoutesV4.get(this);
+    if (native) {
+      if (groupId !== native.namespace || !nativeRouteLiveV4(native))
+        return { entities: [], edges: [] };
+      entityCandidates = entityCandidates.slice(0, 200);
+      edgeCandidates = edgeCandidates.slice(0, 200);
+    }
     if (!options?.includeDiagnostics) {
       const [entities, edges] = await Promise.all([
         this.governance.governEntities(
@@ -250,13 +380,29 @@ export class HybridSearchEngine {
           retrievalFilters,
           options?.hydrationBudget,
         ),
-        this.governance.governEdges(
-          edgeCandidates,
-          retrievalFilters,
-          options?.hydrationBudget,
-          options?.automaticBudget,
-        ),
+        native
+          ? this.governance
+              .governAutonomousPersonalMemoryEdgesV4(
+                native.owner,
+                native.parent,
+                native.compatibilityReader,
+                edgeCandidates,
+                retrievalFilters,
+                native.sources,
+                options?.automaticBudget,
+              )
+              .then((result) => result.results)
+          : this.governance.governEdges(
+              edgeCandidates,
+              retrievalFilters,
+              options?.hydrationBudget,
+              options?.automaticBudget,
+              ...(options?.compositionalReader === undefined
+                ? ([] as const)
+                : ([options.compositionalReader] as const)),
+            ),
       ]);
+      if (native && !nativeRouteLiveV4(native)) return { entities: [], edges: [] };
       return { entities: entities.slice(0, limit), edges: edges.slice(0, limit) };
     }
 
@@ -266,13 +412,27 @@ export class HybridSearchEngine {
         retrievalFilters,
         options?.hydrationBudget,
       ),
-      this.governance.governEdgesWithDecisions(
-        edgeCandidates,
-        retrievalFilters,
-        options?.hydrationBudget,
-        options?.automaticBudget,
-      ),
+      native
+        ? this.governance.governAutonomousPersonalMemoryEdgesV4(
+            native.owner,
+            native.parent,
+            native.compatibilityReader,
+            edgeCandidates,
+            retrievalFilters,
+            native.sources,
+            options?.automaticBudget,
+          )
+        : this.governance.governEdgesWithDecisions(
+            edgeCandidates,
+            retrievalFilters,
+            options?.hydrationBudget,
+            options?.automaticBudget,
+            ...(options?.compositionalReader === undefined
+              ? ([] as const)
+              : ([options.compositionalReader] as const)),
+          ),
     ]);
+    if (native && !nativeRouteLiveV4(native)) return { entities: [], edges: [] };
     const entities = entityGovernance.results.slice(0, limit);
     const edges = edgeGovernance.results.slice(0, limit);
     const candidateLimit = Math.min(
@@ -532,21 +692,62 @@ export class HybridSearchEngine {
         '): ' +
         result.entity.summary,
     }));
-    const factItems = results.edges.map((result) => ({
-      id: result.edge.uuid,
-      line: includeProvenance
-        ? this.formatFactWithProvenance(result)
-        : '- ' +
-          result.sourceEntity.name +
-          ' -> ' +
-          result.targetEntity.name +
-          ': ' +
-          result.edge.fact,
-    }));
+    const buildFactItems = (allowClaim3: boolean) => {
+      const items: { id: string; line: string }[] = [];
+      for (const result of results.edges) {
+        const version = (
+          result.edge.attributes.engram_claim_v1 as { version?: unknown } | undefined
+        )?.version;
+        if (version === 3) {
+          // Version 3 text is never trusted from the edge; only a live private display renders.
+          const line = allowClaim3
+            ? this.formatAutonomousPersonalFact(result, includeProvenance)
+            : null;
+          if (line !== null) items.push({ id: result.edge.uuid, line });
+          continue;
+        }
+        if (version === 2 && getCompositionalRuntimeLexicalHintV3(result) === null) continue;
+        items.push({
+          id: result.edge.uuid,
+          line: includeProvenance
+            ? this.formatFactWithProvenance(result)
+            : '- ' +
+              result.sourceEntity.name +
+              ' -> ' +
+              result.targetEntity.name +
+              ': ' +
+              result.edge.fact,
+        });
+      }
+      return items;
+    };
     const entityBudget = tokenBudget === undefined ? undefined : Math.floor(tokenBudget * 0.25);
     const factBudget = tokenBudget === undefined ? undefined : tokenBudget - (entityBudget ?? 0);
     const entitySection = formatBudgetedItems('Known entities:', entityItems, entityBudget);
-    const factSection = formatBudgetedItems('Known facts:', factItems, factBudget);
+    let factItems = buildFactItems(true);
+    let factSection = formatBudgetedItems('Known facts:', factItems, factBudget);
+    const claim3Ids = new Set(
+      results.edges
+        .filter(
+          (result) =>
+            (result.edge.attributes.engram_claim_v1 as { version?: unknown } | undefined)
+              ?.version === 3,
+        )
+        .map((result) => result.edge.uuid),
+    );
+    if (
+      claim3Ids.size > 0 &&
+      results.edges.some(
+        (result) =>
+          claim3Ids.has(result.edge.uuid) &&
+          factSection.included_ids.includes(result.edge.uuid) &&
+          getAutonomousPersonalRuntimeDisplayV4(result) === null,
+      )
+    ) {
+      // A display expired while formatting: fail closed by dropping every Claim3 item.
+      factItems = buildFactItems(false);
+      factSection = formatBudgetedItems('Known facts:', factItems, factBudget);
+    }
     const context = [entitySection.text, factSection.text].filter(Boolean).join('\n\n');
     return {
       context,
@@ -564,7 +765,67 @@ export class HybridSearchEngine {
     filters: RetrievalFilters = {},
     budget?: SourceHydrationBudget,
     automatic?: AutomaticReadContext,
+    compositionalReader?: CompositionalRuntimeReaderV3,
   ): Promise<GovernedEdgeSearchResult[]> {
+    const native = nativeSearchRoutesV4.get(this);
+    if (native) {
+      if (!nativeRouteLiveV4(native) || !Array.isArray(edges) || edges.length > 200) return [];
+      const context = nativeReadContextV4(native, automatic);
+      if (!context) return [];
+      const results: EdgeSearchResult[] = [];
+      for (const candidate of edges) {
+        if (!nativeRouteLiveV4(native)) return [];
+        let edge: EntityEdge;
+        try {
+          edge = EntityEdgeSchema.strict().parse(
+            cloneBoundedAutomaticCaptureJson(candidate, 'beginRequest'),
+          );
+        } catch {
+          // Recheck outside data validation to preserve trusted-reader failures.
+          if (!nativeRouteLiveV4(native)) return [];
+          return [];
+        }
+        if (edge.group_id !== native.namespace) return [];
+        const [sourceEntity, targetEntity] = await Promise.all([
+          this.storage.getEntity(edge.source_node_uuid),
+          this.storage.getEntity(edge.target_node_uuid),
+        ]);
+        if (!nativeRouteLiveV4(native)) return [];
+        if (sourceEntity && targetEntity)
+          results.push({ edge, sourceEntity, targetEntity, score: 0 });
+      }
+      const governed = await this.governance.governAutonomousPersonalMemoryEdgesV4(
+        native.owner,
+        native.parent,
+        native.compatibilityReader,
+        results,
+        filters,
+        native.sources,
+        context,
+      );
+      return nativeRouteLiveV4(native) ? governed.results : [];
+    }
+    if (compositionalReader !== undefined) {
+      if (!isLiveCompositionalRuntimeReaderV3(compositionalReader)) return [];
+      let owned: EntityEdge[];
+      try {
+        owned = cloneBoundedAutomaticCaptureJson<{ edges: EntityEdge[] }>(
+          { edges },
+          'beginRequest',
+        ).edges;
+      } catch {
+        return [];
+      }
+      if (!Array.isArray(owned) || owned.length > 200) return [];
+      const results: EdgeSearchResult[] = [];
+      for (const edge of owned) {
+        if (!EntityEdgeSchema.strict().safeParse(edge).success) return [];
+        const data = getCompositionalRuntimeCandidateDataV3(compositionalReader, edge.uuid);
+        if (data.status === 'candidate_data')
+          results.push({ edge, sourceEntity: data.subject, targetEntity: data.value, score: 0 });
+      }
+      return this.governance.governEdges(results, filters, budget, automatic, compositionalReader);
+    }
     const results = (
       await Promise.all(
         edges.map(async (edge) => {
@@ -578,6 +839,33 @@ export class HybridSearchEngine {
       )
     ).filter((result): result is EdgeSearchResult => result !== null);
     return this.governance.governEdges(results, filters, budget, automatic);
+  }
+
+  /** Render one genuine Claim3 hit from its private live display only; null excludes it. */
+  private formatAutonomousPersonalFact(
+    result: GovernedEdgeSearchResult,
+    includeProvenance: boolean,
+  ): string | null {
+    const display = getAutonomousPersonalRuntimeDisplayV4(result);
+    if (display === null) return null;
+    const name = result.sourceEntity.name;
+    let line =
+      display.kind === 'typed_preference'
+        ? '- ' + name + ' preference (structured): ' + JSON.stringify(display.meaning)
+        : '- Source statement dated ' +
+          display.sourceEventTime +
+          ' by ' +
+          name +
+          ': ' +
+          display.statementLiteral;
+    if (includeProvenance) {
+      const source = display.source;
+      line +=
+        ` [confidence=${display.confidence ?? 'unknown'} review=${source.reviewStatus};` +
+        ` speaker=${source.senderName ?? source.senderId ?? 'unknown'}` +
+        ` time=${source.referenceTime} trust=${source.trustLevel}]`;
+    }
+    return getAutonomousPersonalRuntimeDisplayV4(result) === display ? line : null;
   }
 
   private formatFactWithProvenance(result: GovernedEdgeSearchResult): string {

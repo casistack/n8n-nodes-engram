@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { StorageTotalsSchema } from './StorageObservation.schema';
 import { QueueStatsSchema } from './ExtractionQueue.schema';
 import { ExtractionOutcomeSchema } from './ExtractionOutcome.schema';
+import { ReplaySafeMemoryWriteDiagnosticsSchema } from './ReplaySafeMemory.schema';
+import { CompositionalHumanCaptureReceiptSummaryV3Schema } from './CompositionalHumanCapturePublicResultV3.schema';
 
 export const CurrentHumanQuerySchema = z.string();
 export const MemoryPolicySchema = z.object({
@@ -30,6 +32,15 @@ export const HistoryReadDiagnosticsSchema = z.object({
 });
 export type HistoryReadDiagnostics = z.infer<typeof HistoryReadDiagnosticsSchema>;
 export const MemoryLoadDiagnosticsSchema = z.object({
+  capture: z
+    .object({
+      version: z.literal(3),
+      source_id: z.string().uuid(),
+      operation_id: z.string().uuid(),
+      receipt: CompositionalHumanCaptureReceiptSummaryV3Schema,
+    })
+    .strict()
+    .optional(),
   queue: QueueStatsSchema.extend({ version: z.literal(1) }).optional(),
   history: HistoryReadDiagnosticsSchema,
   retrieval: z.object({
@@ -53,6 +64,7 @@ export const MemoryLoadDiagnosticsSchema = z.object({
 });
 export type MemoryLoadDiagnostics = z.infer<typeof MemoryLoadDiagnosticsSchema>;
 export const MemoryWriteOutcomeSchema = z.object({
+  replaySafe: ReplaySafeMemoryWriteDiagnosticsSchema.optional(),
   extraction: ExtractionOutcomeSchema,
   written: z.number().int().nonnegative(),
   duplicates: z.number().int().nonnegative(),

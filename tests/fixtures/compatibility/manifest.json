@@ -1,0 +1,12 @@
+{
+  "v0.5.1-store.json": {
+    "release": "0.5.1",
+    "kind": "synthetic published-schema fixture",
+    "sha256": "968a75a2be87ff7bcd88f73b8fa25dbb1a432249b74b1c68e76672fb5230b362"
+  },
+  "v0.7.2-store.json": {
+    "release": "0.7.2",
+    "kind": "synthetic published-schema fixture",
+    "sha256": "3d79015b9a01edf8bf5484d86788a6fbd341461a81976e7991c533141cb18d29"
+  }
+}

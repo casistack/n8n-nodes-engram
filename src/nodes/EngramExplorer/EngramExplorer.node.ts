@@ -20,6 +20,8 @@ import { customStoragePathProperty } from '../../descriptions';
 import { GraphTraverser } from '../../traversal/GraphTraverser';
 import { EpisodeTraverser } from '../../traversal/EpisodeTraverser';
 import { ExtractionMetadataV2Schema, reviewExtractionMetadata } from '../../schemas';
+import { compositionalClaimReviewFamily } from '../../utils/compositionalClaimReview';
+import { compositionalClaimReviewPairHashV3 } from '../../storage/CompositionalClaimReviewV3';
 
 function episodeFilterStringProperties(): INodeProperties[] {
   return [
@@ -683,7 +685,8 @@ export class EngramExplorer implements INodeType {
         default: '',
         placeholder: '0.9 or null',
         displayOptions: { show: { resource: ['relationship'], operation: ['review'] } },
-        description: 'Optional confidence from 0 to 1, null to clear, or empty to preserve',
+        description:
+          'Optional confidence from 0 to 1, null to clear, or empty to preserve. Leave empty for compositional preference claims.',
       },
       // ===== Shared Optional Parameters =====
       // Attributes JSON (for create/update on both entities and relationships)
@@ -1650,6 +1653,53 @@ async function executeRelationshipOperation(
       throw new NodeOperationError(ctx.getNode(), `Relationship not found: ${uuid}`, {
         itemIndex: i,
       });
+    }
+    const family = compositionalClaimReviewFamily(edge.attributes);
+    if (family === 'invalid')
+      throw new NodeOperationError(ctx.getNode(), 'Engram review: invalid_claim', {
+        itemIndex: i,
+      });
+    if (family === 'compositional') {
+      if (ctx.getNode().typeVersion !== 3 || !storage.reviewCompositionalClaimV3)
+        throw new NodeOperationError(ctx.getNode(), 'Engram review: unsupported_mode', {
+          itemIndex: i,
+        });
+      if (confidenceRaw)
+        throw new NodeOperationError(
+          ctx.getNode(),
+          'Confidence override is unavailable for compositional claims',
+          { itemIndex: i },
+        );
+      const value = await storage.getEntity(edge.target_node_uuid);
+      if (!value)
+        throw new NodeOperationError(ctx.getNode(), 'Engram review: invalid_claim', {
+          itemIndex: i,
+        });
+      const result = await storage.reviewCompositionalClaimV3({
+        version: 3,
+        namespace: edge.group_id,
+        edgeId: edge.uuid,
+        expectedPairHash: compositionalClaimReviewPairHashV3({
+          namespace: edge.group_id,
+          edge,
+          value,
+        }),
+        reviewStatus,
+        reviewedBy,
+      });
+      if (result.kind !== 'reviewed' && result.kind !== 'unchanged')
+        throw new NodeOperationError(
+          ctx.getNode(),
+          `Engram review: ${result.kind === 'decision' ? result.reason : result.kind}`,
+          { itemIndex: i },
+        );
+      returnData.push({
+        json: {
+          ...result.edge,
+          _paired_review: { version: 3, outcome: result.kind, value_uuid: result.valueId },
+        },
+      });
+      return;
     }
     let confidence: number | null | undefined;
     if (confidenceRaw === 'null') {

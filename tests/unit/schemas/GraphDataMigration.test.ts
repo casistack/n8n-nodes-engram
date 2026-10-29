@@ -1,4 +1,6 @@
-import { migrateGraphData } from '../../../src/schemas';
+import { GraphDataSchema, QueueBackupSchema, migrateGraphData } from '../../../src/schemas';
+import { LegacyGraphDataSchema } from '../../../src/schemas/GraphData.schema';
+import { graphFingerprint } from '../../../src/extraction/QueueState';
 
 const timestamp = '2026-06-21T12:00:00.000Z';
 
@@ -149,5 +151,75 @@ describe('GraphData migration', () => {
       '1 edge(s) reference entities missing from the import data.',
       '1 episode(s) reference previous episodes missing from the import data.',
     ]);
+  });
+
+  it('preserves optional native ledger roots and rejects unknown or legacy privileged roots', () => {
+    const source = {
+      version: '2.0' as const,
+      exported_at: timestamp,
+      group_id: 'ledger-namespace',
+      entities: [],
+      edges: [],
+      episodes: [],
+    };
+    const withoutLedger = migrateGraphData(source).data;
+    expect(withoutLedger).not.toHaveProperty('automatic_operations_v1');
+    expect(JSON.stringify(migrateGraphData(JSON.parse(JSON.stringify(withoutLedger))).data)).toBe(
+      JSON.stringify(withoutLedger),
+    );
+    expect(
+      GraphDataSchema.parse({ ...source, unrelated_future_metadata: { ignored: true } }),
+    ).not.toHaveProperty('unrelated_future_metadata');
+    expect(
+      LegacyGraphDataSchema.parse({
+        ...source,
+        version: '1.0',
+        unrelated_future_metadata: { ignored: true },
+      }),
+    ).not.toHaveProperty('unrelated_future_metadata');
+
+    const ledger = { version: 1 as const, operations: [] };
+    const withLedger = migrateGraphData({
+      ...source,
+      automatic_operations_v1: ledger,
+    }).data;
+    expect(withLedger.automatic_operations_v1).toEqual(ledger);
+    expect(graphFingerprint(withLedger, 'ledger-namespace')).toBe(
+      graphFingerprint(withoutLedger, 'ledger-namespace'),
+    );
+
+    expect(
+      GraphDataSchema.safeParse({
+        ...source,
+        automatic_operations_v1: { version: 2, operations: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      GraphDataSchema.safeParse({
+        ...source,
+        automatic_operations_v2: { version: 2, operations: [] },
+      }).success,
+    ).toBe(false);
+    expect(() =>
+      migrateGraphData({
+        ...source,
+        automatic_operations_v2: { version: 2, operations: [] },
+      }),
+    ).toThrow();
+    expect(
+      QueueBackupSchema.safeParse({
+        format: 'engram-extraction-backup',
+        version: 1,
+        graph: { ...source, automatic_operations_v2: { version: 2, operations: [] } },
+        sha256: 'a'.repeat(64),
+      }).success,
+    ).toBe(false);
+    expect(() =>
+      migrateGraphData({
+        ...source,
+        version: '1.0',
+        automatic_operations_v1: ledger,
+      }),
+    ).toThrow();
   });
 });

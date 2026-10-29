@@ -499,6 +499,47 @@ describe('owned automatic source episodes', () => {
     await storage.close();
   });
 
+  it.each(['human', 'assistant'] as const)(
+    'reuses an owned %s event across executions while preserving strict import provenance',
+    async (role) => {
+      const { record } = await createBinding(storage);
+      const input = ownedHumanEpisode(record);
+      input.source_workflow_id = 'synthetic-producer';
+      input.source_execution_id = 'synthetic-attempt-one';
+      if (role === 'assistant') {
+        const content = 'Synthetic final response.';
+        const owner = {
+          ...(input.attributes![WRITE_OWNER_ATTRIBUTE] as AutomaticWriteOwner),
+          role: 'assistant' as const,
+          contentHash: hash(content),
+        };
+        input.role = 'ai';
+        input.content = content;
+        input.episode_kind = 'assistant_reply';
+        input.sender_id = null;
+        input.sender_name = null;
+        input.idempotency_key = automaticWriteOwnerIdempotencyKey(owner);
+        input.attributes = { [WRITE_OWNER_ATTRIBUTE]: owner };
+      }
+      const first = (await storage.appendAutomaticEpisodes([input]))[0];
+      const original = JSON.parse(JSON.stringify(first.episode));
+      const replay = (
+        await storage.appendAutomaticEpisodes([
+          { ...input, source_execution_id: 'synthetic-attempt-two' },
+        ])
+      )[0];
+      expect(replay.created).toBe(false);
+      expect(replay.episode).toEqual(original);
+      expect(replay.episode.source_execution_id).toBe('synthetic-attempt-one');
+      expect((await storage.exportGraph()).episodes).toHaveLength(1);
+
+      const graph = await storage.exportGraph();
+      const changed = JSON.parse(JSON.stringify(graph)) as GraphData;
+      changed.episodes[0].source_execution_id = 'synthetic-attempt-two';
+      expect(() => prepareAutomaticImport(changed, graph)).toThrow('owned_source_import_forbidden');
+    },
+  );
+
   it('uses the typed path, verifies the binding in-lock, and keeps exact retries idempotent', async () => {
     const { record } = await createBinding(storage);
     const input = ownedHumanEpisode(record);
@@ -691,6 +732,8 @@ describe('Neo4j automatic identity transaction wiring', () => {
           const tx = {
             run: async (query: string, params: Record<string, unknown> = {}) => {
               events.push(query);
+              if (query.includes('RETURN lock.autonomous_source_format_v4 AS format'))
+                return { records: [{ get: () => null }] };
               if (query.includes('SET e += $props')) {
                 const props = params.props as Record<string, unknown>;
                 const storedAttributes = JSON.parse(props.attributes as string) as Record<
@@ -736,10 +779,24 @@ describe('Neo4j automatic identity transaction wiring', () => {
     expect(attempts).toHaveLength(2);
     for (const events of attempts) {
       expect(events[0]).toContain("MERGE (lock:EngramStoreLock {id: 'extraction-v1'})");
-      expect(events.findIndex((query) => query.includes('RETURN e LIMIT 100001'))).toBeGreaterThan(
-        0,
+      const formatIndexes = events
+        .map((query, index) =>
+          query.includes('RETURN lock.autonomous_source_format_v4 AS format') ? index : -1,
+        )
+        .filter((index) => index >= 0);
+      expect(formatIndexes).toHaveLength(3);
+      expect(formatIndexes[0]).toBe(1);
+      const readIndex = events.findIndex((query) => query.includes('RETURN e LIMIT 100001'));
+      const writeIndex = events.findIndex((query) => query.includes('SET e += $props'));
+      expect(readIndex).toBeGreaterThan(formatIndexes[0]);
+      expect(formatIndexes[1]).toBeGreaterThan(formatIndexes[0]);
+      expect(formatIndexes[1]).toBeLessThan(readIndex);
+      expect(writeIndex).toBeGreaterThan(readIndex);
+      expect(formatIndexes[2]).toBeGreaterThan(writeIndex);
+      expect(events.some((query) => query.includes('episode_char_total'))).toBe(false);
+      expect(events.some((query) => query.includes('RETURN ep.attributes AS attributes'))).toBe(
+        false,
       );
-      expect(events.findIndex((query) => query.includes('SET e += $props'))).toBeGreaterThan(0);
     }
   });
 
@@ -769,9 +826,7 @@ describe('Neo4j automatic identity transaction wiring', () => {
             run: (
               query: string,
               params?: Record<string, unknown>,
-            ) => Promise<{
-              records: Array<{ get: () => { properties: Record<string, unknown> } }>;
-            }>;
+            ) => Promise<{ records: unknown[] }>;
           }) => Promise<unknown>,
         ) => Promise<unknown>;
         close: () => Promise<void>;
@@ -780,10 +835,16 @@ describe('Neo4j automatic identity transaction wiring', () => {
     internals.initialized = true;
     let storedAttributes = JSON.stringify(boundEntity.attributes);
     let updateParams: Record<string, unknown> | undefined;
+    const transactions: string[][] = [];
     internals.getSession = () => ({
       executeWrite: async (work) => {
+        const events: string[] = [];
+        transactions.push(events);
         const tx = {
           run: async (query: string, params: Record<string, unknown> = {}) => {
+            events.push(query);
+            if (query.includes('RETURN lock.autonomous_source_format_v4 AS format'))
+              return { records: [{ get: () => null }] };
             if (query.includes('RETURN e') && query.includes('uuid:$uuid')) {
               return {
                 records: [
@@ -809,6 +870,23 @@ describe('Neo4j automatic identity transaction wiring', () => {
     });
 
     const updated = await storage.updateEntity(entity.uuid, { attributes: { label: 'profile' } });
+    const firstTransaction = transactions[0];
+    const formatIndexes = firstTransaction
+      .map((query, index) =>
+        query.includes('RETURN lock.autonomous_source_format_v4 AS format') ? index : -1,
+      )
+      .filter((index) => index >= 0);
+    const readIndex = firstTransaction.findIndex(
+      (query) => query.includes('RETURN e') && query.includes('uuid:$uuid'),
+    );
+    const writeIndex = firstTransaction.findIndex((query) => query.includes('SET e.updated_at'));
+    expect(firstTransaction[0]).toContain("MERGE (lock:EngramStoreLock {id: 'extraction-v1'})");
+    expect(formatIndexes).toHaveLength(2);
+    expect(formatIndexes[0]).toBe(1);
+    expect(readIndex).toBeGreaterThan(formatIndexes[0]);
+    expect(writeIndex).toBeGreaterThan(readIndex);
+    expect(formatIndexes[1]).toBeGreaterThan(writeIndex);
+    expect(firstTransaction.some((query) => query.includes('episode_char_total'))).toBe(false);
     expect(JSON.parse(updateParams!.attributes as string)[BINDINGS_ATTRIBUTE]).toEqual(
       boundEntity.attributes[BINDINGS_ATTRIBUTE],
     );
