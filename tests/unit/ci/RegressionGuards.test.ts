@@ -71,6 +71,62 @@ describe('mandatory regression evidence guards', () => {
       'new unexecuted contract';
     expect(() => verify(result)).toThrow('Unexpected unexecuted');
   });
+  test('publishes the tested tarball as a local file without invoking git', () => {
+    const directory = fs.mkdtempSync(path.join(tmpdir(), 'engram-publish-path-'));
+    try {
+      const workflow = fs.readFileSync(
+        path.join(__dirname, '../../../.github/workflows/release.yml'),
+        'utf8',
+      );
+      const command = workflow.match(/^\s*run: (npm publish .+)$/m)?.[1];
+      expect(command).toBeDefined();
+      fs.mkdirSync(path.join(directory, 'package'));
+      fs.mkdirSync(path.join(directory, 'package-artifact'));
+      fs.mkdirSync(path.join(directory, 'bin'));
+      fs.writeFileSync(
+        path.join(directory, 'package/package.json'),
+        JSON.stringify({ name: 'engram-publish-path-fixture', version: '1.0.0' }),
+      );
+      const file = 'engram-publish-path-fixture-1.0.0.tgz';
+      execFileSync('tar', [
+        '-czf',
+        path.join(directory, 'package-artifact', file),
+        '-C',
+        directory,
+        'package',
+      ]);
+      fs.writeFileSync(
+        path.join(directory, 'package-artifact/package-manifest.json'),
+        JSON.stringify({ file }),
+      );
+      // A mistaken repository shorthand fails locally instead of making a network request.
+      fs.writeFileSync(path.join(directory, 'bin/git'), '#!/bin/sh\nexit 91\n', { mode: 0o700 });
+      const userConfig = path.join(directory, 'user.npmrc');
+      const globalConfig = path.join(directory, 'global.npmrc');
+      fs.writeFileSync(userConfig, '');
+      fs.writeFileSync(globalConfig, '');
+      const output = execFileSync('bash', ['-c', `${command} --dry-run --offline --json`], {
+        cwd: directory,
+        env: {
+          PATH: `${path.join(directory, 'bin')}${path.delimiter}${process.env.PATH}`,
+          HOME: directory,
+          NPM_CONFIG_CACHE: path.join(directory, 'cache'),
+          NPM_CONFIG_USERCONFIG: userConfig,
+          NPM_CONFIG_GLOBALCONFIG: globalConfig,
+        },
+        encoding: 'utf8',
+        timeout: 20_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      expect(JSON.parse(output)).toMatchObject({
+        name: 'engram-publish-path-fixture',
+        version: '1.0.0',
+        filename: file,
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
   test('rejects an altered artifact, source manifest or lock digest', () => {
     const directory = fs.mkdtempSync(path.join(tmpdir(), 'engram-artifact-guard-'));
     try {

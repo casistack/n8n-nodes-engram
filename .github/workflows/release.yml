@@ -40,4 +40,4 @@ jobs:
           node tests/ci/package-manifest.cjs verify package-artifact
       - run: npm install -g npm@11.6.2
       - name: Publish unchanged tested tarball
-        run: npm publish "$(node -p '"package-artifact/"+require("./package-artifact/package-manifest.json").file')" --ignore-scripts --access public --provenance
+        run: npm publish "$(node -p '"./package-artifact/"+require("./package-artifact/package-manifest.json").file')" --ignore-scripts --access public --provenance
