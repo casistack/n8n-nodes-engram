@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-to-v073">Upgrade</a> &middot;
+  <a href="#upgrading-to-v080">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -101,7 +101,7 @@ npm install n8n-nodes-engram
 
 ---
 
-## Upgrading to v0.7.3
+## Upgrading to v0.8.0
 
 Existing saved workflows, node versions and defaults are preserved. **Automatic Memory Interpretation > Literal Preferences (Existing)** remains the default. Select **Autonomous Personal Memory** explicitly to enable the new interpretation on Admin v3 and Memory v3.
 
@@ -110,7 +110,7 @@ With **Conservative Automatic**, useful personal statements can become accepted,
 ### Activate Autonomous Personal Memory
 
 1. Back up workflows and the complete embedded store or Neo4j database consistently. Preserve exact namespaces, producer workflow IDs, storage paths, verified actor bindings and event IDs. A generic JSON export alone cannot restore privileged binding/ownership metadata.
-2. Install `n8n-nodes-engram@0.7.3`, restart n8n and refresh the editor. Begin with an inactive workflow copy and a separately restored store. This interpreter supports AI Agent **v3.1** on n8n **2.12.3**.
+2. Install `n8n-nodes-engram@0.8.0`, restart n8n and refresh the editor. Begin with an inactive workflow copy and a separately restored store. This interpreter supports AI Agent **v3.1** on n8n **2.12.3**.
 3. Use Admin v3 **Capture Human Memory** before the agent, with **Capture Lifecycle > Replay Safe**. Connect **Proceed** to the agent and route **Stopped** separately from delivery. Map its `sourceId` into Memory v3's **Captured Human Source ID** and select **Captured Turn Lifecycle > Replay-Safe Captured Turn**.
 4. Select **Autonomous Personal Memory** on both nodes and **Memory Behaviour > Conservative Automatic**. Use the same verified issuer/actor binding, stable **Current Turn ID**, backend and namespace. For embedded storage, set Admin's **Memory Workflow ID** to the exact workflow ID owning the Memory store and preserve its storage path. Match the extraction route, model, temperature mode/value, extraction request limit and deadline across Admin and Memory. **Explicit Requests Only** additionally requires trusted save intent; quoted commands do not establish authority.
 5. Supply the complete raw human body as **Current Human Query** and **Raw Current Human Content**. If agent input adds application display labels, supply its complete formatted input and exact UTF-16 human-region boundaries. Do not mark quotations, conditions or other human content as display metadata.
