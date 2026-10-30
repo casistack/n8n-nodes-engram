@@ -1,10 +1,16 @@
+import {
+  currentAutonomousPersonalExecutionScopeWorkV1,
+  checkCurrentAutonomousPersonalExecutionScopeWorkV1,
+  runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1,
+  AutonomousPersonalExecutionScopeError,
+} from './AutonomousPersonalExecutionScopeV1';
 import { AsyncLocalStorage } from 'async_hooks';
 import { types as utilTypes } from 'node:util';
 import { compositionalCaptureCompletionDecisionKindV3 } from './CompositionalCaptureCompletionDiagnosticsV3';
 import { createCompositionalAutomaticCaptureHandleRegistryV3 } from './CompositionalAutomaticCaptureHandlesV3';
 import { startCompositionalBackendBeginV3 } from './CompositionalCaptureBackendBeginV3';
 import { prepareCompositionalHumanCaptureBeginV3 } from './CompositionalAutomaticCaptureBeginV3';
-import { prepareAutonomousPersonalCaptureSnapshotV4 } from './AutonomousPersonalCaptureBeginV4';
+import { prepareAutonomousPersonalCaptureSnapshotV4 as prepareAutonomousPersonalCaptureSnapshotV4Unmetered } from './AutonomousPersonalCaptureBeginV4';
 import { autonomousPersonalCaptureStorageFailureV4 } from './AutonomousPersonalCaptureStorageDiagnosticsV4';
 import {
   consumeAutonomousPersonalCaptureAttemptV4,
@@ -47,16 +53,16 @@ import {
 } from '../schemas/AutonomousPersonalCompletionStorageV4.schema';
 import type { AutonomousPersonalNativeOriginV4 } from '../schemas/AutonomousPersonalNativeOriginV4.schema';
 import {
-  prepareAutonomousPersonalCompletionGraphCandidateV4,
-  validateAutonomousPersonalCompletionReadbackV4,
+  prepareAutonomousPersonalCompletionGraphCandidateV4 as prepareAutonomousPersonalCompletionGraphCandidateV4Unmetered,
+  validateAutonomousPersonalCompletionReadbackV4 as validateAutonomousPersonalCompletionReadbackV4Unmetered,
 } from './AutonomousPersonalCompletionGraphV4';
-import { planAutonomousPersonalCaptureCompletionV4 } from './AutonomousPersonalCompletionPlanV4';
+import { planAutonomousPersonalCaptureCompletionV4 as planAutonomousPersonalCaptureCompletionV4Unmetered } from './AutonomousPersonalCompletionPlanV4';
 import {
   AutonomousPersonalNativeOriginV4Error,
-  projectAutonomousPersonalNativeOriginV4,
+  projectAutonomousPersonalNativeOriginV4 as projectAutonomousPersonalNativeOriginV4Unmetered,
 } from './AutonomousPersonalNativeOriginV4';
 import {
-  assertAutonomousPersonalRecordIntegrityV4,
+  assertAutonomousPersonalRecordIntegrityV4 as assertAutonomousPersonalRecordIntegrityV4Unmetered,
   AutonomousPersonalRecordIntegrityV4Error,
 } from './AutonomousPersonalRecordIntegrityV4';
 import type { AutonomousPersonalTypedSyntaxWorkV1 } from '../schemas/AutonomousPersonalTypedSyntaxV1.schema';
@@ -200,7 +206,7 @@ import type {
 } from '../schemas/AutomaticLedger.schema';
 import { createAutomaticLedger, observeLegacyUnconfirmed } from './AutomaticLedger';
 import {
-  buildAutomaticClaimReadIndices,
+  buildAutomaticClaimReadIndices as buildAutomaticClaimReadIndicesUnmetered,
   projectAutomaticClaimReadContextWithUsage,
 } from '../extraction/AutomaticClaimCommitProof';
 import {
@@ -208,6 +214,7 @@ import {
   canUseAutomaticClaimReadScope,
   chargeAutomaticClaimContextBytes,
   getAutomaticClaimReadScope,
+  getAutomaticClaimReadScopeWithAbsoluteDeadline,
   getAutomaticClaimReadScopeRemaining,
   reserveAutomaticClaimSnapshotBytes,
   type AutomaticClaimReadScope,
@@ -279,7 +286,7 @@ import {
   prepareAutonomousPersonalAssistantFinalV4,
   reconcileAutonomousPersonalAssistantFinalV4,
 } from './AutonomousPersonalAssistantFinalPlanV4';
-import { parseLosslessAutomaticCaptureGraph } from './LosslessAutomaticCaptureGraph';
+import { parseLosslessAutomaticCaptureGraph as parseLosslessAutomaticCaptureGraphUnmetered } from './LosslessAutomaticCaptureGraph';
 import {
   buildCommittedCompositionalCaptureOperationV3,
   CompositionalCaptureTerminalOperationFailureV3,
@@ -366,6 +373,15 @@ interface AutonomousPersonalStructuralGuardContextV4 {
 const NEVER_ABORTED_AUTONOMOUS_PERSONAL_SIGNAL_V4 = new AbortController().signal;
 
 function ordinaryAutonomousPersonalStructuralGuardContextV4(): AutonomousPersonalStructuralGuardContextV4 {
+  const configuredWork = currentAutonomousPersonalExecutionScopeWorkV1();
+  if (configuredWork) {
+    return {
+      typedSyntaxWork: configuredWork,
+      check: () => {
+        checkCurrentAutonomousPersonalExecutionScopeWorkV1(configuredWork);
+      },
+    };
+  }
   return {
     typedSyntaxWork: Object.freeze({
       absoluteMonotonicDeadlineMs: performance.now() + 5_000,
@@ -374,6 +390,57 @@ function ordinaryAutonomousPersonalStructuralGuardContextV4(): AutonomousPersona
     check: () => {},
   };
 }
+
+/** Charge synchronous processing only; callers keep awaited I/O outside this span. */
+function autonomousPersonalProcessingV4<T>(
+  operation: () => T,
+  work = currentAutonomousPersonalExecutionScopeWorkV1(),
+): T {
+  return work === undefined
+    ? operation()
+    : runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1(work, operation);
+}
+
+const prepareAutonomousPersonalCaptureSnapshotV4: typeof prepareAutonomousPersonalCaptureSnapshotV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      prepareAutonomousPersonalCaptureSnapshotV4Unmetered(...args),
+    );
+
+const prepareAutonomousPersonalCompletionGraphCandidateV4: typeof prepareAutonomousPersonalCompletionGraphCandidateV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      prepareAutonomousPersonalCompletionGraphCandidateV4Unmetered(...args),
+    );
+
+const validateAutonomousPersonalCompletionReadbackV4: typeof validateAutonomousPersonalCompletionReadbackV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      validateAutonomousPersonalCompletionReadbackV4Unmetered(...args),
+    );
+
+const planAutonomousPersonalCaptureCompletionV4: typeof planAutonomousPersonalCaptureCompletionV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      planAutonomousPersonalCaptureCompletionV4Unmetered(...args),
+    );
+
+const projectAutonomousPersonalNativeOriginV4: typeof projectAutonomousPersonalNativeOriginV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() => projectAutonomousPersonalNativeOriginV4Unmetered(...args));
+
+const assertAutonomousPersonalRecordIntegrityV4: typeof assertAutonomousPersonalRecordIntegrityV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      assertAutonomousPersonalRecordIntegrityV4Unmetered(...args),
+    );
+
+const buildAutomaticClaimReadIndices: typeof buildAutomaticClaimReadIndicesUnmetered = (...args) =>
+  autonomousPersonalProcessingV4(() => buildAutomaticClaimReadIndicesUnmetered(...args));
+
+const parseLosslessAutomaticCaptureGraph: typeof parseLosslessAutomaticCaptureGraphUnmetered = (
+  ...args
+) => autonomousPersonalProcessingV4(() => parseLosslessAutomaticCaptureGraphUnmetered(...args));
 
 function hasAutonomousPersonalV4Enrollment(graph: GraphData): boolean {
   return (
@@ -644,11 +711,13 @@ function assertAutonomousPersonalGraphIntegrityV4(
   graph: GraphData,
   guard: AutonomousPersonalStructuralGuardContextV4,
 ): void {
-  guard.check();
-  assertAutomaticLedgerSourceIntegrity(graph);
-  guard.check();
-  assertAutonomousPersonalRecordIntegrityV4(graph, guard.typedSyntaxWork, guard.check);
-  guard.check();
+  autonomousPersonalProcessingV4(() => {
+    guard.check();
+    assertAutomaticLedgerSourceIntegrity(graph);
+    guard.check();
+    assertAutonomousPersonalRecordIntegrityV4(graph, guard.typedSyntaxWork, guard.check);
+    guard.check();
+  }, guard.typedSyntaxWork);
 }
 
 class CompositionalRetrievalSnapshotReadError extends Error {
@@ -1589,7 +1658,13 @@ export class GraphologyStorage implements IGraphStorage {
 
     // This single read scope covers the lock-held write and its only possible readback.
     const legacyReadBudget = { remaining: 512, deferred: 0 };
-    const scope = getAutomaticClaimReadScope(legacyReadBudget);
+    const configuredWork = currentAutonomousPersonalExecutionScopeWorkV1();
+    const scope = configuredWork
+      ? getAutomaticClaimReadScopeWithAbsoluteDeadline(
+          legacyReadBudget,
+          configuredWork.absoluteMonotonicDeadlineMs,
+        )
+      : getAutomaticClaimReadScope(legacyReadBudget);
     let consumed: PrivateConsumedAutonomousPersonalAssistantFinalInvocationV4 | undefined;
     let access: ReturnType<typeof readAutonomousPersonalAssistantFinalInvocationV4> | undefined;
     let check = () => undefined as void;
@@ -2549,62 +2624,64 @@ export class GraphologyStorage implements IGraphStorage {
         async () => {
           check();
           const graph = await this.exportGraph();
-          if (graph.group_id === undefined) delete graph.group_id;
-          const backendNow = nowIso();
-          const prepared = prepareAutonomousPersonalCaptureSnapshotV4(
-            {
-              request: scope.request,
-              context: scope.context,
-              sourceId: scope.sourceId,
-              operationId: scope.operationId,
-              leaseToken: scope.leaseToken,
-              stableBeginHash: scope.stableBeginHash,
-              attemptHash: scope.attemptHash,
+          return autonomousPersonalProcessingV4(() => {
+            if (graph.group_id === undefined) delete graph.group_id;
+            const backendNow = nowIso();
+            const prepared = prepareAutonomousPersonalCaptureSnapshotV4(
+              {
+                request: scope.request,
+                context: scope.context,
+                sourceId: scope.sourceId,
+                operationId: scope.operationId,
+                leaseToken: scope.leaseToken,
+                stableBeginHash: scope.stableBeginHash,
+                attemptHash: scope.attemptHash,
+                backendNow,
+                previousEpisodeId: this.findLatestEpisode(scope.request.namespace)?.uuid ?? null,
+              },
+              graph,
+              check,
+            );
+            check();
+            if (prepared.kind === 'no_write')
+              return { kind: 'decision' as const, result: prepared.resultProjection };
+            if (prepared.kind !== 'same_initial_scope_candidate')
+              return { kind: 'decision' as const, result: stopped('conflict') };
+            const binding = findAutomaticBinding(
+              graph,
+              scope.request.namespace,
+              scope.request.issuer,
+              scope.request.actorReference,
+              check,
+            );
+            if (!binding || binding.state !== 'active')
+              return { kind: 'decision' as const, result: stopped('authority_changed') };
+            const bindingRef = {
+              bindingId: binding.bindingId,
+              revision: binding.revision,
+              subjectId: binding.subjectId,
+              fingerprint: binding.fingerprint,
+            };
+            assertAutomaticBindingIdentity(
+              graph,
+              scope.request.namespace,
+              scope.request.issuer,
+              scope.request.actorReference,
+              bindingRef,
+              check,
+            );
+            const observation = AutonomousPersonalCaptureProviderObservationV4Schema.parse({
+              source: prepared.episode,
+              descriptor: scope.descriptor,
+              operation: prepared.operation,
+              fence: prepared.fence,
+              binding: bindingRef,
               backendNow,
-              previousEpisodeId: this.findLatestEpisode(scope.request.namespace)?.uuid ?? null,
-            },
-            graph,
-            check,
-          );
-          check();
-          if (prepared.kind === 'no_write')
-            return { kind: 'decision' as const, result: prepared.resultProjection };
-          if (prepared.kind !== 'same_initial_scope_candidate')
-            return { kind: 'decision' as const, result: stopped('conflict') };
-          const binding = findAutomaticBinding(
-            graph,
-            scope.request.namespace,
-            scope.request.issuer,
-            scope.request.actorReference,
-            check,
-          );
-          if (!binding || binding.state !== 'active')
-            return { kind: 'decision' as const, result: stopped('authority_changed') };
-          const bindingRef = {
-            bindingId: binding.bindingId,
-            revision: binding.revision,
-            subjectId: binding.subjectId,
-            fingerprint: binding.fingerprint,
-          };
-          assertAutomaticBindingIdentity(
-            graph,
-            scope.request.namespace,
-            scope.request.issuer,
-            scope.request.actorReference,
-            bindingRef,
-            check,
-          );
-          const observation = AutonomousPersonalCaptureProviderObservationV4Schema.parse({
-            source: prepared.episode,
-            descriptor: scope.descriptor,
-            operation: prepared.operation,
-            fence: prepared.fence,
-            binding: bindingRef,
-            backendNow,
-            readStartedAtMonotonicMs,
+              readStartedAtMonotonicMs,
+            });
+            check();
+            return { kind: 'observation' as const, observation };
           });
-          check();
-          return { kind: 'observation' as const, observation };
         },
         {
           operation: 'autonomous_personal_provider_preflight_v4',
@@ -2684,15 +2761,17 @@ export class GraphologyStorage implements IGraphStorage {
           async () => {
             check();
             const graph = await this.exportGraph();
-            if (graph.group_id === undefined) delete graph.group_id;
-            check();
-            return validateAutonomousPersonalCompletionReadbackV4(
-              graph,
-              expectedInput,
-              expectedPlan,
-              runtime.typedSyntaxWork,
-              check,
-            );
+            return autonomousPersonalProcessingV4(() => {
+              if (graph.group_id === undefined) delete graph.group_id;
+              check();
+              return validateAutonomousPersonalCompletionReadbackV4(
+                graph,
+                expectedInput,
+                expectedPlan,
+                runtime.typedSyntaxWork,
+                check,
+              );
+            });
           },
           {
             operation: 'autonomous_personal_completion_v4_readback',
@@ -2709,8 +2788,22 @@ export class GraphologyStorage implements IGraphStorage {
           },
         );
         return AutonomousPersonalCompletionStorageV4ResultOwnedDataSchema.parse(result);
-      } catch {
-        if (snapshotReplacementAttempted) this.recoveryRequired = true;
+      } catch (error) {
+        const failure = getAutonomousPersonalCaptureProviderFailureKindV4(error);
+        const verificationBudgetExhausted =
+          failure === 'budget_exhausted' ||
+          failure === 'cancelled' ||
+          (error instanceof ExtractionBudgetError &&
+            (error.budgetReason === 'deadline' ||
+              error.budgetReason === 'cancelled' ||
+              error.budgetReason === 'snapshot_limit'));
+        // A known durable write followed by bounded verification exhaustion
+        // grants no proof, but does not itself imply persistence corruption.
+        // Unknown ACK, physical snapshot, integrity and I/O failures still
+        // require recovery. Never clear a previously quarantined owner.
+        if (snapshotReplacementAttempted && !(knownDurableAck && verificationBudgetExhausted)) {
+          this.recoveryRequired = true;
+        }
         return unconfirmed();
       }
     };
@@ -2738,7 +2831,7 @@ export class GraphologyStorage implements IGraphStorage {
         return coreOutcome(autonomousPersonalCompletionNoWriteV4('conflict'));
       }
       captureRead = {
-        scope: getAutomaticClaimReadScope(runtime.legacyReadBudget),
+        scope: runtime.readScope,
         check,
         verifyStableSnapshot: true,
       };
@@ -2760,71 +2853,74 @@ export class GraphologyStorage implements IGraphStorage {
           async () => {
             check();
             const graph = await this.exportGraph();
-            if (graph.group_id === undefined) delete graph.group_id;
-            check();
-            const backendNow = nowIso();
-            const { scope, stagedFresh, outcome, selection, completionCallHash, audit } =
-              runtime.view;
-            const input = AutonomousPersonalCompletionPlanV4InputOwnedDataSchema.parse({
-              scope,
-              stagedFresh,
-              outcome: outcome.kind === 'response' ? { kind: 'response' as const } : outcome,
-              backendNow,
-              completionCallHash,
-              audit,
-            });
-            check();
-            const plan = planAutonomousPersonalCaptureCompletionV4(
-              input,
-              graph,
-              outcome.kind === 'response' ? outcome.response : null,
-              selection,
-              runtime.typedSyntaxWork,
-              check,
-              runtime.legacyReadBudget,
-            );
-            check();
-            if (plan.kind === 'no_write') {
-              return { kind: 'no_write' as const, reason: plan.reason };
-            }
-
-            if (mode === 'data') {
-              assertAutonomousPersonalCompletionPlanAggregateBytesV4(this, access, plan);
+            return autonomousPersonalProcessingV4(() => {
+              if (graph.group_id === undefined) delete graph.group_id;
               check();
-            }
-            const extractionEpoch =
-              plan.createEntities.length > 0 || plan.createEdges.length > 0
-                ? preparedExtractionEpoch
-                : null;
-            const candidate = prepareAutonomousPersonalCompletionGraphCandidateV4(
-              graph,
-              input,
-              plan,
-              extractionEpoch,
-              runtime.typedSyntaxWork,
-              check,
-            );
-            check();
-            if (candidate.kind === 'no_write') {
-              return { kind: 'no_write' as const, reason: candidate.reason };
-            }
-
-            if (mode === 'native_proof') {
-              nativeOrigin = projectAutonomousPersonalNativeOriginV4(input, plan, check);
-              assertAutonomousPersonalCompletionNativeAggregateBytesV4(
-                this,
-                access,
-                plan,
-                nativeOrigin,
+              const backendNow = nowIso();
+              const { scope, stagedFresh, outcome, selection, completionCallHash, audit } =
+                runtime.view;
+              const input = AutonomousPersonalCompletionPlanV4InputOwnedDataSchema.parse({
+                scope,
+                stagedFresh,
+                outcome: outcome.kind === 'response' ? { kind: 'response' as const } : outcome,
+                backendNow,
+                completionCallHash,
+                audit,
+              });
+              check();
+              const plan = planAutonomousPersonalCaptureCompletionV4(
+                input,
+                graph,
+                outcome.kind === 'response' ? outcome.response : null,
+                selection,
+                runtime.typedSyntaxWork,
+                check,
+                runtime.legacyReadBudget,
+                runtime.readScope,
               );
               check();
-            }
-            expectedInput = input;
-            expectedPlan = plan;
-            expectedNativeOrigin = nativeOrigin;
-            this.replaceGraphData(candidate.graph);
-            check();
-            return { kind: 'write_candidate' as const };
+              if (plan.kind === 'no_write') {
+                return { kind: 'no_write' as const, reason: plan.reason };
+              }
+
+              if (mode === 'data') {
+                assertAutonomousPersonalCompletionPlanAggregateBytesV4(this, access, plan);
+                check();
+              }
+              const extractionEpoch =
+                plan.createEntities.length > 0 || plan.createEdges.length > 0
+                  ? preparedExtractionEpoch
+                  : null;
+              const candidate = prepareAutonomousPersonalCompletionGraphCandidateV4(
+                graph,
+                input,
+                plan,
+                extractionEpoch,
+                runtime.typedSyntaxWork,
+                check,
+              );
+              check();
+              if (candidate.kind === 'no_write') {
+                return { kind: 'no_write' as const, reason: candidate.reason };
+              }
+
+              if (mode === 'native_proof') {
+                nativeOrigin = projectAutonomousPersonalNativeOriginV4(input, plan, check);
+                assertAutonomousPersonalCompletionNativeAggregateBytesV4(
+                  this,
+                  access,
+                  plan,
+                  nativeOrigin,
+                );
+                check();
+              }
+              expectedInput = input;
+              expectedPlan = plan;
+              expectedNativeOrigin = nativeOrigin;
+              this.replaceGraphData(candidate.graph);
+              check();
+              return { kind: 'write_candidate' as const };
+            });
           },
           {
             operation: 'autonomous_personal_completion_v4',
@@ -2841,6 +2937,9 @@ export class GraphologyStorage implements IGraphStorage {
               },
               onSnapshotReplaced: () => {
                 snapshotReplacementAttempted = true;
+              },
+              onSnapshotDurableAcknowledged: () => {
+                knownDurableAck = true;
               },
             },
           },
@@ -2919,9 +3018,11 @@ export class GraphologyStorage implements IGraphStorage {
         async () => {
           check();
           const graph = await this.exportGraph();
-          if (graph.group_id === undefined) delete graph.group_id;
-          check();
-          return parseLosslessAutomaticCaptureGraph(graph);
+          return autonomousPersonalProcessingV4(() => {
+            if (graph.group_id === undefined) delete graph.group_id;
+            check();
+            return parseLosslessAutomaticCaptureGraph(graph);
+          });
         },
         {
           operation: 'autonomous_personal_preflight_v4',
@@ -2932,12 +3033,14 @@ export class GraphologyStorage implements IGraphStorage {
       );
       check();
       const request = admitted.scope.request;
-      const binding = findAutomaticBinding(
-        preflight,
-        request.namespace,
-        request.issuer,
-        request.actorReference,
-        check,
+      const binding = autonomousPersonalProcessingV4(() =>
+        findAutomaticBinding(
+          preflight,
+          request.namespace,
+          request.issuer,
+          request.actorReference,
+          check,
+        ),
       );
       if (!binding || binding.state !== 'active') return stopped('authority_changed');
       const bindingRef = {
@@ -2947,13 +3050,15 @@ export class GraphologyStorage implements IGraphStorage {
         fingerprint: binding.fingerprint,
       };
       try {
-        assertAutomaticBindingIdentity(
-          preflight,
-          request.namespace,
-          request.issuer,
-          request.actorReference,
-          bindingRef,
-          check,
+        autonomousPersonalProcessingV4(() =>
+          assertAutomaticBindingIdentity(
+            preflight,
+            request.namespace,
+            request.issuer,
+            request.actorReference,
+            bindingRef,
+            check,
+          ),
         );
       } catch (error) {
         check();
@@ -2986,49 +3091,52 @@ export class GraphologyStorage implements IGraphStorage {
           async () => {
             check();
             const graph = await this.exportGraph();
-            if (graph.group_id === undefined) delete graph.group_id;
-            const candidate = prepare(graph);
-            check();
-            if (candidate.kind === 'initial_candidate') {
-              const next: GraphData = {
-                ...graph,
-                episodes: [...graph.episodes, candidate.episode],
-                automatic_operations_v1: {
-                  version: 1,
-                  operations: [
-                    ...(graph.automatic_operations_v1?.operations ?? []),
-                    candidate.operation,
-                  ],
-                },
-                metadata: { ...graph.metadata, extraction_epoch: epoch },
-              };
-              const validated = validateAutomaticCaptureCandidate(next, check);
-              if (!validated)
-                return { kind: 'no_write' as const, resultProjection: stopped('capacity') };
-              stageFreshAutonomousPersonalCaptureV4(this, attempt, candidate);
-              freshStaged = true;
-              this.replaceGraphData(validated);
-            } else if (candidate.kind === 'audit_candidate') {
-              const next: GraphData = {
-                ...graph,
-                automatic_operations_v1: {
-                  version: 1,
-                  operations: (graph.automatic_operations_v1?.operations ?? []).map((operation) =>
-                    operation.operationId === candidate.operation.operationId
-                      ? candidate.operation
-                      : operation,
-                  ),
-                },
-              };
-              const validated = validateAutomaticCaptureCandidate(next, check);
-              if (!validated)
-                return { kind: 'no_write' as const, resultProjection: stopped('capacity') };
-              this.replaceGraphData(validated);
-            }
-            check();
-            mutationPrepared =
-              candidate.kind === 'initial_candidate' || candidate.kind === 'audit_candidate';
-            return candidate;
+            return autonomousPersonalProcessingV4(() => {
+              if (graph.group_id === undefined) delete graph.group_id;
+              const candidate = prepare(graph);
+              check();
+              if (candidate.kind === 'initial_candidate') {
+                const next: GraphData = {
+                  ...graph,
+                  episodes: [...graph.episodes, candidate.episode],
+                  automatic_operations_v1: {
+                    version: 1,
+                    operations: [
+                      ...(graph.automatic_operations_v1?.operations ?? []),
+                      candidate.operation,
+                    ],
+                  },
+                  metadata: { ...graph.metadata, extraction_epoch: epoch },
+                };
+                const validated = validateAutomaticCaptureCandidate(next, check);
+                if (!validated)
+                  return { kind: 'no_write' as const, resultProjection: stopped('capacity') };
+                stageFreshAutonomousPersonalCaptureV4(this, attempt, candidate);
+                freshStaged = true;
+                this.replaceGraphData(validated);
+              } else if (candidate.kind === 'audit_candidate') {
+                const next: GraphData = {
+                  ...graph,
+                  automatic_operations_v1: {
+                    version: 1,
+                    operations: (graph.automatic_operations_v1?.operations ?? []).map(
+                      (operation) =>
+                        operation.operationId === candidate.operation.operationId
+                          ? candidate.operation
+                          : operation,
+                    ),
+                  },
+                };
+                const validated = validateAutomaticCaptureCandidate(next, check);
+                if (!validated)
+                  return { kind: 'no_write' as const, resultProjection: stopped('capacity') };
+                this.replaceGraphData(validated);
+              }
+              check();
+              mutationPrepared =
+                candidate.kind === 'initial_candidate' || candidate.kind === 'audit_candidate';
+              return candidate;
+            });
           },
           {
             operation: 'autonomous_personal_begin_v4',
@@ -3064,29 +3172,32 @@ export class GraphologyStorage implements IGraphStorage {
           async () => {
             check();
             const graph = await this.exportGraph();
-            if (graph.group_id === undefined) delete graph.group_id;
-            const source = graph.episodes.find((episode) => episode.uuid === scope.sourceId);
-            const operation = graph.automatic_operations_v1?.operations.find(
-              (row) => row.operationId === scope.operationId,
-            );
-            if (!source && !operation) return stopped('storage_error');
-            if (!source || !operation) return stopped('conflict');
-            const observed = prepare(graph);
-            check();
-            if (observed.kind === 'no_write') return resultSchema.parse(observed.resultProjection);
-            if (observed.kind !== 'same_initial_scope_candidate') return stopped('conflict');
-            const handle = issueInitialAutonomousPersonalCaptureHandleV4(this, attempt, observed);
-            if (!handle) return stopped('conflict');
-            return resultSchema.parse({
-              kind: 'claimed',
-              purpose: 'human_turn_memory',
-              sourceId: scope.sourceId,
-              operationId: scope.operationId,
-              descriptorHash: observed.fence.descriptorHash,
-              sourcePersistence: 'persisted',
-              claimKind: 'initial',
-              eligibleFirstCommit: false,
-              handle,
+            return autonomousPersonalProcessingV4(() => {
+              if (graph.group_id === undefined) delete graph.group_id;
+              const source = graph.episodes.find((episode) => episode.uuid === scope.sourceId);
+              const operation = graph.automatic_operations_v1?.operations.find(
+                (row) => row.operationId === scope.operationId,
+              );
+              if (!source && !operation) return stopped('storage_error');
+              if (!source || !operation) return stopped('conflict');
+              const observed = prepare(graph);
+              check();
+              if (observed.kind === 'no_write')
+                return resultSchema.parse(observed.resultProjection);
+              if (observed.kind !== 'same_initial_scope_candidate') return stopped('conflict');
+              const handle = issueInitialAutonomousPersonalCaptureHandleV4(this, attempt, observed);
+              if (!handle) return stopped('conflict');
+              return resultSchema.parse({
+                kind: 'claimed',
+                purpose: 'human_turn_memory',
+                sourceId: scope.sourceId,
+                operationId: scope.operationId,
+                descriptorHash: observed.fence.descriptorHash,
+                sourcePersistence: 'persisted',
+                claimKind: 'initial',
+                eligibleFirstCommit: false,
+                handle,
+              });
             });
           },
           {
@@ -4425,6 +4536,10 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async exportGraph(groupId?: string): Promise<GraphData> {
+    return autonomousPersonalProcessingV4(() => this.exportGraphData(groupId));
+  }
+
+  private exportGraphData(groupId?: string): GraphData {
     this.assertRecoveryReady();
     const entities: EntityNode[] = [];
     const edges: EntityEdge[] = [];
@@ -4715,7 +4830,12 @@ export class GraphologyStorage implements IGraphStorage {
       if (this.persistPath) {
         const lockStarted = performance.now();
         try {
-          releaseFileLock = await this.acquirePersistLock(options.captureRead?.check);
+          releaseFileLock = await this.acquirePersistLock(
+            options.captureRead?.check ??
+              (currentAutonomousPersonalExecutionScopeWorkV1()
+                ? structuralGuardContext.check
+                : undefined),
+          );
         } finally {
           lockWaitMs = performance.now() - lockStarted;
         }
@@ -4748,8 +4868,9 @@ export class GraphologyStorage implements IGraphStorage {
           (operation) => operation.version === 4,
         ) ??
           false);
-      if (protectsAutonomousSources) assertAutomaticLedgerSourceIntegrity(rollbackData);
-      if (hasAutonomousPersonalV4Enrollment(rollbackData)) {
+      if (protectsAutonomousSources)
+        autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(rollbackData!));
+      if (autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(rollbackData!))) {
         assertAutonomousPersonalRecordIntegrityV4(
           rollbackData,
           structuralGuardContext.typedSyntaxWork,
@@ -4773,18 +4894,24 @@ export class GraphologyStorage implements IGraphStorage {
       if (postMutationGraph.group_id === undefined) delete postMutationGraph.group_id;
       if (
         !options.autonomousPersonalCompletionV4 &&
-        hasNewAutonomousPersonalFamilyFourFootprint(rollbackData, postMutationGraph)
+        autonomousPersonalProcessingV4(() =>
+          hasNewAutonomousPersonalFamilyFourFootprint(rollbackData!, postMutationGraph),
+        )
       ) {
         throw new Error('Engram autonomous personal capture: native_write_required');
       }
-      if (hasAutonomousPersonalV4Enrollment(postMutationGraph)) {
+      if (
+        autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(postMutationGraph))
+      ) {
         assertAutonomousPersonalGraphIntegrityV4(postMutationGraph, structuralGuardContext);
       } else if (
         protectsAutonomousSources ||
         this.hasAutonomousSourceInMemory() ||
         this.automaticOperations?.operations.some((operation) => operation.version === 4)
       ) {
-        assertAutomaticLedgerSourceIntegrity(postMutationGraph);
+        autonomousPersonalProcessingV4(() =>
+          assertAutomaticLedgerSourceIntegrity(postMutationGraph),
+        );
       }
 
       const shouldWriteSnapshot = options.shouldWriteSnapshot?.(result) ?? true;
@@ -4926,7 +5053,9 @@ export class GraphologyStorage implements IGraphStorage {
     if (!this.persistPath || !fs.existsSync(this.persistPath)) return;
 
     const structuralGuardContext = ordinaryAutonomousPersonalStructuralGuardContextV4();
-    const releaseFileLock = await this.acquirePersistLock();
+    const releaseFileLock = await this.acquirePersistLock(
+      currentAutonomousPersonalExecutionScopeWorkV1() ? structuralGuardContext.check : undefined,
+    );
     try {
       const data = await this.readAndMigratePersistedDataUnderLock(
         undefined,
@@ -4938,6 +5067,11 @@ export class GraphologyStorage implements IGraphStorage {
       }
       this.replaceGraphData(data);
     } catch (error) {
+      if (
+        error instanceof ExtractionBudgetError ||
+        error instanceof AutonomousPersonalExecutionScopeError
+      )
+        throw error;
       throw new Error(
         `Engram: Failed to load or migrate embedded storage at ${this.persistPath}: ${(error as Error).message}`,
       );
@@ -5012,25 +5146,30 @@ export class GraphologyStorage implements IGraphStorage {
     if (!this.persistPath) return 0;
 
     const exported = await this.exportGraph();
-    compactCapture ||= hasRawReplaySafeCaptureState(exported);
-    const data = compactCapture
-      ? compactCaptureSnapshotData(exported)
-      : exported.automatic_operations_v1
-        ? GraphDataSchema.parse(exported)
-        : exported;
-    if (this.automaticOperations && !data.automatic_operations_v1) {
-      throw new Error('Engram automatic ledger: native_root_missing');
-    }
-    if (data.automatic_operations_v1) assertAutomaticLedgerSourceIntegrity(data);
-    // Every replacement containing acknowledged queue or automatic-ledger state
-    // must retain file and directory durability, including ordinary graph writes.
-    durable ||= data.episodes.some((episode) => episode.attributes[QUEUE_ATTRIBUTE] !== undefined);
-    durable ||=
-      this.automaticOperations !== undefined || data.automatic_operations_v1 !== undefined;
-    durable ||= hasReplaySafeCaptureSource(data.episodes);
-    const serializeStarted = performance.now();
-    const payload = compactCapture ? JSON.stringify(data) : JSON.stringify(data, null, 2);
-    onSerialized?.(performance.now() - serializeStarted);
+    const payload = autonomousPersonalProcessingV4(() => {
+      compactCapture ||= hasRawReplaySafeCaptureState(exported);
+      const data = compactCapture
+        ? compactCaptureSnapshotData(exported)
+        : exported.automatic_operations_v1
+          ? GraphDataSchema.parse(exported)
+          : exported;
+      if (this.automaticOperations && !data.automatic_operations_v1) {
+        throw new Error('Engram automatic ledger: native_root_missing');
+      }
+      if (data.automatic_operations_v1) assertAutomaticLedgerSourceIntegrity(data);
+      // Every replacement containing acknowledged queue or automatic-ledger state
+      // must retain file and directory durability, including ordinary graph writes.
+      durable ||= data.episodes.some(
+        (episode) => episode.attributes[QUEUE_ATTRIBUTE] !== undefined,
+      );
+      durable ||=
+        this.automaticOperations !== undefined || data.automatic_operations_v1 !== undefined;
+      durable ||= hasReplaySafeCaptureSource(data.episodes);
+      const serializeStarted = performance.now();
+      const serialized = compactCapture ? JSON.stringify(data) : JSON.stringify(data, null, 2);
+      onSerialized?.(performance.now() - serializeStarted);
+      return serialized;
+    });
     await this.writeTextAtomic(
       payload,
       this.persistPath,
@@ -5053,6 +5192,7 @@ export class GraphologyStorage implements IGraphStorage {
   ): Promise<GraphData> {
     if (!this.persistPath) throw new Error('Embedded persistence path is not configured');
     const boundedRead =
+      currentAutonomousPersonalExecutionScopeWorkV1() !== undefined ||
       captureRead !== undefined ||
       captureRecords === 'lossless' ||
       this.hasReplaySafeCaptureSourceInMemory() ||
@@ -5096,7 +5236,7 @@ export class GraphologyStorage implements IGraphStorage {
       captureRead?.check();
     } else raw = await fs.promises.readFile(this.persistPath, 'utf-8');
     captureRead?.check();
-    const decoded: unknown = JSON.parse(raw);
+    const decoded: unknown = autonomousPersonalProcessingV4(() => JSON.parse(raw));
     if (captureRead?.verifyStableSnapshot) {
       if (
         !opened ||
@@ -5112,8 +5252,15 @@ export class GraphologyStorage implements IGraphStorage {
         throw new CompositionalRetrievalSnapshotReadError('concurrent_snapshot');
       let snapshot: GraphData;
       try {
-        snapshot = parseLosslessAutomaticCaptureGraph(decoded);
+        snapshot = autonomousPersonalProcessingV4(() =>
+          parseLosslessAutomaticCaptureGraph(decoded),
+        );
       } catch (error) {
+        if (
+          error instanceof ExtractionBudgetError ||
+          error instanceof AutonomousPersonalExecutionScopeError
+        )
+          throw error;
         throw new CompositionalRetrievalSnapshotReadError(
           isCompositionalSnapshotResourceFailure(error) ? 'resource_exhausted' : 'invalid_snapshot',
         );
@@ -5131,13 +5278,15 @@ export class GraphologyStorage implements IGraphStorage {
     let losslessRawGraph: GraphData | undefined;
     const rawV4Enrollment = rawGraphHasAutonomousPersonalV4Enrollment(decoded);
     if (boundedRead || hasRawReplaySafeCaptureState(decoded) || rawV4Enrollment) {
-      losslessRawGraph = parseLosslessAutomaticCaptureGraph(decoded);
+      losslessRawGraph = autonomousPersonalProcessingV4(() =>
+        parseLosslessAutomaticCaptureGraph(decoded),
+      );
     }
     if (rawV4Enrollment) {
       assertAutonomousPersonalGraphIntegrityV4(losslessRawGraph!, structuralGuardContext);
     }
     captureRead?.check();
-    const migration = migrateGraphData(decoded);
+    const migration = autonomousPersonalProcessingV4(() => migrateGraphData(decoded));
     captureRead?.check();
     if (captureRead && migration.report.migration_required)
       throw new Error('Engram compositional capture: unsupported_mode');
@@ -5194,7 +5343,11 @@ export class GraphologyStorage implements IGraphStorage {
     let created = false;
     if (fs.existsSync(backupPath)) {
       const existing = await fs.promises.readFile(backupPath, 'utf-8');
-      if (this.contentChecksum(existing) !== this.contentChecksum(raw)) {
+      if (
+        autonomousPersonalProcessingV4(
+          () => this.contentChecksum(existing) !== this.contentChecksum(raw),
+        )
+      ) {
         throw new Error(`Existing migration backup does not match source storage: ${backupPath}`);
       }
     } else {
@@ -5203,8 +5356,12 @@ export class GraphologyStorage implements IGraphStorage {
     }
 
     const verified = await fs.promises.readFile(backupPath, 'utf-8');
-    migrateGraphData(JSON.parse(verified));
-    if (this.contentChecksum(verified) !== this.contentChecksum(raw)) {
+    autonomousPersonalProcessingV4(() => migrateGraphData(JSON.parse(verified)));
+    if (
+      autonomousPersonalProcessingV4(
+        () => this.contentChecksum(verified) !== this.contentChecksum(raw),
+      )
+    ) {
       throw new Error(`Migration backup verification failed: ${backupPath}`);
     }
     await fs.promises.chmod(backupPath, 0o600);
@@ -5222,25 +5379,40 @@ export class GraphologyStorage implements IGraphStorage {
     if (!fs.existsSync(backupPath)) return null;
     try {
       const raw = await fs.promises.readFile(backupPath, 'utf-8');
-      const migration = migrateGraphData(JSON.parse(raw));
-      return {
-        sourceVersion: migration.report.source_version,
-        legacyEpisodeCount: Math.max(
-          migration.report.episode_defaults_applied.episode_kind,
-          migration.report.episode_defaults_applied.trust_level,
-          migration.report.episode_defaults_applied.review_status,
-        ),
-        verified:
-          this.contentChecksum(JSON.stringify(migration.data)) ===
-          this.contentChecksum(JSON.stringify(currentData)),
-      };
-    } catch {
+      return autonomousPersonalProcessingV4(() => {
+        const migration = migrateGraphData(JSON.parse(raw));
+        return {
+          sourceVersion: migration.report.source_version,
+          legacyEpisodeCount: Math.max(
+            migration.report.episode_defaults_applied.episode_kind,
+            migration.report.episode_defaults_applied.trust_level,
+            migration.report.episode_defaults_applied.review_status,
+          ),
+          verified:
+            this.contentChecksum(JSON.stringify(migration.data)) ===
+            this.contentChecksum(JSON.stringify(currentData)),
+        };
+      });
+    } catch (error) {
+      if (
+        error instanceof ExtractionBudgetError ||
+        error instanceof AutonomousPersonalExecutionScopeError
+      )
+        throw error;
       return { sourceVersion: null, legacyEpisodeCount: 0, verified: false };
     }
   }
 
   private async writeGraphDataAtomic(data: GraphData, targetPath: string): Promise<void> {
-    await this.writeTextAtomic(JSON.stringify(data, null, 2), targetPath);
+    const work = currentAutonomousPersonalExecutionScopeWorkV1();
+    const payload = autonomousPersonalProcessingV4(() => JSON.stringify(data, null, 2), work);
+    await this.writeTextAtomic(
+      payload,
+      targetPath,
+      false,
+      undefined,
+      work ? () => checkCurrentAutonomousPersonalExecutionScopeWorkV1(work) : undefined,
+    );
   }
 
   private async writeTextAtomic(
@@ -5294,6 +5466,17 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   private replaceGraphData(data: GraphData, options: { trustedRollback?: boolean } = {}): void {
+    const replace = () => this.replaceGraphDataCore(data, options);
+    if (options.trustedRollback) {
+      // Mandatory prior-state repair must complete even after the processing budget stops.
+      // runMutation measures this separately as rollback_restore_ms.
+      replace();
+    } else {
+      autonomousPersonalProcessingV4(replace);
+    }
+  }
+
+  private replaceGraphDataCore(data: GraphData, options: { trustedRollback?: boolean } = {}): void {
     assertAutomaticLedgerSourceIntegrity(data);
     if (!options.trustedRollback && !data.automatic_operations_v1 && this.automaticOperations) {
       throw new Error('Engram automatic ledger: native_root_missing');

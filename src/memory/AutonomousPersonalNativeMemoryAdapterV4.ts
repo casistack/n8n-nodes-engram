@@ -1,6 +1,10 @@
 /// <reference lib="es2021.weakref" />
 
 import { types as utilTypes } from 'node:util';
+import {
+  runAutonomousPersonalMemoryPreparationV1,
+  assertAutonomousPersonalMemoryPreparationConfigV1,
+} from '../utils/AutonomousPersonalMemoryExecutionEntryV1';
 import type { IExecuteFunctions } from 'n8n-workflow';
 import { ExtractionBudgetError } from '../extraction/ExtractionDiagnostics';
 import {
@@ -317,6 +321,22 @@ export async function prepareNativeAutonomousPersonalMemoryAdapterV4(
   itemIndex: number,
   currentMemoryStorage: IGraphStorage,
 ): Promise<PrivateAutonomousPersonalNativeMemoryAdapterTokenV4> {
+  return runAutonomousPersonalMemoryPreparationV1(ctx, itemIndex, (registerFailureCleanup) =>
+    prepareNativeAdapterWithinPreparationV1(
+      ctx,
+      itemIndex,
+      currentMemoryStorage,
+      registerFailureCleanup,
+    ),
+  );
+}
+
+async function prepareNativeAdapterWithinPreparationV1(
+  ctx: AutonomousPersonalNativeMemoryAdapterContextV4,
+  itemIndex: number,
+  currentMemoryStorage: IGraphStorage,
+  registerFailureCleanup: (cleanup: () => Promise<void>) => void,
+): Promise<PrivateAutonomousPersonalNativeMemoryAdapterTokenV4> {
   if (
     itemIndex !== 0 ||
     !ctx ||
@@ -338,7 +358,7 @@ export async function prepareNativeAutonomousPersonalMemoryAdapterV4(
     } catch {
       throw unsupported();
     }
-    const work: WorkV4 = createAutonomousPersonalNativeMemoryWorkV4(ctx, deadline);
+    const work: WorkV4 = createAutonomousPersonalNativeMemoryWorkV4(ctx, deadline, ctx);
     const check = work.check;
 
     readMemoryAdmission(ctx, itemIndex, check);
@@ -347,6 +367,7 @@ export async function prepareNativeAutonomousPersonalMemoryAdapterV4(
     reader = createAutonomousPersonalNativeMemorySnapshotReaderV4(ctx, itemIndex);
     check();
     const initialSnapshot = await reader.read();
+    assertAutonomousPersonalMemoryPreparationConfigV1(ctx, initialSnapshot.config);
     check();
 
     const ownerHashAfter = readOwnerStoreHash(currentMemoryStorage, check);
@@ -367,12 +388,19 @@ export async function prepareNativeAutonomousPersonalMemoryAdapterV4(
       reader,
       pendingReaders: new Set(),
       readerQueue: Promise.resolve(),
-      signal: work.work.signal,
+      signal:
+        initialSnapshot.config.executionBudget === undefined
+          ? work.work.signal
+          : (work.nativeSignal ?? null),
       nativeCancellationAvailable: work.nativeCancellationAvailable,
       abortListener: null,
       access: null,
       cancellationFailure: null,
     };
+    const preparedState = state;
+    registerFailureCleanup(async () => {
+      closeState(preparedState);
+    });
     state.access = makeAccess(state);
 
     if (state.nativeCancellationAvailable) {
@@ -472,6 +500,24 @@ export async function refreshAutonomousPersonalNativeMemoryAdapterV4(
   ctx: AutonomousPersonalNativeMemoryAdapterContextV4,
   itemIndex: number,
 ): Promise<boolean> {
+  return runAutonomousPersonalMemoryPreparationV1(ctx, itemIndex, (registerFailureCleanup) =>
+    refreshNativeAdapterWithinPreparationV1(
+      owner,
+      memoryInstance,
+      ctx,
+      itemIndex,
+      registerFailureCleanup,
+    ),
+  );
+}
+
+async function refreshNativeAdapterWithinPreparationV1(
+  owner: IGraphStorage,
+  memoryInstance: unknown,
+  ctx: AutonomousPersonalNativeMemoryAdapterContextV4,
+  itemIndex: number,
+  registerFailureCleanup: (cleanup: () => Promise<void>) => void,
+): Promise<boolean> {
   if (
     !isObject(owner) ||
     utilTypes.isProxy(owner) ||
@@ -488,6 +534,9 @@ export async function refreshAutonomousPersonalNativeMemoryAdapterV4(
     return false;
   }
 
+  registerFailureCleanup(async () => {
+    closeState(state);
+  });
   const candidateReader: { value: AutonomousPersonalNativeMemorySnapshotReaderV4 | null } = {
     value: null,
   };
@@ -500,13 +549,13 @@ export async function refreshAutonomousPersonalNativeMemoryAdapterV4(
     } catch {
       throw unsupported();
     }
-    const work = createAutonomousPersonalNativeMemoryWorkV4(ctx, deadline);
+    const work = createAutonomousPersonalNativeMemoryWorkV4(ctx, deadline, ctx);
     work.check();
     assertStateOpen(state);
     if (
       !state.nativeCancellationAvailable ||
       !work.nativeCancellationAvailable ||
-      work.work.signal !== state.signal
+      work.nativeSignal !== state.signal
     ) {
       throw unsupported();
     }
@@ -525,6 +574,7 @@ export async function refreshAutonomousPersonalNativeMemoryAdapterV4(
       state.pendingReaders.add(candidateReader.value);
       work.check();
       const candidateSnapshot = await candidateReader.value.read();
+      assertAutonomousPersonalMemoryPreparationConfigV1(ctx, candidateSnapshot.config);
       work.check();
       assertStateOpen(state);
 

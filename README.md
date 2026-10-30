@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-to-v080">Upgrade</a> &middot;
+  <a href="#upgrading-to-v081">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -98,6 +98,28 @@ Engram provides dedicated n8n nodes for AI memory, graph exploration, administra
 cd ~/.n8n
 npm install n8n-nodes-engram
 ```
+
+---
+
+## Upgrading to v0.8.1
+
+This patch adds configurable capture budgets and fixes Memory continuation across tool rounds. Existing node versions, saved defaults, namespaces and memory are preserved. Autonomous Personal Memory uses AI Agent **v3.1** with n8n **2.12.3 / Node.js 22** or **2.44.6 / Node.js 24**.
+
+1. Take fresh, consistent workflow and backend-native backups. Preserve complete embedded files or the Neo4j database, producer workflow mapping, storage paths, namespaces, bindings and aliases. Begin with an inactive workflow copy and a separately restored store.
+2. Install `n8n-nodes-engram@0.8.1`, restart n8n and refresh the editor. Keep the current model, route, provider temperature setting, source mappings and stable event IDs.
+3. On both **Admin v3 > Capture Human Memory** and **Memory v3**, select **Capture Budget Policy > Configured Budgets (V1)**. Match the extraction deadline and all budget settings across the two nodes. Use **Preview Memory Policy** to inspect the selected policy.
+4. Start with **Completion Budget > Use Remaining Extraction Deadline**, **Processing Budget > Use Remaining Extraction Deadline**, and **Finalization Reserve > Automatic**. Explicit completion/processing limits are 100–120000 milliseconds. A fixed reserve is 20–5000 milliseconds and must be smaller than the extraction deadline.
+5. Verify capture acceptance, graph-only recall, normal and multi-tool conversations, duplicate events and saved provenance before expanding to other writers. Workflow success alone does not prove accepted graph memory.
+
+**Existing Limits** remains the default. Selecting configured budgets removes the legacy five-second completion/processing ceilings for that selected path. Every stage remains within the original extraction deadline and current ownership lease; stage limits never add time. Preparation, each Memory read and the final Memory save have separate operation scopes, so agent/tool time does not consume a later final-save allowance. The extraction deadline is not memory expiry or a whole-workflow timeout. An individual provider-request timeout remains separate.
+
+The configured policy applies to autonomous capture and Memory operations. Neo4j ordinary graph imports now use ordered batches to reduce database round trips while preserving row order, atomicity and existing import limits. Imports remain bounded. Use complete backend-native backups for recovery rather than generic JSON import.
+
+Processing measures cumulative elapsed synchronous work, including parsing, validation, proof reconstruction, hashing, indexing and serialization. Provider/storage waits use the wall-time deadline. Configurable limits do not promise faster responses on larger stores. Configured Admin output adds `execution_diagnostics`: configured/effective allowances, observed elapsed time, cumulative synchronous work, last reached stage and first scope stop. These observations are not a commit receipt; `creationSummary` and `should_process` retain their meanings. An unavailable clock observation is `null`.
+
+A durably acknowledged write followed by a verification timeout remains unconfirmed for continuation; that timeout alone does not quarantine an otherwise healthy embedded store. Persistence/integrity uncertainty retains recovery protection. No timeout authorizes another agent run or external send.
+
+No reset, purge, source rewrite, destructive merge or bulk re-extraction is needed. Historical failed/leased events remain intact; changing settings does not rewrite their ownership or automatically replay them. Prefer policy rollback on the supported binary, preserving newly appended conversations. The existing old-package downgrade and mixed-version restrictions below still apply. Never restore an old snapshot over newer conversations as routine rollback.
 
 ---
 

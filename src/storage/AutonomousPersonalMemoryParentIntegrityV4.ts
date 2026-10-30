@@ -165,6 +165,9 @@ export function assertAutonomousPersonalMemoryCurrentParentGraphV4(
         requestedTrustLevel: 'standard',
         intentSetting: config.explicitIntent,
         invocationDeadlineMs: config.invocationDeadlineMs,
+        ...(config.executionBudget === undefined
+          ? {}
+          : { executionBudget: config.executionBudget }),
         providerReference: config.providerReference,
       });
     } catch {

@@ -113,15 +113,23 @@ jobs:
           retention-days: 7
 
   native:
-    name: Native n8n Contracts
+    name: Native n8n ${{ matrix.n8n-version }} Contracts
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node-version: 22
+            n8n-version: 2.12.3
+          - node-version: 24
+            n8n-version: 2.44.6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - uses: actions/download-artifact@v4
@@ -130,9 +138,10 @@ jobs:
           path: package-artifact
       - run: node tests/ci/package-manifest.cjs verify package-artifact
       - name: Install pinned n8n
-        run: npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/engram-n8n" n8n@2.12.3
+        run: npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/engram-n8n" n8n@${{ matrix.n8n-version }}
       - name: Exercise packaged native Memory
         env:
+          ENGRAM_EXPECTED_N8N_VERSION: ${{ matrix.n8n-version }}
           ENGRAM_N8N_RUNTIME: ${{ runner.temp }}/engram-n8n
         run: node tests/native/run-contracts.cjs package-artifact
 

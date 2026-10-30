@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AutonomousPersonalCaptureReceiptSummaryV4Schema } from './AutonomousPersonalCaptureReceiptSummaryV4.schema';
+import { AutonomousPersonalExecutionDiagnosticsV1Schema } from './AutonomousPersonalExecutionDiagnosticsV1.schema';
 
 /** Workflow output DATA. This receipt summary never grants continuation authority. */
 export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
@@ -10,6 +11,7 @@ export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
       status: z.literal('captured'),
       sourceId: z.string().uuid(),
       creationSummary: AutonomousPersonalCaptureReceiptSummaryV4Schema,
+      execution_diagnostics: AutonomousPersonalExecutionDiagnosticsV1Schema.optional(),
     })
     .strict()
     .refine(
@@ -24,6 +26,7 @@ export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
       status: z.literal('replay'),
       sourceId: z.string().uuid(),
       creationSummary: AutonomousPersonalCaptureReceiptSummaryV4Schema,
+      execution_diagnostics: AutonomousPersonalExecutionDiagnosticsV1Schema.optional(),
     })
     .strict()
     .refine((value) => value.sourceId === value.creationSummary.sourceId),
@@ -40,6 +43,7 @@ export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
         'budget_exhausted',
         'resource_exhausted',
         'capacity',
+        'clock_invalid',
         'clock_regression',
         'storage_error',
         'cancelled',
@@ -53,6 +57,7 @@ export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
         'lease_expired',
         'inspection_incomplete',
       ]),
+      execution_diagnostics: AutonomousPersonalExecutionDiagnosticsV1Schema.optional(),
     })
     .strict(),
 ]);

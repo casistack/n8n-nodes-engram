@@ -11,6 +11,8 @@ import {
   CompositionalPreferenceV2DescriptorSchema,
 } from './CompositionalPreferenceV2.schema';
 import { ExtractionTemperatureSchema } from './ExtractionOutcome.schema';
+import { AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema } from './AutonomousPersonalExecutionBudgetV1.schema';
+import { resolveAutonomousPersonalExecutionBudgetV1 } from '../storage/AutonomousPersonalExecutionBudgetV1';
 import { cloneBoundedAutomaticCaptureJson } from '../storage/BoundedAutomaticCaptureJson';
 
 const HASH_64 = /^[a-f0-9]{64}$/u;
@@ -71,6 +73,8 @@ const DescriptorInputSchema = z
     intentSetting: z.boolean(),
     invocationDeadlineMs: z.number().int().min(100).max(120_000),
     providerReference: ProviderReferenceSchema,
+    // Absence means legacy; the public bounded entry rejects explicit undefined.
+    executionBudget: AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema.optional(),
   })
   .strict();
 /** Strict Zod shape for descriptor request DATA after the caller has owned its outer input. */
@@ -104,10 +108,28 @@ const descriptorBodySchema = z
     intentSetting: z.boolean(),
     invocationDeadlineMs: z.number().int().min(100).max(120_000),
     provider: providerOutputSchema,
-    finalizationReserveMs: z.number().int().min(20).max(1000),
+    // Structural bound admits valid fixed reserves; refinement enforces the exact recipe.
+    finalizationReserveMs: z.number().int().min(20).max(5000),
     assistantWriteAuthority: z.null(),
+    executionBudget: AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema.optional(),
   })
   .strict();
+
+/**
+ * Reserve for a configured budget, taken as DATA from the pure resolver with
+ * synthetic anchors. No clock is read and no execution deadline is invented.
+ */
+function configuredFinalizationReserveMs(
+  executionBudget: unknown,
+  invocationDeadlineMs: number,
+): number {
+  return resolveAutonomousPersonalExecutionBudgetV1(executionBudget, {
+    originalStartedAt: 0,
+    configuredOverallMs: invocationDeadlineMs,
+    originalOverallDeadlineAt: invocationDeadlineMs,
+    existingLeaseDeadlineAt: invocationDeadlineMs,
+  }).finalizationReserveMs;
+}
 
 const descriptorWithoutHashSchema = descriptorBodySchema;
 const descriptorWithHashSchema = descriptorBodySchema.extend({ settingsHash: hashSchema }).strict();
@@ -135,16 +157,33 @@ export const AutonomousPersonalDescriptorV4OwnedDataSchema = descriptorWithHashS
       return;
     }
 
-    const expectedReserve = Math.min(
-      descriptor.policy.finalizationReserve.maxMs,
-      Math.max(
-        descriptor.policy.finalizationReserve.minMs,
-        Math.ceil(
-          (descriptor.invocationDeadlineMs * descriptor.policy.finalizationReserve.numerator) /
-            descriptor.policy.finalizationReserve.denominator,
+    let expectedReserve: number;
+    if (descriptor.executionBudget === undefined) {
+      expectedReserve = Math.min(
+        descriptor.policy.finalizationReserve.maxMs,
+        Math.max(
+          descriptor.policy.finalizationReserve.minMs,
+          Math.ceil(
+            (descriptor.invocationDeadlineMs * descriptor.policy.finalizationReserve.numerator) /
+              descriptor.policy.finalizationReserve.denominator,
+          ),
         ),
-      ),
-    );
+      );
+    } else {
+      try {
+        expectedReserve = configuredFinalizationReserveMs(
+          descriptor.executionBudget,
+          descriptor.invocationDeadlineMs,
+        );
+      } catch {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Descriptor execution budget is invalid',
+          path: ['executionBudget'],
+        });
+        return;
+      }
+    }
     const expectedRequestLimit = Math.min(
       descriptor.provider.configuredRequestLimit,
       descriptor.policy.limits.providerMaxAttempts,
@@ -256,13 +295,16 @@ export function compileAutonomousPersonalDescriptorV4(
     const checked = ownInput(input);
     const policy = compileAutonomousPersonalPolicyV3({ profileId: checked.profileId });
     const reserve = policy.finalizationReserve;
-    const finalizationReserveMs = Math.min(
-      reserve.maxMs,
-      Math.max(
-        reserve.minMs,
-        Math.ceil((checked.invocationDeadlineMs * reserve.numerator) / reserve.denominator),
-      ),
-    );
+    const finalizationReserveMs =
+      checked.executionBudget === undefined
+        ? Math.min(
+            reserve.maxMs,
+            Math.max(
+              reserve.minMs,
+              Math.ceil((checked.invocationDeadlineMs * reserve.numerator) / reserve.denominator),
+            ),
+          )
+        : configuredFinalizationReserveMs(checked.executionBudget, checked.invocationDeadlineMs);
     const provider = {
       ...checked.providerReference,
       structuredContractVersion: 1 as const,
@@ -303,6 +345,10 @@ export function compileAutonomousPersonalDescriptorV4(
       provider,
       finalizationReserveMs,
       assistantWriteAuthority: null,
+      // Spread only when configured so legacy bodies never gain a key.
+      ...(checked.executionBudget === undefined
+        ? {}
+        : { executionBudget: checked.executionBudget }),
     });
     const settingsHash = hashAutomaticCaptureV2({
       domain: 'engram-autonomous-settings-v1',

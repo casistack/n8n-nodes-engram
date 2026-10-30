@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { planAutonomousPersonalCaptureCompletionV4 } from '../../../src/storage/AutonomousPersonalCompletionPlanV4';
 import { AutonomousPersonalCompletionPlanV4OwnedDataSchema } from '../../../src/schemas/AutonomousPersonalCompletionPlanV4.schema';
 import { hashAutomaticCaptureV2 } from '../../../src/schemas/AutomaticCapture.schema';
@@ -9,6 +10,9 @@ import {
 } from '../../helpers/autonomousPersonalCompletionPlanV4';
 import {
   getAutomaticClaimReadScope,
+  getAutomaticClaimReadScopeWithAbsoluteDeadline,
+  getAutomaticClaimReadScopeRemaining,
+  beginAutomaticClaimReadAttempt,
   reserveAutomaticClaimSnapshotBytes,
 } from '../../../src/storage/AutomaticClaimReadScope';
 import { AUTONOMOUS_PERSONAL_POLICY_V3_LIMITS } from '../../../src/schemas/AutonomousPersonalPolicyV3.schema';
@@ -78,6 +82,68 @@ const unrelatedStatementContent = [
 ].join(' ');
 
 describe('Autonomous Personal Completion Plan V4', () => {
+  it('reuses an exact configured read scope without resetting charged resources', async () => {
+    const fixture = await autonomousPersonalCompletionPlanFixtureV4();
+    try {
+      const budget = { remaining: 512, deferred: 0 };
+      const scope = getAutomaticClaimReadScopeWithAbsoluteDeadline(
+        budget,
+        performance.now() + 30_000,
+      );
+      expect(beginAutomaticClaimReadAttempt(scope)).toBe(true);
+      expect(
+        reserveAutomaticClaimSnapshotBytes(scope, Buffer.byteLength(JSON.stringify(fixture.graph))),
+      ).toBe(true);
+      const before = getAutomaticClaimReadScopeRemaining(scope)!;
+      const plan = planAutonomousPersonalCaptureCompletionV4(
+        fixture.input,
+        fixture.graph,
+        fixture.response,
+        fixture.selection,
+        fixture.work,
+        fixture.check,
+        budget,
+        scope,
+      );
+      expect(plan.kind).toBe('planned');
+      const after = getAutomaticClaimReadScopeRemaining(scope)!;
+      expect(after.attemptsRemaining).toBeLessThanOrEqual(before.attemptsRemaining);
+      expect(after.snapshotBytesRemaining).toBeLessThanOrEqual(before.snapshotBytesRemaining);
+      expect(after.sourceHydrationsRemaining).toBeLessThanOrEqual(before.sourceHydrationsRemaining);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it('rejects a configured scope belonging to another budget without consuming it', async () => {
+    const fixture = await autonomousPersonalCompletionPlanFixtureV4();
+    try {
+      const budget = { remaining: 512, deferred: 0 };
+      const scope = getAutomaticClaimReadScopeWithAbsoluteDeadline(
+        budget,
+        performance.now() + 30_000,
+      );
+      const before = getAutomaticClaimReadScopeRemaining(scope)!;
+      const plan = planAutonomousPersonalCaptureCompletionV4(
+        fixture.input,
+        fixture.graph,
+        fixture.response,
+        fixture.selection,
+        fixture.work,
+        fixture.check,
+        fixture.budget,
+        scope,
+      );
+      expect(plan).toMatchObject({ kind: 'no_write', reason: 'invalid_input' });
+      const after = getAutomaticClaimReadScopeRemaining(scope)!;
+      expect(after.attemptsRemaining).toBe(before.attemptsRemaining);
+      expect(after.snapshotBytesRemaining).toBe(before.snapshotBytesRemaining);
+      expect(after.sourceHydrationsRemaining).toBe(before.sourceHydrationsRemaining);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it('returns a frozen all-or-none creation plan without mutating the actual graph', async () => {
     const fixture = await autonomousPersonalCompletionPlanFixtureV4();
     try {

@@ -7,9 +7,25 @@ import {
   AutonomousPersonalNativeAdminV4OutputSchema,
   type AutonomousPersonalNativeAdminV4Output,
 } from '../schemas/AutonomousPersonalNativeAdminV4.schema';
+import {
+  checkAutonomousPersonalEntryLiveV1,
+  runWithAutonomousPersonalExecutionEntryV1,
+} from './AutonomousPersonalExecutionEntryV1';
+import { markCurrentAutonomousPersonalExecutionStageV1 } from '../storage/AutonomousPersonalExecutionScopeV1';
 
-/** Fixed native dispatcher. Only the original confirmed capture publishes a Memory handoff. */
+/**
+ * Fixed native dispatcher. Only the original confirmed capture publishes a Memory handoff.
+ * A configured capture keeps ONE entry scope through completion, handoff and output projection;
+ * a direct supported call opens it here, while the Admin node entry is reused unchanged.
+ */
 export async function executeAutonomousPersonalAdminV4(
+  ctx: IExecuteFunctions,
+  storage: IGraphStorage,
+): Promise<AutonomousPersonalNativeAdminV4Output> {
+  return runWithAutonomousPersonalExecutionEntryV1(ctx, () => dispatchWithinEntryV4(ctx, storage));
+}
+
+async function dispatchWithinEntryV4(
   ctx: IExecuteFunctions,
   storage: IGraphStorage,
 ): Promise<AutonomousPersonalNativeAdminV4Output> {
@@ -33,7 +49,24 @@ export async function executeAutonomousPersonalAdminV4(
     return stopped('unsupported_mode');
 
   const completed = await completeNativeAutonomousPersonalCaptureV4(ctx, storage);
+  if (
+    completed.kind === 'original_turn' ||
+    (completed.kind === 'no_origin' && completed.observation.kind === 'unconfirmed') ||
+    (completed.kind === 'decision' &&
+      (completed.result.kind === 'committed_observed' ||
+        completed.result.kind === 'cancelled_observed'))
+  ) {
+    markCurrentAutonomousPersonalExecutionStageV1('readback');
+  }
   if (completed.kind === 'original_turn') {
+    // Publication and Proceed require a live scope: after a stop there is no new handoff or
+    // reply. The already durable write is untouched and is never repeated or rolled back.
+    markCurrentAutonomousPersonalExecutionStageV1('handoff');
+    try {
+      checkAutonomousPersonalEntryLiveV1();
+    } catch {
+      return stopped('handoff_unavailable', 'unconfirmed');
+    }
     const published = publishAutonomousPersonalMemoryHandoffWithSummaryV4(
       ctx,
       storage,

@@ -1,3 +1,9 @@
+import { loadOrdinaryNeo4jFixture } from '../helpers/loadOrdinaryNeo4jFixture';
+import { QUEUE_ATTRIBUTE } from '../../src/extraction/QueueState';
+import { performance } from 'node:perf_hooks';
+import * as completionPlanner from '../../src/storage/AutonomousPersonalCompletionPlanV4';
+import { completeNativeAutonomousPersonalCaptureV4 } from '../../src/storage/AutonomousPersonalNativeCompletionV4';
+import { buildAutonomousPersonalExistingStoreFixture } from '../helpers/autonomousPersonalExistingStoreFixture';
 import { randomUUID } from 'crypto';
 import neo4j, { type Driver, type Session } from 'neo4j-driver';
 import * as backendOutcomes from '../../src/storage/AutonomousPersonalCompletionBackendRegistryV4';
@@ -136,6 +142,203 @@ describeNeo('native proof core for autonomous personal completion on Neo4j', () 
       namespaces = [];
       handle = undefined;
     }
+  });
+
+  it('rejects all unsupported fixture metadata and external references before opening a database session', async () => {
+    const make = () =>
+      buildAutonomousPersonalExistingStoreFixture({
+        groupId: `ordinary-invalid-${randomUUID()}`,
+        counts: { episodes: 4, entities: 3, edges: 2 },
+      }).graph;
+    const opening = jest.spyOn(driver!, 'session');
+    const reserved = [
+      'engram_actor_bindings_v1',
+      'engram_write_owner_v4',
+      'engram_source_envelope_v3',
+      'engram_claim_v1',
+      QUEUE_ATTRIBUTE,
+    ];
+    for (const key of reserved) {
+      const graph = make();
+      graph.episodes[0].attributes[key] = {};
+      await expect(loadOrdinaryNeo4jFixture(driver!, database, graph)).rejects.toThrow();
+    }
+    const operationRoot = make();
+    operationRoot.automatic_operations_v1 = { version: 1, operations: [] };
+    await expect(loadOrdinaryNeo4jFixture(driver!, database, operationRoot)).rejects.toThrow();
+    const externalEndpoint = make();
+    externalEndpoint.edges[0].source_node_uuid = randomUUID();
+    await expect(loadOrdinaryNeo4jFixture(driver!, database, externalEndpoint)).rejects.toThrow();
+    const externalChain = make();
+    externalChain.episodes[1].previous_episode_uuid = randomUUID();
+    await expect(loadOrdinaryNeo4jFixture(driver!, database, externalChain)).rejects.toThrow();
+    expect(opening).not.toHaveBeenCalled();
+  });
+
+  it('rejects fixture collisions without overwriting existing rows', async () => {
+    const namespace = `ordinary-collision-${randomUUID()}`;
+    namespaces.push(namespace);
+    const graph = buildAutonomousPersonalExistingStoreFixture({
+      groupId: namespace,
+      counts: { episodes: 4, entities: 3, edges: 2 },
+    }).graph;
+    await loadOrdinaryNeo4jFixture(driver!, database, graph);
+    const before = await store!.exportGraph(namespace);
+    await expect(loadOrdinaryNeo4jFixture(driver!, database, graph)).rejects.toThrow(
+      'already exists',
+    );
+    expect(withoutExportedAt(await store!.exportGraph(namespace))).toEqual(
+      withoutExportedAt(before),
+    );
+  });
+
+  it('rejects ordinary UUID collisions with a genuine native operation without changing its records', async () => {
+    const prepared = await prepareCompletion(store!, seed);
+    handle = prepared.handle;
+    await store!.completeAutonomousPersonalCaptureForNativeV4(handle);
+    const before = await store!.exportGraph(seed.request.namespace);
+    const operation = before.automatic_operations_v1?.operations.find(
+      (row) => row.identity.namespace === seed.request.namespace && row.state === 'committed',
+    );
+    if (!operation) throw new Error('Expected genuinely committed native operation');
+    const namespace = `ordinary-operation-collision-${randomUUID()}`;
+    namespaces.push(namespace);
+    const graph = buildAutonomousPersonalExistingStoreFixture({
+      groupId: namespace,
+      counts: { episodes: 4, entities: 3, edges: 2 },
+    }).graph;
+    const replacedId = graph.entities[0].uuid;
+    graph.entities[0].uuid = operation.operationId;
+    for (const edge of graph.edges) {
+      if (edge.source_node_uuid === replacedId) edge.source_node_uuid = operation.operationId;
+      if (edge.target_node_uuid === replacedId) edge.target_node_uuid = operation.operationId;
+    }
+    await expect(loadOrdinaryNeo4jFixture(driver!, database, graph)).rejects.toThrow(
+      'already exists',
+    );
+    expect(withoutExportedAt(await store!.exportGraph(seed.request.namespace))).toEqual(
+      withoutExportedAt(before),
+    );
+    const remaining = await query('MATCH (n {group_id:$namespace}) RETURN count(n) AS count', {
+      namespace,
+    });
+    expect(Number(remaining.records[0].get('count'))).toBe(0);
+  });
+
+  it('rolls back an earlier fixture batch when a later batch fails', async () => {
+    const namespace = `ordinary-rollback-${randomUUID()}`;
+    namespaces.push(namespace);
+    const graph = buildAutonomousPersonalExistingStoreFixture({
+      groupId: namespace,
+      counts: { episodes: 4, entities: 3, edges: 2 },
+    }).graph;
+    const session = driver!.session({ database });
+    const tx = session.beginTransaction();
+    const run = tx.run.bind(tx);
+    const opening = jest.spyOn(driver!, 'session').mockReturnValue(session);
+    const begin = jest.spyOn(session, 'beginTransaction').mockReturnValue(tx);
+    const running = jest.spyOn(tx, 'run').mockImplementation((text, params) => {
+      if (typeof text === 'string' && text.includes('CREATE (ep:Episode)'))
+        throw new Error('Synthetic fixture batch failure');
+      return run(text, params);
+    });
+    try {
+      await expect(loadOrdinaryNeo4jFixture(driver!, database, graph)).rejects.toThrow(
+        'Synthetic fixture batch failure',
+      );
+    } finally {
+      running.mockRestore();
+      begin.mockRestore();
+      opening.mockRestore();
+    }
+    const remaining = await query('MATCH (n {group_id:$namespace}) RETURN count(n) AS count', {
+      namespace,
+    });
+    expect(Number(remaining.records[0].get('count'))).toBe(0);
+  });
+
+  it('completes configured planning beyond five seconds on an existing store without changing old rows', async () => {
+    const namespace = `configured-existing-${randomUUID()}`;
+    namespaces.push(namespace);
+    const shape = buildAutonomousPersonalExistingStoreFixture({ groupId: namespace });
+    await loadOrdinaryNeo4jFixture(driver!, database, shape.graph);
+    const loaded = await store!.exportGraph(namespace);
+    for (const key of ['episodes', 'entities', 'edges'] as const) {
+      expect(loaded[key]).toHaveLength(shape.graph[key].length);
+      const indexed = new Map<string, { uuid: string }>(loaded[key].map((row) => [row.uuid, row]));
+      for (const row of shape.graph[key]) expect(indexed.get(row.uuid)).toEqual(row);
+    }
+    const storedChains = await query(
+      'MATCH (previous:Episode)-[:NEXT_EPISODE]->(current:Episode {group_id:$namespace}) RETURN previous.uuid AS previous, current.uuid AS current',
+      { namespace },
+    );
+    expect(
+      storedChains.records.map((row) => `${row.get('previous')}->${row.get('current')}`).sort(),
+    ).toEqual(
+      shape.graph.episodes
+        .filter((row) => row.previous_episode_uuid)
+        .map((row) => `${row.previous_episode_uuid}->${row.uuid}`)
+        .sort(),
+    );
+    const currentSeed = await seedAutonomousPersonalCaptureSubject(store!, namespace);
+    const before = await store!.exportGraph(namespace);
+    const provider = jest.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = JSON.parse(body.messages[1]!.content) as { units: Array<{ unitId: string }> };
+      return providerResponse(prompt.units.map((unit) => unit.unitId));
+    });
+    const actualNow = performance.now.bind(performance);
+    let offset = 0;
+    jest.spyOn(performance, 'now').mockImplementation(() => actualNow() + offset);
+    const originalPlan = completionPlanner.planAutonomousPersonalCaptureCompletionV4;
+    let shifted = false;
+    jest
+      .spyOn(completionPlanner, 'planAutonomousPersonalCaptureCompletionV4')
+      .mockImplementation((...args) => {
+        if (!shifted) {
+          shifted = true;
+          offset += 6000;
+        }
+        return originalPlan(...args);
+      });
+    const contextFor = (executionId: string) => {
+      const ctx = nativeAutonomousPersonalCaptureContext(currentSeed, {
+        executionId,
+        deadlineMs: 90_000,
+        extraParameters: { automaticMemoryProfile: 'explicit', automaticIntent: 'enabled' },
+      });
+      const node = ctx.getNode();
+      Object.assign(ctx, {
+        getNode: () => ({
+          ...node,
+          parameters: { ...node.parameters, automaticExecutionBudgetMode: 'configuredV1' },
+        }),
+      });
+      return ctx;
+    };
+    const result = await completeNativeAutonomousPersonalCaptureV4(
+      contextFor('synthetic:configured-first'),
+      store!,
+    );
+    expect(result).toMatchObject({ kind: 'original_turn' });
+    expect(shifted).toBe(true);
+    const after = await store!.exportGraph(namespace);
+    for (const key of ['episodes', 'entities', 'edges'] as const) {
+      const indexed = new Map<string, { uuid: string }>(after[key].map((row) => [row.uuid, row]));
+      for (const row of before[key]) expect(indexed.get(row.uuid)).toEqual(row);
+    }
+    expect(after.edges).toHaveLength(before.edges.length + 1);
+    const calls = provider.mock.calls.length;
+    const replay = await completeNativeAutonomousPersonalCaptureV4(
+      contextFor('synthetic:configured-replay'),
+      store!,
+    );
+    expect(replay).toMatchObject({ kind: 'decision', result: { kind: 'committed_observed' } });
+    expect(provider.mock.calls).toHaveLength(calls);
+    const afterReplay = await store!.exportGraph(namespace);
+    expect(afterReplay.episodes).toEqual(after.episodes);
+    expect(afterReplay.entities).toEqual(after.entities);
+    expect(afterReplay.edges).toEqual(after.edges);
   });
 
   it.each([

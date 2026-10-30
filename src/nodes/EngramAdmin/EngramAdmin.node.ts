@@ -1,6 +1,9 @@
 import { StorageAccumulator } from '../../storage/StorageDiagnostics';
 import { automaticAdminProperties, executeAutomaticAdmin } from '../../utils/automaticAdmin';
-import { AutonomousPersonalNativeAdminV4OutputSchema } from '../../schemas/AutonomousPersonalNativeAdminV4.schema';
+import {
+  AutonomousPersonalNativeAdminV4OutputSchema,
+  type AutonomousPersonalNativeAdminV4Output,
+} from '../../schemas/AutonomousPersonalNativeAdminV4.schema';
 import { automaticProfileProperty, readAutomaticPolicy } from '../../utils/automaticMemory';
 import {
   usesReplaySafeCaptureOutputs,
@@ -38,6 +41,16 @@ import {
   type GraphData,
   type ImportGraphData,
 } from '../../schemas';
+import {
+  readLatestAutonomousPersonalExecutionDiagnosticsV1,
+  runWithAutonomousPersonalExecutionEntryV1,
+} from '../../utils/AutonomousPersonalExecutionEntryV1';
+import {
+  markCurrentAutonomousPersonalExecutionStageV1,
+  AutonomousPersonalExecutionScopeBudgetError,
+  AutonomousPersonalExecutionScopeError,
+} from '../../storage/AutonomousPersonalExecutionScopeV1';
+import type { AutonomousPersonalExecutionDiagnosticsV1 } from '../../schemas/AutonomousPersonalExecutionDiagnosticsV1.schema';
 import { nowIso } from '../../utils/temporal';
 import { resolveStoragePath, migrateStorageIfNeeded } from '../../utils/helpers';
 import { customStoragePathProperty } from '../../descriptions';
@@ -53,6 +66,58 @@ interface DiagnosticsContext {
   workflowId?: string;
   customStoragePathConfigured?: boolean;
   databaseConfigured?: boolean;
+}
+
+function nativeScopeFailureReason(
+  error: unknown,
+): 'budget_exhausted' | 'cancelled' | 'clock_invalid' | 'clock_regression' | undefined {
+  if (error instanceof AutonomousPersonalExecutionScopeBudgetError) {
+    return error.budgetReason === 'cancelled' ? 'cancelled' : 'budget_exhausted';
+  }
+  if (error instanceof AutonomousPersonalExecutionScopeError) {
+    if (error.reason === 'clock_invalid' || error.reason === 'clock_regression') {
+      return error.reason;
+    }
+  }
+  return undefined;
+}
+
+function nativeUnconfirmedOutput(error: unknown): AutonomousPersonalNativeAdminV4Output {
+  return AutonomousPersonalNativeAdminV4OutputSchema.parse({
+    version: 4,
+    should_process: false,
+    status: 'unconfirmed',
+    reason: nativeScopeFailureReason(error) ?? 'storage_error',
+  });
+}
+
+function attachNativeExecutionDiagnostics(
+  output: INodeExecutionData[][],
+  diagnostics: Readonly<AutonomousPersonalExecutionDiagnosticsV1> | null,
+): INodeExecutionData[][] {
+  if (diagnostics === null) return output;
+  try {
+    return output.map((branch) =>
+      branch.map((item) => {
+        if (item.json === null || typeof item.json !== 'object' || Array.isArray(item.json)) {
+          return item;
+        }
+        const parsed = AutonomousPersonalNativeAdminV4OutputSchema.safeParse({
+          ...item.json,
+          execution_diagnostics: diagnostics,
+        });
+        return parsed.success
+          ? {
+              ...item,
+              json: { ...parsed.data, execution_diagnostics: diagnostics },
+            }
+          : item;
+      }),
+    );
+  } catch {
+    // Diagnostics are optional DATA and cannot change a capture outcome.
+    return output;
+  }
 }
 
 export class EngramAdmin implements INodeType {
@@ -1163,24 +1228,33 @@ export class EngramAdmin implements INodeType {
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const safe = usesReplaySafeCaptureOutputs(this.getNode().parameters);
     try {
-      return await executeAdminCore.call(this, safe);
+      // The ONE original configured entry opens here, before credentials/storage create or
+      // initialize; legacy and missing modes call the original path unchanged.
+      return await runWithAutonomousPersonalExecutionEntryV1(this, async () => {
+        const output = await executeAdminCore.call(this, safe);
+        // Include output projection in the body so the scope's final check follows it.
+        markCurrentAutonomousPersonalExecutionStageV1('final_check');
+        return attachNativeExecutionDiagnostics(
+          output,
+          readLatestAutonomousPersonalExecutionDiagnosticsV1(this),
+        );
+      });
     } catch (error) {
       if (!safe) throw error;
-      return [
+      const output: INodeExecutionData[][] = [
         [],
         this.getInputData().map((_item, index) => ({
           json:
             this.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1'
-              ? AutonomousPersonalNativeAdminV4OutputSchema.parse({
-                  version: 4,
-                  should_process: false,
-                  status: 'unconfirmed',
-                  reason: 'storage_error',
-                })
+              ? nativeUnconfirmedOutput(error)
               : stoppedReplaySafeCapture(),
           pairedItem: { item: index },
         })),
       ];
+      return attachNativeExecutionDiagnostics(
+        output,
+        readLatestAutonomousPersonalExecutionDiagnosticsV1(this),
+      );
     }
   }
 }
@@ -1189,6 +1263,7 @@ async function executeAdminCore(
   this: IExecuteFunctions,
   safe: boolean,
 ): Promise<INodeExecutionData[][]> {
+  markCurrentAutonomousPersonalExecutionStageV1('initialize');
   const items = this.getInputData();
   const backend = this.getNodeParameter('backend', 0, 'embedded') as string;
   const resource = this.getNodeParameter('resource', 0, 'monitoring') as string;
@@ -1335,12 +1410,7 @@ async function executeAdminCore(
           stoppedData.push({
             json:
               this.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1'
-                ? AutonomousPersonalNativeAdminV4OutputSchema.parse({
-                    version: 4,
-                    should_process: false,
-                    status: 'unconfirmed',
-                    reason: 'storage_error',
-                  })
+                ? nativeUnconfirmedOutput(error)
                 : stoppedReplaySafeCapture(),
             pairedItem: { item: i },
           });

@@ -944,6 +944,12 @@ function recompileStoredDescriptor(descriptor: AutonomousPersonalDescriptorV4) {
       responseFormat: provider.responseFormat,
       outputTokenLimit: provider.outputTokenLimit,
     },
+    // Exact omission when absent: a legacy descriptor never gains a budget key. When present
+    // the body is recompiled, so settings/descriptor hashes bind it and a changed body fails
+    // the canonical comparison as a conflict instead of being rewritten.
+    ...(descriptor.executionBudget === undefined
+      ? {}
+      : { executionBudget: descriptor.executionBudget }),
   });
 }
 

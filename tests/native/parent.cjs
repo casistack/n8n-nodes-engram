@@ -5,10 +5,12 @@ const http = require('http');
 const { spawn, execFileSync } = require('child_process');
 const assert = require('assert/strict');
 const { randomUUID, createHash } = require('crypto');
+const { getNativeRuntimeIdentity } = require('./runtime.cjs');
 const work = fs.mkdtempSync(path.join(require('os').tmpdir(), 'engram-native-contract-'));
 const runtime = process.env.ENGRAM_N8N_RUNTIME;
 assert.ok(runtime, 'Explicit n8n runtime required');
 assert.ok(process.env.ENGRAM_TEST_PACKAGE, 'Explicit tested package required');
+const runtimeIdentity = getNativeRuntimeIdentity();
 const nodes = path.join(work, 'user/.n8n/nodes');
 fs.mkdirSync(nodes, { recursive: true });
 execFileSync(
@@ -479,7 +481,7 @@ const server = http.createServer(async (req, res) => {
   const proof = {
     parentMode,
     rejectedBeforeModel: true,
-    n8n: '2.12.3',
+    ...runtimeIdentity,
     workflowVersion: 3,
     agentVersion: 3.1,
     counts,

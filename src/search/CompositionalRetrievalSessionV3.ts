@@ -1,3 +1,7 @@
+import {
+  currentAutonomousPersonalExecutionScopeWorkV1,
+  runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1,
+} from '../storage/AutonomousPersonalExecutionScopeV1';
 import { types as utilTypes } from 'util';
 import {
   CompositionalRetrievalRequestV3Schema,
@@ -35,6 +39,7 @@ import {
   beginAutomaticClaimReadAttempt,
   canUseAutomaticClaimReadScope,
   getAutomaticClaimReadScope,
+  isAutomaticClaimReadScopeForBudget,
   getAutomaticClaimReadScopeRemaining,
   chargeAutomaticClaimContextBytes,
   type AutomaticClaimReadScope,
@@ -174,7 +179,15 @@ export type CompositionalRetrievalSessionFactoryV3 = Readonly<{
 }>;
 export function createCompositionalRetrievalSessionFactoryV3(
   internalStop?: InternalStop,
+  existingReadScope?: AutomaticClaimReadScope,
 ): CompositionalRetrievalSessionFactoryV3 {
+  // Only the explicit V4 bridge supplies a shared scope. Ordinary V3 calls remain unchanged.
+  const configuredWork =
+    existingReadScope === undefined ? undefined : currentAutonomousPersonalExecutionScopeWorkV1();
+  const processing = <T>(body: () => T): T =>
+    configuredWork === undefined
+      ? body()
+      : runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1(configuredWork, body);
   const invalidStop =
     internalStop !== undefined &&
     (typeof internalStop !== 'function' || utilTypes.isProxy(internalStop));
@@ -212,7 +225,12 @@ export function createCompositionalRetrievalSessionFactoryV3(
       ...(resources.check === undefined ? {} : { check: resources.check }),
     });
     if (!resolved) return fail('invalid_resources');
-    const scope = getAutomaticClaimReadScope(resolved.budget);
+    if (
+      existingReadScope !== undefined &&
+      !isAutomaticClaimReadScopeForBudget(existingReadScope, resolved.budget)
+    )
+      return fail('invalid_resources');
+    const scope = existingReadScope ?? getAutomaticClaimReadScope(resolved.budget);
     const state: Intake = {
       namespace: request.data.namespace,
       scope,
@@ -767,11 +785,13 @@ export function createCompositionalRetrievalSessionFactoryV3(
     }
   };
   return Object.freeze({
-    begin,
-    getScope,
-    prepare,
-    readMany,
-    withOwnedSnapshotData,
-    readLiteralContextData,
+    begin: (request: unknown, resources: unknown) => processing(() => begin(request, resources)),
+    getScope: (intake: unknown) => processing(() => getScope(intake)),
+    prepare: (intake: unknown, snapshot: unknown) => processing(() => prepare(intake, snapshot)),
+    readMany: (session: unknown, edgeIds: unknown) => processing(() => readMany(session, edgeIds)),
+    withOwnedSnapshotData: (session: unknown, visitor: unknown) =>
+      processing(() => withOwnedSnapshotData(session, visitor)),
+    readLiteralContextData: (session: unknown, edgeId: unknown) =>
+      processing(() => readLiteralContextData(session, edgeId)),
   });
 }

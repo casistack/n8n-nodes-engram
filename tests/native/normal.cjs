@@ -6,10 +6,12 @@ const { spawn, execFileSync } = require('child_process');
 const assert = require('assert/strict');
 const { randomUUID, createHash } = require('crypto');
 const { readExecutionData } = require('./execution-data.cjs');
+const { getNativeRuntimeIdentity } = require('./runtime.cjs');
 const work = fs.mkdtempSync(path.join(require('os').tmpdir(), 'engram-native-contract-'));
 const runtime = process.env.ENGRAM_N8N_RUNTIME;
 assert.ok(runtime, 'Explicit n8n runtime required');
 assert.ok(process.env.ENGRAM_TEST_PACKAGE, 'Explicit tested package required');
+const runtimeIdentity = getNativeRuntimeIdentity();
 const nodes = path.join(work, 'user/.n8n/nodes');
 fs.mkdirSync(nodes, { recursive: true });
 execFileSync(
@@ -22,6 +24,8 @@ const cli = path.join(runtime, 'node_modules/n8n/bin/n8n');
 const group = 'synthetic-native-memory';
 const workflowId = 'engram017Memory';
 const autonomous = process.argv[2] === 'autonomous';
+const configuredBudget = process.argv[3] === 'configured';
+assert.ok(!configuredBudget || autonomous, 'Configured budgets require autonomous mode');
 const content = autonomous
   ? 'I prefer explanations in plain British English, with one practical example before any technical terminology.'
   : 'I prefer concise explanations.';
@@ -228,6 +232,7 @@ const server = http.createServer(async (req, res) => {
   });
   const automatic = {
     ...(autonomous ? { automaticPreferenceInterpreter: 'autonomousPersonalV1' } : {}),
+    ...(configuredBudget ? { automaticExecutionBudgetMode: 'configuredV1' } : {}),
     automaticCaptureLifecycle: 'replaySafeV2',
     automaticMemoryProfile: 'conservative',
     automaticIssuer: 'synthetic-app',
@@ -472,6 +477,26 @@ const server = http.createServer(async (req, res) => {
   assert.equal(acceptedClaimsBeforeAgent, 1);
   const firstBytes = fs.readFileSync(storeFile);
   const firstGraph = JSON.parse(firstBytes);
+  if (autonomous) {
+    const humanOperation = firstGraph.automatic_operations_v1.operations.find(
+      (operation) => operation.version === 4 && operation.identity.role === 'human',
+    );
+    assert.ok(humanOperation, 'A persisted native human operation is required');
+    if (configuredBudget) {
+      assert.deepEqual(
+        humanOperation.descriptor.executionBudget,
+        {
+          semantics: 'configured',
+          version: 1,
+          completion: { mode: 'inheritOverall' },
+          syntax: { mode: 'inheritOverall' },
+          finalizationReserve: { mode: 'automatic' },
+        },
+        'The persisted operation must bind the configured budget policy',
+      );
+    } else assert.equal(Object.hasOwn(humanOperation.descriptor, 'executionBudget'), false);
+  }
+
   const second = await execute('redelivery-execution');
   assert.equal(second.data.status, 'success');
   if (autonomous) {
@@ -576,10 +601,11 @@ const server = http.createServer(async (req, res) => {
     graphOnlyRecall = true;
   }
   const proof = {
-    n8n: '2.12.3',
+    ...runtimeIdentity,
     workflowVersion: 3,
     agentVersion: 3.1,
     interpreter: autonomous ? 'autonomousPersonalV1' : 'literalV1',
+    configuredBudget,
     counts,
     requestContainsGraph,
     acceptedClaimsBeforeAgent,

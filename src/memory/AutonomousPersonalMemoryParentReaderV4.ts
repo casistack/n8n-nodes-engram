@@ -1,3 +1,7 @@
+import {
+  currentAutonomousPersonalExecutionScopeWorkV1,
+  runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1,
+} from '../storage/AutonomousPersonalExecutionScopeV1';
 import { performance } from 'node:perf_hooks';
 import { types as utilTypes } from 'node:util';
 import {
@@ -317,6 +321,7 @@ function compileCurrentDescriptor(config: AutonomousPersonalNativeMemoryConfigV4
       requestedTrustLevel: 'standard',
       intentSetting: config.explicitIntent,
       invocationDeadlineMs: config.invocationDeadlineMs,
+      ...(config.executionBudget === undefined ? {} : { executionBudget: config.executionBudget }),
       providerReference: config.providerReference,
     });
   } catch {
@@ -358,10 +363,12 @@ async function openInner(
     return reject('parent_mismatch');
   }
   // Zero-I/O authority join: the current route/settings must compile to the origin descriptor.
-  const currentDescriptor = compileCurrentDescriptor(config);
+  const currentDescriptor = processMemoryParentSyntaxV1(() => compileCurrentDescriptor(config));
   let currentDescriptorHash: string;
   try {
-    currentDescriptorHash = hashAutonomousPersonalDescriptorV4(currentDescriptor);
+    currentDescriptorHash = processMemoryParentSyntaxV1(() =>
+      hashAutonomousPersonalDescriptorV4(currentDescriptor),
+    );
   } catch {
     return reject('invalid_configuration');
   }
@@ -396,10 +403,14 @@ async function openInner(
   }
   // Own the initially validated deadline/native signal before the first await; the caller's
   // mutable work object is never read again.
-  const ownedWork: AutonomousPersonalTypedSyntaxWorkV1 = Object.freeze({
-    absoluteMonotonicDeadlineMs: view.deadline,
-    signal: view.signal,
-  });
+  const configuredWork = currentAutonomousPersonalExecutionScopeWorkV1();
+  const ownedWork: AutonomousPersonalTypedSyntaxWorkV1 =
+    configuredWork !== undefined && configuredWork === suppliedWork
+      ? configuredWork
+      : Object.freeze({
+          absoluteMonotonicDeadlineMs: view.deadline,
+          signal: view.signal,
+        });
   const stickyCheck = createStickyCheck(state, view, scope, trusted);
   const counter: ParentReaderCounter = {
     remaining: CANDIDATE_READ_LIMIT,
@@ -429,7 +440,9 @@ async function openInner(
   }
   check();
 
-  const parsedSnapshot = CompositionalRetrievalSnapshotV3Schema.safeParse(raw);
+  const parsedSnapshot = processMemoryParentSyntaxV1(() =>
+    CompositionalRetrievalSnapshotV3Schema.safeParse(raw),
+  );
   raw = undefined;
   if (!parsedSnapshot.success) return reject('invalid_snapshot');
   const snapshot = parsedSnapshot.data;
@@ -440,11 +453,18 @@ async function openInner(
   let index: AutonomousPersonalClaimIndexV4;
   let graph: GraphData;
   try {
-    index = createIntegrityCheckedAutonomousPersonalClaimIndexV4(snapshot.graph, ownedWork, check);
-    check();
-    graph = getAutonomousPersonalClaimIndexGraphV4(index);
-    check();
-    assertAutomaticLedgerSourceIntegrity(graph, check);
+    ({ index, graph } = processMemoryParentSyntaxV1(() => {
+      const checkedIndex = createIntegrityCheckedAutonomousPersonalClaimIndexV4(
+        snapshot.graph,
+        ownedWork,
+        check,
+      );
+      check();
+      const checkedGraph = getAutonomousPersonalClaimIndexGraphV4(checkedIndex);
+      check();
+      return { index: checkedIndex, graph: checkedGraph };
+    }));
+    processMemoryParentSyntaxV1(() => assertAutomaticLedgerSourceIntegrity(graph, check));
     check();
   } catch (error) {
     return mapFailure(state, error, 'invalid_snapshot');
@@ -452,7 +472,9 @@ async function openInner(
   const backendNow = snapshot.backendNow;
 
   try {
-    assertAutonomousPersonalMemoryCurrentParentGraphV4(graph, origin, config, backendNow, check);
+    processMemoryParentSyntaxV1(() =>
+      assertAutonomousPersonalMemoryCurrentParentGraphV4(graph, origin, config, backendNow, check),
+    );
     check();
   } catch (error) {
     return mapFailure(state, error, 'invalid_snapshot');
@@ -569,45 +591,47 @@ export function getAutonomousPersonalMemoryParentNamespaceGraphV4(
   const record = recordFor(storageOwner, reader);
   if (!record) return null;
   try {
-    record.check();
-    const rows = <T extends { group_id: string }>(input: readonly T[]): T[] => {
-      const selected: T[] = [];
-      for (const row of input) {
-        record.check();
-        if (row.group_id === record.config.namespace) selected.push(row);
-      }
-      Object.freeze(selected);
+    return processMemoryParentSyntaxV1(() => {
       record.check();
-      return selected;
-    };
-    const root = record.graph;
-    const entities = rows(root.entities);
-    const edges = rows(root.edges);
-    const episodes = rows(root.episodes);
-    const ledger = root.automatic_operations_v1;
-    const operations: NonNullable<typeof ledger>['operations'] = [];
-    if (ledger) {
-      for (const operation of ledger.operations) {
+      const rows = <T extends { group_id: string }>(input: readonly T[]): T[] => {
+        const selected: T[] = [];
+        for (const row of input) {
+          record.check();
+          if (row.group_id === record.config.namespace) selected.push(row);
+        }
+        Object.freeze(selected);
         record.check();
-        if (operation.identity.namespace === record.config.namespace) operations.push(operation);
+        return selected;
+      };
+      const root = record.graph;
+      const entities = rows(root.entities);
+      const edges = rows(root.edges);
+      const episodes = rows(root.episodes);
+      const ledger = root.automatic_operations_v1;
+      const operations: NonNullable<typeof ledger>['operations'] = [];
+      if (ledger) {
+        for (const operation of ledger.operations) {
+          record.check();
+          if (operation.identity.namespace === record.config.namespace) operations.push(operation);
+        }
       }
-    }
-    Object.freeze(operations);
-    // A full-root checksum/count cannot describe a namespace projection.
-    const { metadata, ...contents } = root;
-    const graph: GraphData = Object.freeze({
-      ...contents,
-      ...(metadata?.extraction_epoch
-        ? { metadata: Object.freeze({ extraction_epoch: metadata.extraction_epoch }) }
-        : {}),
-      group_id: record.config.namespace,
-      entities,
-      edges,
-      episodes,
-      ...(ledger ? { automatic_operations_v1: Object.freeze({ ...ledger, operations }) } : {}),
-    });
-    record.check();
-    return graph;
+      Object.freeze(operations);
+      // A full-root checksum/count cannot describe a namespace projection.
+      const { metadata, ...contents } = root;
+      const graph: GraphData = Object.freeze({
+        ...contents,
+        ...(metadata?.extraction_epoch
+          ? { metadata: Object.freeze({ extraction_epoch: metadata.extraction_epoch }) }
+          : {}),
+        group_id: record.config.namespace,
+        entities,
+        edges,
+        episodes,
+        ...(ledger ? { automatic_operations_v1: Object.freeze({ ...ledger, operations }) } : {}),
+      });
+      record.check();
+      return graph;
+    }, record.work);
   } catch (error) {
     if (error instanceof ParentReject) return null;
     throw error;
@@ -685,169 +709,172 @@ export function readAutonomousPersonalMemoryParentQualifiedClaimCandidateV4(
   const record = recordFor(storageOwner, reader);
   if (!record) return null;
   try {
-    record.check();
-    if (record.counter.remaining < 1) return latchResourceExhausted(record);
-    record.counter.remaining -= 1;
-
-    if (typeof edgeId !== 'string' || edgeId.length > 64) return null;
-    let id: string;
-    try {
-      id = AutonomousPersonalQualifiedClaimEdgeIdV4Schema.parse(edgeId);
-    } catch {
-      return null;
-    }
-    record.check();
-
-    const { config, origin } = record;
-    const qualified = qualifyAutonomousPersonalClaimCreatorV4(record.index, {
-      storeHash: config.storeHash,
-      namespace: config.namespace,
-      edgeId: id,
-      backendNow: record.backendNow,
-    });
-    record.check();
-    if (qualified.status === 'capacity') return latchResourceExhausted(record);
-    if (qualified.status !== 'qualified') return null;
-    const proof = qualified.proof;
-    if (
-      proof.claimId !== id ||
-      proof.reviewState !== 'accepted' ||
-      proof.storeHash !== config.storeHash ||
-      proof.namespace !== config.namespace ||
-      proof.subjectId !== origin.identity.binding.subjectId
-    ) {
-      return null;
-    }
-
-    const rows = getAutonomousPersonalClaimIndexCandidateRowsV4(record.index, id);
-    record.check();
-    if (!rows) return null;
-    const { edge, subject, value, source, operation } = rows;
-    if (
-      edge.uuid !== proof.claimId ||
-      value.uuid !== proof.valueId ||
-      source.uuid !== proof.sourceId ||
-      subject.uuid !== proof.subjectId ||
-      operation.operationId !== proof.operationId ||
-      operation.state !== 'committed' ||
-      operation.identity.sourceId !== source.uuid ||
-      operation.identity.storeHash !== config.storeHash ||
-      operation.identity.namespace !== config.namespace ||
-      operation.identity.issuer !== config.issuer ||
-      operation.identity.actorReference !== config.actorReference ||
-      !same(operation.identity.binding, origin.identity.binding) ||
-      source.review_status !== 'accepted' ||
-      source.trust_level !== operation.descriptor.requestedTrustLevel
-    ) {
-      return null;
-    }
-    const receipt = operation.terminalReceipt;
-    if (
-      receipt.kind !== 'human_autonomous_capture_committed' ||
-      receipt.selection.kind !== 'occurrences'
-    ) {
-      return null;
-    }
-    if (source.reference_time.length > REFERENCE_TIME_MAX_LENGTH) {
-      return latchResourceExhausted(record);
-    }
-
-    const claimParsed = AutonomousPersonalClaimV3OwnedDataSchema.safeParse(
-      edge.attributes[EDGE_CLAIM_ATTRIBUTE],
-    );
-    record.check();
-    if (!claimParsed.success) return null;
-    const claim = claimParsed.data;
-    if (
-      claim.kind !== proof.kind ||
-      claim.key !== proof.key ||
-      claim.sourceId !== proof.sourceId ||
-      claim.subjectId !== proof.subjectId ||
-      claim.namespace !== proof.namespace ||
-      claim.evidence.unitId !== proof.unitId ||
-      claim.evidence.evidenceHash !== proof.evidenceHash ||
-      (claim.kind === 'source_statement_record' && claim.sourceEventTime !== proof.sourceEventTime)
-    ) {
-      return null;
-    }
-
-    let creators = 0;
-    let creationReviewState: 'accepted' | 'proposed' | null = null;
-    for (const item of receipt.selection.items) {
+    return processMemoryParentSyntaxV1(() => {
       record.check();
-      if (item.claimId === proof.claimId && item.effect === 'created') {
-        creators += 1;
-        if (item.state === 'accepted' || item.state === 'proposed') {
-          creationReviewState = item.state;
+      if (record.counter.remaining < 1) return latchResourceExhausted(record);
+      record.counter.remaining -= 1;
+
+      if (typeof edgeId !== 'string' || edgeId.length > 64) return null;
+      let id: string;
+      try {
+        id = AutonomousPersonalQualifiedClaimEdgeIdV4Schema.parse(edgeId);
+      } catch {
+        return null;
+      }
+      record.check();
+
+      const { config, origin } = record;
+      const qualified = qualifyAutonomousPersonalClaimCreatorV4(record.index, {
+        storeHash: config.storeHash,
+        namespace: config.namespace,
+        edgeId: id,
+        backendNow: record.backendNow,
+      });
+      record.check();
+      if (qualified.status === 'capacity') return latchResourceExhausted(record);
+      if (qualified.status !== 'qualified') return null;
+      const proof = qualified.proof;
+      if (
+        proof.claimId !== id ||
+        proof.reviewState !== 'accepted' ||
+        proof.storeHash !== config.storeHash ||
+        proof.namespace !== config.namespace ||
+        proof.subjectId !== origin.identity.binding.subjectId
+      ) {
+        return null;
+      }
+
+      const rows = getAutonomousPersonalClaimIndexCandidateRowsV4(record.index, id);
+      record.check();
+      if (!rows) return null;
+      const { edge, subject, value, source, operation } = rows;
+      if (
+        edge.uuid !== proof.claimId ||
+        value.uuid !== proof.valueId ||
+        source.uuid !== proof.sourceId ||
+        subject.uuid !== proof.subjectId ||
+        operation.operationId !== proof.operationId ||
+        operation.state !== 'committed' ||
+        operation.identity.sourceId !== source.uuid ||
+        operation.identity.storeHash !== config.storeHash ||
+        operation.identity.namespace !== config.namespace ||
+        operation.identity.issuer !== config.issuer ||
+        operation.identity.actorReference !== config.actorReference ||
+        !same(operation.identity.binding, origin.identity.binding) ||
+        source.review_status !== 'accepted' ||
+        source.trust_level !== operation.descriptor.requestedTrustLevel
+      ) {
+        return null;
+      }
+      const receipt = operation.terminalReceipt;
+      if (
+        receipt.kind !== 'human_autonomous_capture_committed' ||
+        receipt.selection.kind !== 'occurrences'
+      ) {
+        return null;
+      }
+      if (source.reference_time.length > REFERENCE_TIME_MAX_LENGTH) {
+        return latchResourceExhausted(record);
+      }
+
+      const claimParsed = AutonomousPersonalClaimV3OwnedDataSchema.safeParse(
+        edge.attributes[EDGE_CLAIM_ATTRIBUTE],
+      );
+      record.check();
+      if (!claimParsed.success) return null;
+      const claim = claimParsed.data;
+      if (
+        claim.kind !== proof.kind ||
+        claim.key !== proof.key ||
+        claim.sourceId !== proof.sourceId ||
+        claim.subjectId !== proof.subjectId ||
+        claim.namespace !== proof.namespace ||
+        claim.evidence.unitId !== proof.unitId ||
+        claim.evidence.evidenceHash !== proof.evidenceHash ||
+        (claim.kind === 'source_statement_record' &&
+          claim.sourceEventTime !== proof.sourceEventTime)
+      ) {
+        return null;
+      }
+
+      let creators = 0;
+      let creationReviewState: 'accepted' | 'proposed' | null = null;
+      for (const item of receipt.selection.items) {
+        record.check();
+        if (item.claimId === proof.claimId && item.effect === 'created') {
+          creators += 1;
+          if (item.state === 'accepted' || item.state === 'proposed') {
+            creationReviewState = item.state;
+          }
         }
       }
-    }
-    if (creators !== 1 || creationReviewState === null) return null;
+      if (creators !== 1 || creationReviewState === null) return null;
 
-    // Bounded preflight of the actual row triple BEFORE any hashing; cached per checked root.
-    let rowHash = record.counter.rowHashes.get(id);
-    if (rowHash === undefined) {
-      const triple = { edge, subject, value };
-      const limit = Math.min(ROW_PREIMAGE_MAX_BYTES, record.counter.preimageRemaining);
-      record.check();
-      const preimageBytes = boundedAutomaticClaimReadJsonBytes(triple, limit);
-      record.check();
-      if (preimageBytes > limit) return latchResourceExhausted(record);
-      record.counter.preimageRemaining -= preimageBytes;
-      rowHash = hashAutomaticCaptureV2(triple);
-      record.check();
-      record.counter.rowHashes.set(id, rowHash);
-    }
-    const common = {
-      version: 4,
-      rowHash,
-      proof,
-      terminalAt: receipt.terminalAt,
-      creationReviewState,
-      confidence: extractionMetadataFromAttributes(edge.attributes)?.confidence ?? null,
-      source: {
-        sourceMessageId: source.source_message_id,
-        conversationId: source.conversation_id,
-        senderId: source.sender_id,
-        senderName: source.sender_name,
-        episodeKind: source.episode_kind,
-        trustLevel: source.trust_level,
-        reviewStatus: source.review_status,
-        referenceTime: source.reference_time,
-        sourceWorkflowId: source.source_workflow_id,
-        sourceExecutionId: source.source_execution_id,
-      },
-    };
-    const input =
-      claim.kind === 'typed_preference'
-        ? { ...common, kind: claim.kind, meaning: claim.meaning }
-        : {
-            ...common,
-            kind: claim.kind,
-            statementLiteral: claim.evidence.literal,
-            sourceEventTime: claim.sourceEventTime,
-          };
+      // Bounded preflight of the actual row triple BEFORE any hashing; cached per checked root.
+      let rowHash = record.counter.rowHashes.get(id);
+      if (rowHash === undefined) {
+        const triple = { edge, subject, value };
+        const limit = Math.min(ROW_PREIMAGE_MAX_BYTES, record.counter.preimageRemaining);
+        record.check();
+        const preimageBytes = boundedAutomaticClaimReadJsonBytes(triple, limit);
+        record.check();
+        if (preimageBytes > limit) return latchResourceExhausted(record);
+        record.counter.preimageRemaining -= preimageBytes;
+        rowHash = hashAutomaticCaptureV2(triple);
+        record.check();
+        record.counter.rowHashes.set(id, rowHash);
+      }
+      const common = {
+        version: 4,
+        rowHash,
+        proof,
+        terminalAt: receipt.terminalAt,
+        creationReviewState,
+        confidence: extractionMetadataFromAttributes(edge.attributes)?.confidence ?? null,
+        source: {
+          sourceMessageId: source.source_message_id,
+          conversationId: source.conversation_id,
+          senderId: source.sender_id,
+          senderName: source.sender_name,
+          episodeKind: source.episode_kind,
+          trustLevel: source.trust_level,
+          reviewStatus: source.review_status,
+          referenceTime: source.reference_time,
+          sourceWorkflowId: source.source_workflow_id,
+          sourceExecutionId: source.source_execution_id,
+        },
+      };
+      const input =
+        claim.kind === 'typed_preference'
+          ? { ...common, kind: claim.kind, meaning: claim.meaning }
+          : {
+              ...common,
+              kind: claim.kind,
+              statementLiteral: claim.evidence.literal,
+              sourceEventTime: claim.sourceEventTime,
+            };
 
-    // Serialized once: this exact length is the per-candidate and aggregate charge.
-    const bytes = Buffer.byteLength(JSON.stringify(input), 'utf8');
-    if (bytes > CANDIDATE_MAX_BYTES || bytes > record.counter.bytesRemaining) {
-      return latchResourceExhausted(record);
-    }
-    const parsed =
-      AutonomousPersonalMemoryParentQualifiedClaimCandidateV4OwnedDataSchema.safeParse(input);
-    record.check();
-    if (!parsed.success) return null;
-
-    if (!chargeAutomaticClaimContextBytes(record.scope, bytes)) {
-      // A spent original scope/time/signal keeps its budget_exhausted mapping.
+      // Serialized once: this exact length is the per-candidate and aggregate charge.
+      const bytes = Buffer.byteLength(JSON.stringify(input), 'utf8');
+      if (bytes > CANDIDATE_MAX_BYTES || bytes > record.counter.bytesRemaining) {
+        return latchResourceExhausted(record);
+      }
+      const parsed =
+        AutonomousPersonalMemoryParentQualifiedClaimCandidateV4OwnedDataSchema.safeParse(input);
       record.check();
-      return latchResourceExhausted(record);
-    }
-    record.counter.bytesRemaining -= bytes;
-    record.check();
-    const frozen = checkedFreeze(parsed.data, record.check);
-    record.check();
-    return frozen;
+      if (!parsed.success) return null;
+
+      if (!chargeAutomaticClaimContextBytes(record.scope, bytes)) {
+        // A spent original scope/time/signal keeps its budget_exhausted mapping.
+        record.check();
+        return latchResourceExhausted(record);
+      }
+      record.counter.bytesRemaining -= bytes;
+      record.check();
+      const frozen = checkedFreeze(parsed.data, record.check);
+      record.check();
+      return frozen;
+    }, record.work);
   } catch (error) {
     if (error instanceof ParentReject) return null;
     // A sticky trusted failure is rethrown with its exact identity by the check;
@@ -860,4 +887,11 @@ export function readAutonomousPersonalMemoryParentQualifiedClaimCandidateV4(
     }
     return null;
   }
+}
+
+function processMemoryParentSyntaxV1<T>(
+  body: () => T,
+  work: unknown = currentAutonomousPersonalExecutionScopeWorkV1(),
+): T {
+  return work ? runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1(work, body) : body();
 }

@@ -1,3 +1,9 @@
+import {
+  currentAutonomousPersonalExecutionScopeWorkV1,
+  checkCurrentAutonomousPersonalExecutionScopeWorkV1,
+  currentAutonomousPersonalExecutionScopeV1,
+  AutonomousPersonalExecutionScopeError,
+} from '../storage/AutonomousPersonalExecutionScopeV1';
 import { performance } from 'node:perf_hooks';
 import { types as utilTypes } from 'node:util';
 import type { IExecuteFunctions } from 'n8n-workflow';
@@ -12,10 +18,12 @@ const nativeAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'ab
 export function createAutonomousPersonalNativeMemoryWorkV4(
   ctx: Pick<IExecuteFunctions, 'getExecutionCancelSignal'>,
   deadlineValue: unknown,
+  entryOwner?: object,
 ): Readonly<{
   work: AutonomousPersonalTypedSyntaxWorkV1;
   check: () => void;
   nativeCancellationAvailable: boolean;
+  nativeSignal: AbortSignal | undefined;
 }> {
   const started = performance.now();
   let signal: AbortSignal;
@@ -43,6 +51,26 @@ export function createAutonomousPersonalNativeMemoryWorkV4(
   } catch {
     throw new Error('Engram native Memory work: unsupported_configuration');
   }
+  const registered = currentAutonomousPersonalExecutionScopeWorkV1();
+  if (registered) {
+    if (
+      !entryOwner ||
+      !(
+        currentAutonomousPersonalExecutionScopeV1(entryOwner, 'memoryPrepare') ??
+        currentAutonomousPersonalExecutionScopeV1(entryOwner, 'memoryRead') ??
+        currentAutonomousPersonalExecutionScopeV1(entryOwner, 'memorySave')
+      )
+    )
+      throw new AutonomousPersonalExecutionScopeError('foreign_scope');
+    const check = () => checkCurrentAutonomousPersonalExecutionScopeWorkV1(registered);
+    check();
+    return Object.freeze({
+      work: registered,
+      check,
+      nativeCancellationAvailable,
+      nativeSignal: nativeCancellationAvailable ? signal : undefined,
+    });
+  }
   const work: AutonomousPersonalTypedSyntaxWorkV1 = Object.freeze({
     absoluteMonotonicDeadlineMs: started + duration,
     signal,
@@ -61,5 +89,10 @@ export function createAutonomousPersonalNativeMemoryWorkV4(
     }
   };
   check();
-  return Object.freeze({ work, check, nativeCancellationAvailable });
+  return Object.freeze({
+    work,
+    check,
+    nativeCancellationAvailable,
+    nativeSignal: nativeCancellationAvailable ? signal : undefined,
+  });
 }

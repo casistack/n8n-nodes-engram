@@ -21,6 +21,7 @@ import {
   type PrivateAutonomousPersonalOriginalTurnV4,
 } from './AutonomousPersonalNativeCompletionV4';
 import { projectAutonomousPersonalCaptureReceiptSummaryV4 } from './AutonomousPersonalCaptureReceiptSummaryV4';
+import { checkAutonomousPersonalEntryLiveV1 } from '../utils/AutonomousPersonalExecutionEntryV1';
 import type { IGraphStorage } from './IGraphStorage';
 
 declare const memoryLineageV4Brand: unique symbol;
@@ -56,6 +57,16 @@ const notPublishedWithSummary = Object.freeze(
 );
 
 const isObject = (value: unknown): value is object => value !== null && typeof value === 'object';
+
+/** No ambient scope (legacy) is live; an active stopped, failed or closed scope is not. */
+function entryIsLive(): boolean {
+  try {
+    checkAutonomousPersonalEntryLiveV1();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function deeplyFrozen(value: unknown): boolean {
   if (!isObject(value)) return true;
@@ -193,6 +204,7 @@ function publishAutonomousPersonalMemoryHandoffCoreV4(
   const unpublished = withSummary ? notPublishedWithSummary : notPublished;
   const start = performance.now();
   if (!Number.isFinite(start)) return unpublished;
+  if (!entryIsLive()) return unpublished;
   pruneExpired(start);
 
   let originValue: AutonomousPersonalNativeOriginV4 | null;
@@ -241,6 +253,8 @@ function publishAutonomousPersonalMemoryHandoffCoreV4(
   if (!Number.isFinite(publishedAt)) return unpublished;
   pruneExpired(publishedAt);
   if (pendingOrigins.has(key) || pendingOrigins.size >= MAX_PENDING_HANDOFFS) return unpublished;
+  // Last live check before the only mutation: a stopped scope publishes no handoff.
+  if (!entryIsLive()) return unpublished;
 
   pendingOrigins.set(key, origin);
   pendingExpiry.set(origin, publishedAt + HANDOFF_TTL_MS);

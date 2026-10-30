@@ -1,4 +1,6 @@
 import { performance } from 'perf_hooks';
+import { types } from 'util';
+import { SourceHydrationBudgetSchema } from '../schemas/ExtractionPolicy.schema';
 import type { SourceHydrationBudget } from '../schemas/ExtractionPolicy.schema';
 
 const READ_WINDOW_MS = 5_000;
@@ -27,22 +29,44 @@ interface ScopeState {
   snapshotBytesRemaining: number;
 }
 
+export type AutomaticClaimReadScopeConfigurationReason =
+  | 'invalid_budget'
+  | 'invalid_deadline'
+  | 'scope_configuration_conflict';
+
+const CONFIGURATION_MESSAGES: Readonly<Record<AutomaticClaimReadScopeConfigurationReason, string>> =
+  {
+    invalid_budget: 'Automatic claim read scope budget is invalid',
+    invalid_deadline: 'Automatic claim read scope deadline is invalid',
+    scope_configuration_conflict: 'Automatic claim read scope configuration conflicts',
+  };
+
+/** Bounded configuration failure; never carries caller-provided data. */
+export class AutomaticClaimReadScopeConfigurationError extends Error {
+  readonly reason: AutomaticClaimReadScopeConfigurationReason;
+
+  constructor(reason: AutomaticClaimReadScopeConfigurationReason) {
+    super(CONFIGURATION_MESSAGES[reason]);
+    this.name = 'AutomaticClaimReadScopeConfigurationError';
+    this.reason = reason;
+  }
+}
+
 const scopeByBudget = new WeakMap<SourceHydrationBudget, AutomaticClaimReadScope>();
 const stateByScope = new WeakMap<object, ScopeState>();
+/** Budgets registered through the explicit-deadline factory, with their absolute deadline. */
+const configuredDeadlineByBudget = new WeakMap<object, number>();
 
 function stateFor(scope: unknown): ScopeState | undefined {
   if (scope === null || typeof scope !== 'object') return undefined;
   return stateByScope.get(scope);
 }
 
-/** Returns the same private token for every call using the same budget object. */
-export function getAutomaticClaimReadScope(budget: SourceHydrationBudget): AutomaticClaimReadScope {
-  const existing = scopeByBudget.get(budget);
-  if (existing) return existing;
+function createScope(budget: SourceHydrationBudget, deadlineAt: number): AutomaticClaimReadScope {
   const scope = Object.freeze(Object.create(null)) as AutomaticClaimReadScope;
   const state: ScopeState = {
     budget,
-    deadlineAt: performance.now() + READ_WINDOW_MS,
+    deadlineAt,
     attemptsRemaining: MAX_ATTEMPTS,
     contextBytesRemaining: MAX_CONTEXT_BYTES,
     snapshotBytesRemaining: MAX_SNAPSHOT_BYTES,
@@ -50,6 +74,79 @@ export function getAutomaticClaimReadScope(budget: SourceHydrationBudget): Autom
   scopeByBudget.set(budget, scope);
   stateByScope.set(scope as object, state);
   return scope;
+}
+
+/** Reads only own writable data descriptors; never invokes traps, getters or setters. */
+function isValidConfiguredBudget(budget: unknown): budget is SourceHydrationBudget {
+  if (budget === null || typeof budget !== 'object') return false;
+  if (types.isProxy(budget)) return false;
+  const prototype = Object.getPrototypeOf(budget);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  if (Object.isFrozen(budget)) return false;
+  const remaining = Object.getOwnPropertyDescriptor(budget, 'remaining');
+  const deferred = Object.getOwnPropertyDescriptor(budget, 'deferred');
+  if (!remaining || !deferred) return false;
+  for (const descriptor of [remaining, deferred]) {
+    if (!('value' in descriptor) || descriptor.writable !== true) return false;
+  }
+  // Primitive check precedes Zod so nested objects/proxies are never inspected (e.g. `then`).
+  if (typeof remaining.value !== 'number' || typeof deferred.value !== 'number') return false;
+  return SourceHydrationBudgetSchema.safeParse({
+    remaining: remaining.value,
+    deferred: deferred.value,
+  }).success;
+}
+
+/**
+ * Returns the same private token for every call using the same budget object.
+ * Budgets registered through the explicit-deadline factory are rejected here.
+ */
+export function getAutomaticClaimReadScope(budget: SourceHydrationBudget): AutomaticClaimReadScope {
+  const existing = scopeByBudget.get(budget);
+  if (existing) {
+    if (configuredDeadlineByBudget.has(budget)) {
+      throw new AutomaticClaimReadScopeConfigurationError('scope_configuration_conflict');
+    }
+    return existing;
+  }
+  return createScope(budget, performance.now() + READ_WINDOW_MS);
+}
+
+/**
+ * Returns the private token for a budget with an explicit absolute monotonic deadline
+ * (same timebase as performance.now()). The deadline is never rebased by the clock; a
+ * past deadline yields an already-expired scope. The same budget object only maps to
+ * one scope and one deadline.
+ */
+export function getAutomaticClaimReadScopeWithAbsoluteDeadline(
+  budget: SourceHydrationBudget,
+  deadlineAt: number,
+): AutomaticClaimReadScope {
+  if (typeof deadlineAt !== 'number' || !Number.isFinite(deadlineAt)) {
+    throw new AutomaticClaimReadScopeConfigurationError('invalid_deadline');
+  }
+  if (!isValidConfiguredBudget(budget)) {
+    throw new AutomaticClaimReadScopeConfigurationError('invalid_budget');
+  }
+  const existing = scopeByBudget.get(budget);
+  if (existing) {
+    if (configuredDeadlineByBudget.get(budget) !== deadlineAt) {
+      throw new AutomaticClaimReadScopeConfigurationError('scope_configuration_conflict');
+    }
+    return existing;
+  }
+  const scope = createScope(budget, deadlineAt);
+  configuredDeadlineByBudget.set(budget, deadlineAt);
+  return scope;
+}
+
+/** Checks the exact existing private scope/budget association without creating or resetting it. */
+export function isAutomaticClaimReadScopeForBudget(
+  scope: unknown,
+  budget: SourceHydrationBudget,
+): scope is AutomaticClaimReadScope {
+  const state = stateFor(scope);
+  return state !== undefined && state.budget === budget && scopeByBudget.get(budget) === scope;
 }
 
 /** Reserves one backend attempt and four shared source hydrations before I/O. */

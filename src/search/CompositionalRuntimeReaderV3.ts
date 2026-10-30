@@ -1,3 +1,8 @@
+import {
+  currentAutonomousPersonalExecutionScopeWorkV1,
+  runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1,
+} from '../storage/AutonomousPersonalExecutionScopeV1';
+import type { AutonomousPersonalTypedSyntaxWorkV1 } from '../schemas/AutonomousPersonalTypedSyntaxV1.schema';
 import { types as utilTypes } from 'util';
 import { performance } from 'perf_hooks';
 import { z } from 'zod';
@@ -40,6 +45,7 @@ import {
   canUseAutomaticClaimReadScope,
   beginAutomaticClaimReadAttempt,
   getAutomaticClaimReadScope,
+  isAutomaticClaimReadScopeForBudget,
   getAutomaticClaimReadScopeRemaining,
   chargeAutomaticClaimContextBytes,
   type AutomaticClaimReadScope,
@@ -62,6 +68,7 @@ type WorkState = {
 type RuntimeRecord = {
   storage: IGraphStorage;
   compatibilityParentReader?: PrivateAutonomousPersonalMemoryParentReaderV4;
+  executionWork?: AutonomousPersonalTypedSyntaxWorkV1;
   namespace: string;
   backendNow: string;
   scope: AutomaticClaimReadScope;
@@ -335,6 +342,7 @@ export async function loadCompositionalCompatibilityRuntimeReaderV4(
   storageOwner: IGraphStorage,
   parentReader: PrivateAutonomousPersonalMemoryParentReaderV4,
   originalBudget: SourceHydrationBudget,
+  existingReadScope?: AutomaticClaimReadScope,
 ): Promise<CompositionalRuntimeLoadResultV3> {
   // Authenticate owner-bound ParentReader identity before inspecting caller budget data.
   let parentStop = getAutonomousPersonalMemoryParentReadStopV4(storageOwner, parentReader);
@@ -345,7 +353,14 @@ export async function loadCompositionalCompatibilityRuntimeReaderV4(
     now: '2000-01-01T00:00:00.000Z',
   });
   if (!resolved) return fail('invalid_resources');
-  const scope = getAutomaticClaimReadScope(resolved.budget);
+  if (
+    existingReadScope !== undefined &&
+    !isAutomaticClaimReadScopeForBudget(existingReadScope, resolved.budget)
+  )
+    return fail('invalid_resources');
+  const scope = existingReadScope ?? getAutomaticClaimReadScope(resolved.budget);
+  const configuredWork =
+    existingReadScope === undefined ? undefined : currentAutonomousPersonalExecutionScopeWorkV1();
   const internalStop = () => parentStop;
   const work: WorkState = {
     external: () => {
@@ -381,7 +396,7 @@ export async function loadCompositionalCompatibilityRuntimeReaderV4(
     }
     checkWork(work);
 
-    const factory = createCompositionalRetrievalSessionFactoryV3(retrievalStop);
+    const factory = createCompositionalRetrievalSessionFactoryV3(retrievalStop, scope);
     const begun = factory.begin(
       { namespace: parent.namespace, mode: 'current' },
       { budget: resolved.budget, check: () => externalCheck(work) },
@@ -419,6 +434,7 @@ export async function loadCompositionalCompatibilityRuntimeReaderV4(
     readers.set(reader, {
       storage: storageOwner,
       compatibilityParentReader: parentReader,
+      ...(configuredWork === undefined ? {} : { executionWork: configuredWork }),
       namespace: parent.namespace,
       backendNow: parent.backendNow,
       scope,
@@ -570,89 +586,95 @@ export function getCompositionalRuntimeParentDataV3(
   let record: RuntimeRecord | undefined;
   try {
     record = recordFor(reader);
-    checkWork(record.work);
-    let requested;
-    try {
-      requested = CompositionalRuntimeParentLocatorV3Schema.safeParse(
-        cloneBoundedAutomaticCaptureJson(locator, 'beginRequest'),
-      );
-    } catch {
-      return fail('invalid_input');
-    }
-    if (!requested.success) return fail('invalid_input');
-    if (requested.data.namespace !== record.namespace) return fail('locator_mismatch');
-    const id = requested.data.capturedSourceId;
-    let cached = record.parents.get(id);
-    if (!cached) {
-      if (record.parents.size >= 128 || !beginAutomaticClaimReadAttempt(record.scope))
-        return fail('budget_exhausted');
-      const source = record.access.episode(id);
-      const operations = record.access.operationsForSource(id);
-      const operation =
-        operations.length === 1 && operations[0].version === 3 ? operations[0] : undefined;
-      const capturedBinding = operation?.identity.binding;
-      const subject = capturedBinding ? record.access.entity(capturedBinding.subjectId) : undefined;
-      const currentBinding = operation
-        ? record.access.currentBinding(
-            operation.identity.namespace,
-            operation.identity.issuer,
-            operation.identity.actorReference,
-          )
-        : null;
-      const remaining =
-        getAutomaticClaimReadScopeRemaining(record.scope)?.contextBytesRemaining ?? 0;
-      const limit = Math.min(512 * 1024, remaining);
-      const candidate = {
-        status: 'parent_data' as const,
-        namespace: record.namespace,
-        backendNow: record.backendNow,
-        source,
-        operation,
-        subject,
-        capturedBinding,
-        currentBinding,
-      };
-      const inspected =
-        source && operation && subject && capturedBinding
-          ? candidate
-          : {
-              source: source ?? null,
-              operations,
-              subject: subject ?? null,
-              capturedBinding: capturedBinding ?? null,
-              currentBinding,
-            };
-      const bytes = boundedAutomaticClaimReadJsonBytes(inspected, limit);
-      if (
-        !chargeAutomaticClaimContextBytes(record.scope, Math.min(bytes, remaining)) ||
-        bytes > limit
-      )
-        cached = fail(remaining < 512 * 1024 ? 'budget_exhausted' : 'capacity');
-      else if (!source) cached = fail('missing_source');
-      else if (operations.length !== 1)
-        cached = fail(operations.length ? 'ambiguous_operation' : 'missing_operation');
-      else if (!operation) cached = fail('unsupported_parent');
-      else if (!subject || subject.group_id !== record.namespace) cached = fail('missing_subject');
-      else {
-        const data = CompositionalRuntimeParentDataV3Schema.safeParse(candidate);
-        cached = data.success ? freeze(data.data) : fail('invalid_context');
+    const activeRecord = record;
+    return processCompatibilityRecordV4(activeRecord, () => {
+      checkWork(activeRecord.work);
+      let requested;
+      try {
+        requested = CompositionalRuntimeParentLocatorV3Schema.safeParse(
+          cloneBoundedAutomaticCaptureJson(locator, 'beginRequest'),
+        );
+      } catch {
+        return fail('invalid_input');
       }
-      checkWork(record.work);
-      record.parents.set(id, cached);
-    }
-    checkWork(record.work);
-    if (cached.status !== 'parent_data') return cached;
-    const identity = cached.operation.identity;
-    if (
-      identity.sourceId !== id ||
-      identity.namespace !== requested.data.namespace ||
-      identity.issuer !== requested.data.issuer ||
-      identity.actorReference !== requested.data.actorReference ||
-      identity.turn !== requested.data.turn ||
-      cached.source.group_id !== record.namespace
-    )
-      return fail('locator_mismatch');
-    return cached;
+      if (!requested.success) return fail('invalid_input');
+      if (requested.data.namespace !== activeRecord.namespace) return fail('locator_mismatch');
+      const id = requested.data.capturedSourceId;
+      let cached = activeRecord.parents.get(id);
+      if (!cached) {
+        if (activeRecord.parents.size >= 128 || !beginAutomaticClaimReadAttempt(activeRecord.scope))
+          return fail('budget_exhausted');
+        const source = activeRecord.access.episode(id);
+        const operations = activeRecord.access.operationsForSource(id);
+        const operation =
+          operations.length === 1 && operations[0].version === 3 ? operations[0] : undefined;
+        const capturedBinding = operation?.identity.binding;
+        const subject = capturedBinding
+          ? activeRecord.access.entity(capturedBinding.subjectId)
+          : undefined;
+        const currentBinding = operation
+          ? activeRecord.access.currentBinding(
+              operation.identity.namespace,
+              operation.identity.issuer,
+              operation.identity.actorReference,
+            )
+          : null;
+        const remaining =
+          getAutomaticClaimReadScopeRemaining(activeRecord.scope)?.contextBytesRemaining ?? 0;
+        const limit = Math.min(512 * 1024, remaining);
+        const candidate = {
+          status: 'parent_data' as const,
+          namespace: activeRecord.namespace,
+          backendNow: activeRecord.backendNow,
+          source,
+          operation,
+          subject,
+          capturedBinding,
+          currentBinding,
+        };
+        const inspected =
+          source && operation && subject && capturedBinding
+            ? candidate
+            : {
+                source: source ?? null,
+                operations,
+                subject: subject ?? null,
+                capturedBinding: capturedBinding ?? null,
+                currentBinding,
+              };
+        const bytes = boundedAutomaticClaimReadJsonBytes(inspected, limit);
+        if (
+          !chargeAutomaticClaimContextBytes(activeRecord.scope, Math.min(bytes, remaining)) ||
+          bytes > limit
+        )
+          cached = fail(remaining < 512 * 1024 ? 'budget_exhausted' : 'capacity');
+        else if (!source) cached = fail('missing_source');
+        else if (operations.length !== 1)
+          cached = fail(operations.length ? 'ambiguous_operation' : 'missing_operation');
+        else if (!operation) cached = fail('unsupported_parent');
+        else if (!subject || subject.group_id !== activeRecord.namespace)
+          cached = fail('missing_subject');
+        else {
+          const data = CompositionalRuntimeParentDataV3Schema.safeParse(candidate);
+          cached = data.success ? freeze(data.data) : fail('invalid_context');
+        }
+        checkWork(activeRecord.work);
+        activeRecord.parents.set(id, cached);
+      }
+      checkWork(activeRecord.work);
+      if (cached.status !== 'parent_data') return cached;
+      const identity = cached.operation.identity;
+      if (
+        identity.sourceId !== id ||
+        identity.namespace !== requested.data.namespace ||
+        identity.issuer !== requested.data.issuer ||
+        identity.actorReference !== requested.data.actorReference ||
+        identity.turn !== requested.data.turn ||
+        cached.source.group_id !== activeRecord.namespace
+      )
+        return fail('locator_mismatch');
+      return cached;
+    });
   } catch (error) {
     return mapped(error, record);
   }
@@ -666,17 +688,20 @@ export function getCompositionalRuntimeCandidateDataV3(
   let record: RuntimeRecord | undefined;
   try {
     record = recordFor(reader);
-    checkWork(record.work);
-    if (typeof edgeId !== 'string' || !/^[a-f0-9-]{36}$/iu.test(edgeId))
-      return fail('invalid_input');
-    const edge = record.access.edge(edgeId);
-    if (!edge) return fail('missing_edge');
-    const subject = record.access.entity(edge.source_node_uuid),
-      value = record.access.entity(edge.target_node_uuid);
-    if (!subject || !value) return fail('invalid_context');
-    const result = Object.freeze({ status: 'candidate_data' as const, edge, subject, value });
-    checkWork(record.work);
-    return result;
+    const activeRecord = record;
+    return processCompatibilityRecordV4(activeRecord, () => {
+      checkWork(activeRecord.work);
+      if (typeof edgeId !== 'string' || !/^[a-f0-9-]{36}$/iu.test(edgeId))
+        return fail('invalid_input');
+      const edge = activeRecord.access.edge(edgeId);
+      if (!edge) return fail('missing_edge');
+      const subject = activeRecord.access.entity(edge.source_node_uuid),
+        value = activeRecord.access.entity(edge.target_node_uuid);
+      if (!subject || !value) return fail('invalid_context');
+      const result = Object.freeze({ status: 'candidate_data' as const, edge, subject, value });
+      checkWork(activeRecord.work);
+      return result;
+    });
   } catch (error) {
     return mapped(error, record);
   }
@@ -690,39 +715,46 @@ export function getCompositionalRuntimeLiteralDataV3(
   let record: RuntimeRecord | undefined;
   try {
     record = recordFor(reader);
-    checkWork(record.work);
-    const data = getCompositionalRuntimeCandidateDataV3(reader, edgeId);
-    if (data.status !== 'candidate_data') return data;
-    const claim = data.edge.attributes.engram_claim_v1;
-    if (!claim || typeof claim !== 'object' || (claim as { version?: unknown }).version !== 1)
-      return fail('unsupported_family');
-    const sourceId = (claim as { sourceId?: unknown }).sourceId;
-    const source = typeof sourceId === 'string' ? record.access.episode(sourceId) : undefined;
-    const proof = record.factory.readLiteralContextData(record.session, data.edge.uuid);
-    checkWork(record.work);
-    if (proof.status === 'deferred') return fail('budget_exhausted');
-    if (
-      proof.status === 'invalid' &&
-      ['context_too_large', 'proof_too_large'].includes(proof.reason)
-    )
-      return fail('capacity');
-    if (!source) return fail('missing_source');
-    const related = record.access.edgesBetween(
-      data.edge.source_node_uuid,
-      data.edge.target_node_uuid,
-      129,
-    );
-    const result = Object.freeze({
-      status: 'literal_data' as const,
-      edge: data.edge,
-      subject: data.subject,
-      value: data.value,
-      source,
-      proof,
-      related,
+    const activeRecord = record;
+    return processCompatibilityRecordV4(activeRecord, () => {
+      checkWork(activeRecord.work);
+      const data = getCompositionalRuntimeCandidateDataV3(reader, edgeId);
+      if (data.status !== 'candidate_data') return data;
+      const claim = data.edge.attributes.engram_claim_v1;
+      if (!claim || typeof claim !== 'object' || (claim as { version?: unknown }).version !== 1)
+        return fail('unsupported_family');
+      const sourceId = (claim as { sourceId?: unknown }).sourceId;
+      const source =
+        typeof sourceId === 'string' ? activeRecord.access.episode(sourceId) : undefined;
+      const proof = activeRecord.factory.readLiteralContextData(
+        activeRecord.session,
+        data.edge.uuid,
+      );
+      checkWork(activeRecord.work);
+      if (proof.status === 'deferred') return fail('budget_exhausted');
+      if (
+        proof.status === 'invalid' &&
+        ['context_too_large', 'proof_too_large'].includes(proof.reason)
+      )
+        return fail('capacity');
+      if (!source) return fail('missing_source');
+      const related = activeRecord.access.edgesBetween(
+        data.edge.source_node_uuid,
+        data.edge.target_node_uuid,
+        129,
+      );
+      const result = Object.freeze({
+        status: 'literal_data' as const,
+        edge: data.edge,
+        subject: data.subject,
+        value: data.value,
+        source,
+        proof,
+        related,
+      });
+      checkWork(activeRecord.work);
+      return result;
     });
-    checkWork(record.work);
-    return result;
   } catch (error) {
     return mapped(error, record);
   }
@@ -735,41 +767,44 @@ export function getCompositionalRuntimeNamespaceDataV3(
   let record: RuntimeRecord | undefined;
   try {
     record = recordFor(reader);
-    checkWork(record.work);
-    const root = record.access.graph;
-    const rows = <T extends { group_id: string }>(actual: readonly T[]): T[] => {
-      const selected: T[] = [];
-      for (const row of actual) {
-        checkWork(record!.work);
-        if (row.group_id === record!.namespace) selected.push(row);
-      }
-      Object.freeze(selected);
-      checkWork(record!.work);
-      return selected;
-    };
-    const entities = rows(root.entities),
-      edges = rows(root.edges),
-      episodes = rows(root.episodes);
-    const ledger = root.automatic_operations_v1;
-    const operations: NonNullable<typeof ledger>['operations'] = [];
-    if (ledger)
-      for (const operation of ledger.operations) {
-        checkWork(record.work);
-        if (operation.identity.namespace === record.namespace) operations.push(operation);
-      }
-    Object.freeze(operations);
-    checkWork(record.work);
-    const graph = Object.freeze({
-      ...root,
-      group_id: record.namespace,
-      entities,
-      edges,
-      episodes,
-      ...(ledger ? { automatic_operations_v1: Object.freeze({ ...ledger, operations }) } : {}),
+    const activeRecord = record;
+    return processCompatibilityRecordV4(activeRecord, () => {
+      checkWork(activeRecord.work);
+      const root = activeRecord.access.graph;
+      const rows = <T extends { group_id: string }>(actual: readonly T[]): T[] => {
+        const selected: T[] = [];
+        for (const row of actual) {
+          checkWork(activeRecord!.work);
+          if (row.group_id === activeRecord!.namespace) selected.push(row);
+        }
+        Object.freeze(selected);
+        checkWork(activeRecord!.work);
+        return selected;
+      };
+      const entities = rows(root.entities),
+        edges = rows(root.edges),
+        episodes = rows(root.episodes);
+      const ledger = root.automatic_operations_v1;
+      const operations: NonNullable<typeof ledger>['operations'] = [];
+      if (ledger)
+        for (const operation of ledger.operations) {
+          checkWork(activeRecord.work);
+          if (operation.identity.namespace === activeRecord.namespace) operations.push(operation);
+        }
+      Object.freeze(operations);
+      checkWork(activeRecord.work);
+      const graph = Object.freeze({
+        ...root,
+        group_id: activeRecord.namespace,
+        entities,
+        edges,
+        episodes,
+        ...(ledger ? { automatic_operations_v1: Object.freeze({ ...ledger, operations }) } : {}),
+      });
+      const result = Object.freeze({ status: 'namespace_data' as const, graph });
+      checkWork(activeRecord.work);
+      return result;
     });
-    const result = Object.freeze({ status: 'namespace_data' as const, graph });
-    checkWork(record.work);
-    return result;
   } catch (error) {
     return mapped(error, record);
   }
@@ -783,29 +818,38 @@ export function getCompositionalRuntimeHistoryDataV3(
   let record: RuntimeRecord | undefined;
   try {
     record = recordFor(reader);
-    checkWork(record.work);
-    let requested;
-    try {
-      requested = CompositionalRuntimeHistoryLocatorV3Schema.safeParse(
-        cloneBoundedAutomaticCaptureJson(locator, 'beginRequest'),
-      );
-    } catch {
-      return fail('invalid_input');
-    }
-    if (!requested.success) return fail('invalid_input');
-    if (requested.data.namespace !== record.namespace) return fail('locator_mismatch');
-    const episodes = [];
-    for (const episode of record.access.graph.episodes) {
-      checkWork(record.work);
-      if (episode.group_id === record.namespace) episodes.push(episode);
-    }
-    const result = Object.freeze({
-      status: 'history_data' as const,
-      episodes: Object.freeze(episodes.slice(-requested.data.limit)),
+    const activeRecord = record;
+    return processCompatibilityRecordV4(activeRecord, () => {
+      checkWork(activeRecord.work);
+      let requested;
+      try {
+        requested = CompositionalRuntimeHistoryLocatorV3Schema.safeParse(
+          cloneBoundedAutomaticCaptureJson(locator, 'beginRequest'),
+        );
+      } catch {
+        return fail('invalid_input');
+      }
+      if (!requested.success) return fail('invalid_input');
+      if (requested.data.namespace !== activeRecord.namespace) return fail('locator_mismatch');
+      const episodes = [];
+      for (const episode of activeRecord.access.graph.episodes) {
+        checkWork(activeRecord.work);
+        if (episode.group_id === activeRecord.namespace) episodes.push(episode);
+      }
+      const result = Object.freeze({
+        status: 'history_data' as const,
+        episodes: Object.freeze(episodes.slice(-requested.data.limit)),
+      });
+      checkWork(activeRecord.work);
+      return result;
     });
-    checkWork(record.work);
-    return result;
   } catch (error) {
     return mapped(error, record);
   }
+}
+
+function processCompatibilityRecordV4<T>(record: RuntimeRecord, body: () => T): T {
+  return record.executionWork === undefined
+    ? body()
+    : runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1(record.executionWork, body);
 }

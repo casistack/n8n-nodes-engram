@@ -1,6 +1,8 @@
 import type { INodeProperties } from 'n8n-workflow';
 import { AutomaticRuntimeSchema } from '../schemas/AutomaticRuntime.schema';
 import { compileAutomaticPolicy } from '../extraction/AutomaticEvidence';
+import { AUTOMATIC_EXECUTION_BUDGET_NATIVE_DEFAULTS as budgetDefaults } from './autonomousPersonalExecutionBudget';
+import { AUTONOMOUS_PERSONAL_EXECUTION_BUDGET_V1_BOUNDS as budgetBounds } from '../schemas/AutonomousPersonalExecutionBudgetV1.schema';
 
 export const automaticProfileProperty: INodeProperties = {
   displayName: 'Memory Behaviour',
@@ -38,8 +40,101 @@ const show = {
   '@version': [3],
   automaticMemoryProfile: ['conservative', 'explicit', 'reviewFirst'],
 };
+const autonomousBudgetShow = {
+  ...show,
+  automaticPreferenceInterpreter: ['autonomousPersonalV1'],
+};
+const configuredBudgetShow = {
+  ...autonomousBudgetShow,
+  automaticExecutionBudgetMode: ['configuredV1'],
+};
+
+export const automaticExecutionBudgetProperties: INodeProperties[] = [
+  {
+    displayName: 'Capture Budget Policy',
+    name: 'automaticExecutionBudgetMode',
+    type: 'options',
+    noDataExpression: true,
+    default: 'legacy',
+    options: [
+      { name: 'Existing Limits', value: 'legacy' },
+      { name: 'Configured Budgets (V1)', value: 'configuredV1' },
+    ],
+    displayOptions: { show: autonomousBudgetShow },
+    description:
+      'Existing Limits preserves saved behaviour, including five-second internal limits. Configured Budgets shares the extraction deadline across capture stages. Set the same policy on Capture and Memory; existing events retain their original policy.',
+  },
+  ...(['completion', 'syntax'] as const).flatMap((stage): INodeProperties[] => {
+    const completion = stage === 'completion';
+    const label = completion ? 'Completion' : 'Processing';
+    const prefix = completion ? 'automaticCompletionBudget' : 'automaticSyntaxBudget';
+    return [
+      {
+        displayName: `${label} Budget`,
+        name: `${prefix}Mode`,
+        type: 'options',
+        noDataExpression: true,
+        default: completion ? budgetDefaults.completionMode : budgetDefaults.syntaxMode,
+        options: [
+          { name: 'Use Remaining Extraction Deadline', value: 'inheritOverall' },
+          { name: 'Explicit Limit', value: 'limited' },
+        ],
+        displayOptions: { show: configuredBudgetShow },
+        description: completion
+          ? 'Maximum completion time, always bounded by the original extraction deadline and ownership lease'
+          : 'Cumulative synchronous processing allowance across capture; provider and storage waits use the extraction deadline',
+      },
+      {
+        displayName: `${label} Limit (Milliseconds)`,
+        name: `${prefix}Ms`,
+        type: 'number',
+        noDataExpression: true,
+        default: completion ? budgetDefaults.completionLimitedMs : budgetDefaults.syntaxLimitedMs,
+        typeOptions: {
+          minValue: budgetBounds.stageLimitMs.min,
+          maxValue: budgetBounds.stageLimitMs.max,
+        },
+        displayOptions: { show: { ...configuredBudgetShow, [`${prefix}Mode`]: ['limited'] } },
+        description:
+          'An explicit allowance cannot extend the original extraction deadline or ownership lease',
+      },
+    ];
+  }),
+  {
+    displayName: 'Finalization Reserve',
+    name: 'automaticFinalizationReserveMode',
+    type: 'options',
+    noDataExpression: true,
+    default: budgetDefaults.reserveMode,
+    options: [
+      { name: 'Automatic', value: 'automatic' },
+      { name: 'Fixed', value: 'fixed' },
+    ],
+    displayOptions: { show: configuredBudgetShow },
+    description:
+      'Time reserved from provider requests for finalization within the extraction deadline',
+  },
+  {
+    displayName: 'Finalization Reserve (Milliseconds)',
+    name: 'automaticFinalizationReserveMs',
+    type: 'number',
+    noDataExpression: true,
+    default: budgetDefaults.reserveFixedMs,
+    typeOptions: {
+      minValue: budgetBounds.fixedReserveMs.min,
+      maxValue: budgetBounds.fixedReserveMs.max,
+    },
+    displayOptions: {
+      show: { ...configuredBudgetShow, automaticFinalizationReserveMode: ['fixed'] },
+    },
+    description:
+      'Must be smaller than the configured extraction deadline; never extends an ownership lease',
+  },
+];
+
 export const automaticMemoryProperties: INodeProperties[] = [
   automaticProfileProperty,
+  ...automaticExecutionBudgetProperties,
   {
     displayName: 'Automatic Memory Interpretation',
     name: 'automaticPreferenceInterpreter',

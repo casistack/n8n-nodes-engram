@@ -11,6 +11,7 @@ import {
   recheckAutonomousPersonalNativeContextV4,
   type AutonomousPersonalCompletionDecisionV4Result,
 } from './AutonomousPersonalCaptureHandlesV4';
+import { runWithAutonomousPersonalExecutionEntryV1 } from '../utils/AutonomousPersonalExecutionEntryV1';
 import {
   consumeAutonomousPersonalCompletionBackendOutcomeV4,
   hasAutonomousPersonalCompletionBackendVerifierV4,
@@ -70,6 +71,21 @@ const unconfirmed = (): PrivateAutonomousPersonalNativeCompletionV4 =>
 
 /** Fixed native entry; no caller DATA can substitute for a backend's confirmed write. */
 export async function completeNativeAutonomousPersonalCaptureV4(
+  ctx: IExecuteFunctions,
+  storageOwner: IGraphStorage,
+): Promise<PrivateAutonomousPersonalNativeCompletionV4> {
+  try {
+    // Reuses the current Admin entry (identical-config assertion, no restart); a direct
+    // supported call opens the same fixed entry. Legacy/missing mode runs the original path.
+    return await runWithAutonomousPersonalExecutionEntryV1(ctx, () =>
+      completeWithinEntryV4(ctx, storageOwner),
+    );
+  } catch (error) {
+    return decision(completionFailureResultV4(error));
+  }
+}
+
+async function completeWithinEntryV4(
   ctx: IExecuteFunctions,
   storageOwner: IGraphStorage,
 ): Promise<PrivateAutonomousPersonalNativeCompletionV4> {

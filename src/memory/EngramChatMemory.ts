@@ -1,3 +1,4 @@
+import { runAutonomousPersonalMemoryOperationV1 } from '../utils/AutonomousPersonalMemoryExecutionEntryV1';
 import { StorageAccumulator } from '../storage/StorageDiagnostics';
 import { governedContext } from '../search/GovernedContext';
 import {
@@ -270,6 +271,7 @@ function nativeReadFailure(reason: AutonomousPersonalMemoryReadFailureReasonV4):
 function nativeMemoryWork(
   access: AutonomousPersonalNativeMemoryAdapterAccessV4,
   deadlineMs: number,
+  entryOwner: object,
 ) {
   const signal = access.signal;
   const available = access.nativeCancellationAvailable;
@@ -277,6 +279,7 @@ function nativeMemoryWork(
   return createAutonomousPersonalNativeMemoryWorkV4(
     { getExecutionCancelSignal: () => (available ? (signal ?? undefined) : undefined) },
     deadlineMs,
+    entryOwner,
   );
 }
 
@@ -742,7 +745,11 @@ export class EngramChatMemory extends BaseChatMemory {
       this.compositionalMode || this.nativeAdapterMode ? false : (fields.enableExtraction ?? false);
     this.engramHistory = history;
     if (this.nativeAdapterMode) {
-      history.setSnapshotReadProvider(() => this.readNativeConversationWithFreshFrameV4());
+      history.setSnapshotReadProvider(() =>
+        this.runNativeMemoryOperationV1('memoryRead', () =>
+          this.readNativeConversationWithFreshFrameV4(),
+        ),
+      );
     }
     if (this.policy.finalTurnWrites)
       history.setTurnWriter((messages) => this.saveMessagesWithDelivery(messages), this.queueMode);
@@ -827,6 +834,24 @@ export class EngramChatMemory extends BaseChatMemory {
       throw error;
     }
     return access;
+  }
+
+  private async runNativeMemoryOperationV1<T>(
+    purpose: 'memoryRead' | 'memorySave',
+    body: () => Promise<T>,
+  ): Promise<T> {
+    const access = this.nativeAccessV4();
+    const snapshot = access.initialSnapshot;
+    if (!snapshot) throw nativeMemoryFailure('invalid_adapter');
+    if (access.nativeCancellationAvailable && !access.signal)
+      throw nativeMemoryFailure('invalid_adapter');
+    return runAutonomousPersonalMemoryOperationV1(
+      this,
+      purpose,
+      snapshot.config,
+      access.nativeCancellationAvailable ? (access.signal ?? undefined) : undefined,
+      body,
+    );
   }
 
   /** Called by the native Memory node before closing its one-use adapter. */
@@ -1198,7 +1223,10 @@ export class EngramChatMemory extends BaseChatMemory {
   async loadMemoryVariablesWithDiagnostics(
     values: InputValues,
   ): Promise<{ variables: MemoryVariables; diagnostics: MemoryLoadDiagnostics }> {
-    if (this.nativeAdapterMode) return this.loadNativeMemoryVariablesV4(values);
+    if (this.nativeAdapterMode)
+      return this.runNativeMemoryOperationV1('memoryRead', () =>
+        this.loadNativeMemoryVariablesV4(values),
+      );
     if (this.compositionalMode) return this.loadCompositionalMemoryVariables(values);
     if (
       this.captureLifecycle === 'replaySafeV2' &&
@@ -1472,7 +1500,9 @@ export class EngramChatMemory extends BaseChatMemory {
     nativeAdminGuard?: NativeAdminLegacyCaptureGuard,
   ): Promise<MemoryDeliveryOutcome> {
     if (this.nativeAdapterMode)
-      return this.saveNativeReplaySafeMessagesV4(messages, nativeAdminGuard);
+      return this.runNativeMemoryOperationV1('memorySave', () =>
+        this.saveNativeReplaySafeMessagesV4(messages, nativeAdminGuard),
+      );
     if (this.captureLifecycle === 'replaySafeV2') {
       if (nativeAdminGuard) throw new Error('Engram replay-safe memory: unsupported_configuration');
       try {
@@ -2117,7 +2147,7 @@ export class EngramChatMemory extends BaseChatMemory {
     if (!state || !initial || !owner || owner !== this.storage)
       throw nativeMemoryFailure('invalid_adapter');
     const config = initial.config;
-    const nativeWork = nativeMemoryWork(access, config.invocationDeadlineMs);
+    const nativeWork = nativeMemoryWork(access, config.invocationDeadlineMs, this);
     let trustedFailure: { readonly value: unknown } | null = null;
     const check = () => {
       if (trustedFailure) throw trustedFailure.value;
