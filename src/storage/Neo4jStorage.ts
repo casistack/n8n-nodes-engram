@@ -1,3 +1,9 @@
+import {
+  currentAutonomousPersonalExecutionScopeWorkV1,
+  checkCurrentAutonomousPersonalExecutionScopeWorkV1,
+  runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1,
+  AutonomousPersonalExecutionScopeError,
+} from './AutonomousPersonalExecutionScopeV1';
 import { ExtractionBudgetError } from '../extraction/ExtractionDiagnostics';
 import { AsyncLocalStorage } from 'async_hooks';
 import { types as utilTypes } from 'util';
@@ -18,7 +24,7 @@ import {
   selectCompositionalCaptureNewSourceV3,
 } from './CompositionalCaptureBackendBeginV3';
 import { prepareCompositionalHumanCaptureBeginV3 } from './CompositionalAutomaticCaptureBeginV3';
-import { prepareAutonomousPersonalCaptureSnapshotV4 } from './AutonomousPersonalCaptureBeginV4';
+import { prepareAutonomousPersonalCaptureSnapshotV4 as prepareAutonomousPersonalCaptureSnapshotV4Unmetered } from './AutonomousPersonalCaptureBeginV4';
 import { autonomousPersonalCaptureStorageFailureV4 } from './AutonomousPersonalCaptureStorageDiagnosticsV4';
 import {
   consumeAutonomousPersonalCaptureAttemptV4,
@@ -61,16 +67,16 @@ import {
 } from '../schemas/AutonomousPersonalCompletionStorageV4.schema';
 import type { AutonomousPersonalNativeOriginV4 } from '../schemas/AutonomousPersonalNativeOriginV4.schema';
 import {
-  prepareAutonomousPersonalCompletionGraphCandidateV4,
-  validateAutonomousPersonalCompletionReadbackV4,
+  prepareAutonomousPersonalCompletionGraphCandidateV4 as prepareAutonomousPersonalCompletionGraphCandidateV4Unmetered,
+  validateAutonomousPersonalCompletionReadbackV4 as validateAutonomousPersonalCompletionReadbackV4Unmetered,
 } from './AutonomousPersonalCompletionGraphV4';
-import { planAutonomousPersonalCaptureCompletionV4 } from './AutonomousPersonalCompletionPlanV4';
+import { planAutonomousPersonalCaptureCompletionV4 as planAutonomousPersonalCaptureCompletionV4Unmetered } from './AutonomousPersonalCompletionPlanV4';
 import {
   AutonomousPersonalNativeOriginV4Error,
-  projectAutonomousPersonalNativeOriginV4,
+  projectAutonomousPersonalNativeOriginV4 as projectAutonomousPersonalNativeOriginV4Unmetered,
 } from './AutonomousPersonalNativeOriginV4';
 import {
-  assertAutonomousPersonalRecordIntegrityV4,
+  assertAutonomousPersonalRecordIntegrityV4 as assertAutonomousPersonalRecordIntegrityV4Unmetered,
   AutonomousPersonalRecordIntegrityV4Error,
 } from './AutonomousPersonalRecordIntegrityV4';
 import {
@@ -316,6 +322,7 @@ import {
   chargeAutomaticClaimContextBytes,
   getAutomaticClaimReadScopeRemaining,
   getAutomaticClaimReadScope,
+  getAutomaticClaimReadScopeWithAbsoluteDeadline,
   type AutomaticClaimReadScope,
 } from './AutomaticClaimReadScope';
 
@@ -532,6 +539,12 @@ function assertNoNewReservedAutonomousPersonalGraphRecords(
 function createAutonomousPersonalRecordWorkV4(
   deadlineAtMonotonicMs: number,
 ): AutonomousPersonalTypedSyntaxWorkV1 {
+  const configured = currentAutonomousPersonalExecutionScopeWorkV1();
+  if (configured) {
+    if (configured.absoluteMonotonicDeadlineMs > deadlineAtMonotonicMs)
+      throw new AutonomousPersonalExecutionScopeError('invalid_configuration');
+    return configured;
+  }
   return Object.freeze({
     absoluteMonotonicDeadlineMs: deadlineAtMonotonicMs,
     signal: AUTONOMOUS_PERSONAL_NEVER_ABORTED_SIGNAL,
@@ -543,11 +556,16 @@ function createOrdinaryAutonomousPersonalRecordGuardV4(): {
   readonly read: CompositionalNativeReadV3;
   readonly scope: AutomaticClaimReadScope;
 } {
-  const deadlineAtMonotonicMs = performance.now() + 5_000;
-  const work = createAutonomousPersonalRecordWorkV4(deadlineAtMonotonicMs);
+  const configuredWork = currentAutonomousPersonalExecutionScopeWorkV1();
+  const deadlineAtMonotonicMs =
+    configuredWork?.absoluteMonotonicDeadlineMs ?? performance.now() + 5_000;
+  const work = configuredWork ?? createAutonomousPersonalRecordWorkV4(deadlineAtMonotonicMs);
   const budget = { remaining: 512, deferred: 0 };
-  const scope = getAutomaticClaimReadScope(budget);
+  const scope = configuredWork
+    ? getAutomaticClaimReadScopeWithAbsoluteDeadline(budget, deadlineAtMonotonicMs)
+    : getAutomaticClaimReadScope(budget);
   const check = () => {
+    if (configuredWork) checkCurrentAutonomousPersonalExecutionScopeWorkV1(configuredWork);
     if (
       !Number.isFinite(work.absoluteMonotonicDeadlineMs) ||
       performance.now() >= work.absoluteMonotonicDeadlineMs ||
@@ -573,6 +591,50 @@ function createOrdinaryAutonomousPersonalRecordGuardV4(): {
   };
 }
 
+/** Charge synchronous processing only; database/lock waits stay outside the span. */
+function autonomousPersonalProcessingV4<T>(
+  operation: () => T,
+  work = currentAutonomousPersonalExecutionScopeWorkV1(),
+): T {
+  return work === undefined
+    ? operation()
+    : runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1(work, operation);
+}
+
+const prepareAutonomousPersonalCaptureSnapshotV4: typeof prepareAutonomousPersonalCaptureSnapshotV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      prepareAutonomousPersonalCaptureSnapshotV4Unmetered(...args),
+    );
+
+const prepareAutonomousPersonalCompletionGraphCandidateV4: typeof prepareAutonomousPersonalCompletionGraphCandidateV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      prepareAutonomousPersonalCompletionGraphCandidateV4Unmetered(...args),
+    );
+
+const validateAutonomousPersonalCompletionReadbackV4: typeof validateAutonomousPersonalCompletionReadbackV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      validateAutonomousPersonalCompletionReadbackV4Unmetered(...args),
+    );
+
+const planAutonomousPersonalCaptureCompletionV4: typeof planAutonomousPersonalCaptureCompletionV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      planAutonomousPersonalCaptureCompletionV4Unmetered(...args),
+    );
+
+const projectAutonomousPersonalNativeOriginV4: typeof projectAutonomousPersonalNativeOriginV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() => projectAutonomousPersonalNativeOriginV4Unmetered(...args));
+
+const assertAutonomousPersonalRecordIntegrityV4: typeof assertAutonomousPersonalRecordIntegrityV4Unmetered =
+  (...args) =>
+    autonomousPersonalProcessingV4(() =>
+      assertAutonomousPersonalRecordIntegrityV4Unmetered(...args),
+    );
+
 function chargeOrdinaryAutonomousPersonalContextV4(
   scope: AutomaticClaimReadScope,
   check: () => void,
@@ -581,8 +643,13 @@ function chargeOrdinaryAutonomousPersonalContextV4(
   check();
   let serialized: string | undefined;
   try {
-    serialized = JSON.stringify(value);
-  } catch {
+    serialized = autonomousPersonalProcessingV4(() => JSON.stringify(value));
+  } catch (error) {
+    if (
+      error instanceof ExtractionBudgetError ||
+      error instanceof AutonomousPersonalExecutionScopeError
+    )
+      throw error;
     throw new Error('Engram automatic ledger: invalid_native_record');
   }
   if (typeof serialized !== 'string')
@@ -599,14 +666,16 @@ function createAutonomousPersonalNativeSnapshotReadV4(
   return {
     check,
     charge: (value: unknown) => {
-      check();
-      const serialized = JSON.stringify(value);
-      if (typeof serialized !== 'string')
-        throw new Error('Engram automatic ledger: invalid_native_record');
-      nativeBytes += Buffer.byteLength(serialized, 'utf8');
-      if (nativeBytes > AUTONOMOUS_V4_INSPECTION_BYTES)
-        throw new Error('Engram queue: snapshot_limit');
-      check();
+      return autonomousPersonalProcessingV4(() => {
+        check();
+        const serialized = JSON.stringify(value);
+        if (typeof serialized !== 'string')
+          throw new Error('Engram automatic ledger: invalid_native_record');
+        nativeBytes += Buffer.byteLength(serialized, 'utf8');
+        if (nativeBytes > AUTONOMOUS_V4_INSPECTION_BYTES)
+          throw new Error('Engram queue: snapshot_limit');
+        check();
+      });
     },
   };
 }
@@ -988,6 +1057,36 @@ function autonomousPersonalAssistantFinalKnownFailureReasonV4(
   if (message.includes('backend_clock_invalid') || message.includes('concurrent_snapshot'))
     return 'storage_error';
   return null;
+}
+
+/** Sequential parameter batches only: all rows remain inside the caller's managed transaction.
+ * Ordinals order unit subqueries and are never stored. A single oversized row remains allowed.
+ */
+async function executeOrderedNeo4jImportBatches<T>(
+  tx: Pick<ManagedTransaction, 'run'>,
+  source: readonly T[],
+  encode: (row: T) => Record<string, unknown>,
+  query: string,
+): Promise<void> {
+  const maxRows = 100;
+  const targetBytes = 512 * 1024;
+  let rows: Array<{ ordinal: number; values: Record<string, unknown> }> = [];
+  let bytes = 2;
+  const flush = async () => {
+    if (rows.length === 0) return;
+    await tx.run(query, { rows });
+    rows = [];
+    bytes = 2;
+  };
+  for (let ordinal = 0; ordinal < source.length; ordinal++) {
+    const row = { ordinal, values: encode(source[ordinal]) };
+    const rowBytes = Buffer.byteLength(JSON.stringify(row), 'utf8') + 1;
+    if (rows.length > 0 && (rows.length >= maxRows || bytes + rowBytes > targetBytes))
+      await flush();
+    rows.push(row);
+    bytes += rowBytes;
+  }
+  await flush();
 }
 
 export class Neo4jStorage implements IGraphStorage {
@@ -1372,12 +1471,14 @@ export class Neo4jStorage implements IGraphStorage {
       snapshotRead,
       true,
     );
-    guard.read.check?.();
-    assertAutomaticLedgerSourceIntegrity(graph);
-    guard.read.check?.();
-    assertAutonomousPersonalRecordIntegrityV4(graph, guard.work, guard.read.check ?? (() => {}));
-    guard.read.check?.();
-    return graph;
+    return autonomousPersonalProcessingV4(() => {
+      guard.read.check?.();
+      assertAutomaticLedgerSourceIntegrity(graph);
+      guard.read.check?.();
+      assertAutonomousPersonalRecordIntegrityV4(graph, guard.work, guard.read.check ?? (() => {}));
+      guard.read.check?.();
+      return graph;
+    });
   }
 
   /**
@@ -2430,7 +2531,13 @@ export class Neo4jStorage implements IGraphStorage {
 
       // One fixed budget and scope shared by every callback retry and the single readback.
       const budget = { remaining: 512, deferred: 0 };
-      const scope = getAutomaticClaimReadScope(budget);
+      const configuredWork = currentAutonomousPersonalExecutionScopeWorkV1();
+      const scope = configuredWork
+        ? getAutomaticClaimReadScopeWithAbsoluteDeadline(
+            budget,
+            configuredWork.absoluteMonotonicDeadlineMs,
+          )
+        : getAutomaticClaimReadScope(budget);
       if (!getAutomaticClaimReadScopeRemaining(scope)) return stopped('invalid_input');
       let chargeFailure: { value: unknown } | undefined;
       const scopeCheck = () => {
@@ -3101,7 +3208,7 @@ export class Neo4jStorage implements IGraphStorage {
     await tx.run('CREATE (ep:Episode) SET ep += $props', {
       props: {
         ...source,
-        attributes: JSON.stringify(source.attributes),
+        attributes: autonomousPersonalProcessingV4(() => JSON.stringify(source.attributes)),
         append_sequence: appendSequence,
         source_dedup_key: this.sourceDedupKey(source),
         idempotency_dedup_key: this.idempotencyDedupKey(source),
@@ -3135,15 +3242,17 @@ export class Neo4jStorage implements IGraphStorage {
     if (requireSource4 && !registered)
       throw new Error('Engram automatic ledger: unregistered_native_format');
     const graph = await this.readNativeGraphDataInTransaction(tx, groupId, mode, read);
-    read?.check();
-    if (
-      !registered &&
-      (graph.episodes.some(hasAutonomousSourceOwnership) ||
-        graph.automatic_operations_v1?.operations.some((operation) => operation.version === 4))
-    ) {
-      throw new Error('Engram automatic ledger: unregistered_native_format');
-    }
-    return graph;
+    return autonomousPersonalProcessingV4(() => {
+      read?.check();
+      if (
+        !registered &&
+        (graph.episodes.some(hasAutonomousSourceOwnership) ||
+          graph.automatic_operations_v1?.operations.some((operation) => operation.version === 4))
+      ) {
+        throw new Error('Engram automatic ledger: unregistered_native_format');
+      }
+      return graph;
+    });
   }
 
   /** Structural DATA only; native format enrollment is checked by the caller. */
@@ -3155,12 +3264,14 @@ export class Neo4jStorage implements IGraphStorage {
   ): Promise<GraphData> {
     const check = () => read?.check();
     const chargeRows = (rows: QueryResult['records'], key: string) => {
-      if (!read) return;
-      for (const row of rows) {
+      return autonomousPersonalProcessingV4(() => {
+        if (!read) return;
+        for (const row of rows) {
+          check();
+          read.charge(row.get(key).properties);
+        }
         check();
-        read.charge(row.get(key).properties);
-      }
-      check();
+      });
     };
     check();
     read?.begin?.();
@@ -3207,106 +3318,109 @@ export class Neo4jStorage implements IGraphStorage {
        LIMIT 100001`,
       params,
     );
-    check();
-    if (operationRecords.records.length > 100000) throw new Error('Engram queue: snapshot_limit');
-    const operations = operationRecords.records.map((record) => {
+    return autonomousPersonalProcessingV4(() => {
       check();
-      if (read) {
-        read.charge({
-          operation_id: record.get('operation_id'),
-          namespace: record.get('namespace'),
-          source_id: record.get('source_id'),
-          store_hash: record.get('store_hash'),
-          role: record.get('role'),
-          record_json: record.get('record_json'),
-        });
-      }
-      let raw: unknown;
-      const recordJson = record.get('record_json');
-      if (typeof recordJson !== 'string' || Buffer.byteLength(recordJson, 'utf8') > 32 * 1024)
-        throw new Error('Engram automatic ledger: invalid_native_record');
-      try {
-        raw = JSON.parse(recordJson);
-      } catch {
-        throw new Error('Engram automatic ledger: invalid_native_record');
-      }
-      const parsed = StoredAutomaticOperationSchema.safeParse(raw);
-      if (
-        !parsed.success ||
-        parsed.data.operationId !== record.get('operation_id') ||
-        parsed.data.identity.namespace !== record.get('namespace') ||
-        parsed.data.identity.sourceId !== record.get('source_id') ||
-        parsed.data.identity.storeHash !== record.get('store_hash') ||
-        parsed.data.identity.role !== record.get('role')
-      ) {
-        throw new Error('Engram automatic ledger: invalid_native_record');
-      }
-      return parsed.data;
-    });
-    const ledger =
-      operations.length > 0 || (rootPresent && groupId === undefined)
-        ? AutomaticLedgerSchema.safeParse({ version: 1, operations })
-        : null;
-    if (ledger && !ledger.success)
-      throw new Error('Engram automatic ledger: invalid_native_record');
-    captureMode ||=
-      operations.some(
-        (operation) =>
-          operation.version === 2 || operation.version === 3 || operation.version === 4,
-      ) ||
-      episodes.records.some(
-        (record) =>
-          inspectNativeCaptureAttributeValue(record.get('e').properties.attributes) === 'protected',
-      );
-    const base = {
-      ...(epochValue ? { metadata: { extraction_epoch: epochValue } } : {}),
-      version: CURRENT_GRAPH_DATA_VERSION,
-      exported_at: nowIso(),
-      group_id: groupId,
-      entities: entities.records.map((record) => {
+      if (operationRecords.records.length > 100000) throw new Error('Engram queue: snapshot_limit');
+      const operations = operationRecords.records.map((record) => {
         check();
-        return this.recordToEntity(record.get('e').properties, captureMode);
-      }),
-      edges: edges.records.map((record) => {
-        check();
-        return this.recordToEdge(record.get('r').properties, captureMode);
-      }),
-      episodes: episodes.records.map((record) => {
-        check();
-        return this.recordToEpisode(record.get('e').properties, captureMode);
-      }),
-    };
-    if (captureMode && base.group_id === undefined) delete base.group_id;
-    const data: GraphData = ledger?.success
-      ? { ...base, automatic_operations_v1: ledger.data }
-      : base;
-    if (captureMode) {
-      check();
-      const bounded = parseLosslessAutomaticCaptureGraph(data);
-      check();
-      assertAutomaticLedgerSourceIntegrity(bounded);
-      if (bounded.automatic_operations_v1) {
-        bounded.automatic_operations_v1 = immutableAutomaticLedgerSnapshot(
-          bounded.automatic_operations_v1,
+        if (read) {
+          read.charge({
+            operation_id: record.get('operation_id'),
+            namespace: record.get('namespace'),
+            source_id: record.get('source_id'),
+            store_hash: record.get('store_hash'),
+            role: record.get('role'),
+            record_json: record.get('record_json'),
+          });
+        }
+        let raw: unknown;
+        const recordJson = record.get('record_json');
+        if (typeof recordJson !== 'string' || Buffer.byteLength(recordJson, 'utf8') > 32 * 1024)
+          throw new Error('Engram automatic ledger: invalid_native_record');
+        try {
+          raw = JSON.parse(recordJson);
+        } catch {
+          throw new Error('Engram automatic ledger: invalid_native_record');
+        }
+        const parsed = StoredAutomaticOperationSchema.safeParse(raw);
+        if (
+          !parsed.success ||
+          parsed.data.operationId !== record.get('operation_id') ||
+          parsed.data.identity.namespace !== record.get('namespace') ||
+          parsed.data.identity.sourceId !== record.get('source_id') ||
+          parsed.data.identity.storeHash !== record.get('store_hash') ||
+          parsed.data.identity.role !== record.get('role')
+        ) {
+          throw new Error('Engram automatic ledger: invalid_native_record');
+        }
+        return parsed.data;
+      });
+      const ledger =
+        operations.length > 0 || (rootPresent && groupId === undefined)
+          ? AutomaticLedgerSchema.safeParse({ version: 1, operations })
+          : null;
+      if (ledger && !ledger.success)
+        throw new Error('Engram automatic ledger: invalid_native_record');
+      captureMode ||=
+        operations.some(
+          (operation) =>
+            operation.version === 2 || operation.version === 3 || operation.version === 4,
+        ) ||
+        episodes.records.some(
+          (record) =>
+            inspectNativeCaptureAttributeValue(record.get('e').properties.attributes) ===
+            'protected',
         );
+      const base = {
+        ...(epochValue ? { metadata: { extraction_epoch: epochValue } } : {}),
+        version: CURRENT_GRAPH_DATA_VERSION,
+        exported_at: nowIso(),
+        group_id: groupId,
+        entities: entities.records.map((record) => {
+          check();
+          return this.recordToEntity(record.get('e').properties, captureMode);
+        }),
+        edges: edges.records.map((record) => {
+          check();
+          return this.recordToEdge(record.get('r').properties, captureMode);
+        }),
+        episodes: episodes.records.map((record) => {
+          check();
+          return this.recordToEpisode(record.get('e').properties, captureMode);
+        }),
+      };
+      if (captureMode && base.group_id === undefined) delete base.group_id;
+      const data: GraphData = ledger?.success
+        ? { ...base, automatic_operations_v1: ledger.data }
+        : base;
+      if (captureMode) {
+        check();
+        const bounded = parseLosslessAutomaticCaptureGraph(data);
+        check();
+        assertAutomaticLedgerSourceIntegrity(bounded);
+        if (bounded.automatic_operations_v1) {
+          bounded.automatic_operations_v1 = immutableAutomaticLedgerSnapshot(
+            bounded.automatic_operations_v1,
+          );
+          if (Buffer.byteLength(canonical(bounded)) > 100 * 1024 * 1024)
+            throw new Error('Engram queue: snapshot_limit');
+        }
+        return bounded;
+      }
+      if (data.automatic_operations_v1) {
+        const bounded = GraphDataSchema.parse(data);
+        bounded.automatic_operations_v1 = immutableAutomaticLedgerSnapshot(
+          bounded.automatic_operations_v1!,
+        );
+        assertAutomaticLedgerSourceIntegrity(bounded);
         if (Buffer.byteLength(canonical(bounded)) > 100 * 1024 * 1024)
           throw new Error('Engram queue: snapshot_limit');
+        return bounded;
       }
-      return bounded;
-    }
-    if (data.automatic_operations_v1) {
-      const bounded = GraphDataSchema.parse(data);
-      bounded.automatic_operations_v1 = immutableAutomaticLedgerSnapshot(
-        bounded.automatic_operations_v1!,
-      );
-      assertAutomaticLedgerSourceIntegrity(bounded);
-      if (Buffer.byteLength(canonical(bounded)) > 100 * 1024 * 1024)
+      if (Buffer.byteLength(canonical(data)) > 100 * 1024 * 1024)
         throw new Error('Engram queue: snapshot_limit');
-      return bounded;
-    }
-    if (Buffer.byteLength(canonical(data)) > 100 * 1024 * 1024)
-      throw new Error('Engram queue: snapshot_limit');
-    return data;
+      return data;
+    });
   }
 
   async readExtractionSnapshot(groupId?: string): Promise<GraphData> {
@@ -3825,23 +3939,25 @@ export class Neo4jStorage implements IGraphStorage {
     if (before.automatic_operations_v1 && !after.automatic_operations_v1) {
       throw new Error('Engram automatic ledger: native_root_missing');
     }
-    const afterHasAutonomousSource4 =
-      after.episodes.some(
-        (episode) =>
-          Object.prototype.hasOwnProperty.call(
-            episode.attributes,
-            AUTONOMOUS_CAPTURE_V4_OWNER_ATTRIBUTE,
-          ) ||
-          Object.prototype.hasOwnProperty.call(
-            episode.attributes,
-            AUTONOMOUS_CAPTURE_V3_ENVELOPE_ATTRIBUTE,
-          ),
-      ) ||
-      (after.automatic_operations_v1?.operations.some((operation) => operation.version === 4) ??
-        false);
+    const afterHasAutonomousSource4 = autonomousPersonalProcessingV4(
+      () =>
+        after.episodes.some(
+          (episode) =>
+            Object.prototype.hasOwnProperty.call(
+              episode.attributes,
+              AUTONOMOUS_CAPTURE_V4_OWNER_ATTRIBUTE,
+            ) ||
+            Object.prototype.hasOwnProperty.call(
+              episode.attributes,
+              AUTONOMOUS_CAPTURE_V3_ENVELOPE_ATTRIBUTE,
+            ),
+        ) ||
+        (after.automatic_operations_v1?.operations.some((operation) => operation.version === 4) ??
+          false),
+    );
     if (after.automatic_operations_v1 || afterHasAutonomousSource4) {
-      const bounded = GraphDataSchema.parse(after);
-      assertAutomaticLedgerSourceIntegrity(bounded);
+      const bounded = autonomousPersonalProcessingV4(() => GraphDataSchema.parse(after));
+      autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(bounded));
       check();
     }
 
@@ -3854,26 +3970,35 @@ export class Neo4jStorage implements IGraphStorage {
       }
       return result;
     };
-    const entities = index(before.entities);
-    const edges = index(before.edges);
-    const episodes = index(before.episodes);
+    const entities = autonomousPersonalProcessingV4(() => index(before.entities));
+    const edges = autonomousPersonalProcessingV4(() => index(before.edges));
+    const episodes = autonomousPersonalProcessingV4(() => index(before.episodes));
 
     for (const entity of after.entities) {
       check();
       const prior = entities.get(entity.uuid);
-      const unchanged = prior && canonical(prior) === canonical(entity);
+      const unchanged =
+        prior &&
+        autonomousPersonalProcessingV4(() => canonical(prior)) ===
+          autonomousPersonalProcessingV4(() => canonical(entity));
       check();
       if (unchanged) continue;
       await tx.run(`MERGE (e:Entity {uuid:$uuid}) SET e += $props`, {
         uuid: entity.uuid,
-        props: { ...entity, attributes: JSON.stringify(entity.attributes) },
+        props: {
+          ...entity,
+          attributes: autonomousPersonalProcessingV4(() => JSON.stringify(entity.attributes)),
+        },
       });
       check();
     }
     for (const edge of after.edges) {
       check();
       const prior = edges.get(edge.uuid);
-      const unchanged = prior && canonical(prior) === canonical(edge);
+      const unchanged =
+        prior &&
+        autonomousPersonalProcessingV4(() => canonical(prior)) ===
+          autonomousPersonalProcessingV4(() => canonical(edge));
       check();
       if (unchanged) continue;
       await tx.run(
@@ -3883,7 +4008,10 @@ export class Neo4jStorage implements IGraphStorage {
           source: edge.source_node_uuid,
           target: edge.target_node_uuid,
           uuid: edge.uuid,
-          props: { ...edge, attributes: JSON.stringify(edge.attributes) },
+          props: {
+            ...edge,
+            attributes: autonomousPersonalProcessingV4(() => JSON.stringify(edge.attributes)),
+          },
         },
       );
       check();
@@ -3891,39 +4019,48 @@ export class Neo4jStorage implements IGraphStorage {
     for (const ep of after.episodes) {
       check();
       const prior = episodes.get(ep.uuid);
-      const changed = prior && canonical(prior.attributes) !== canonical(ep.attributes);
+      const changed =
+        prior &&
+        autonomousPersonalProcessingV4(() => canonical(prior.attributes)) !==
+          autonomousPersonalProcessingV4(() => canonical(ep.attributes));
       check();
       if (changed) {
         await tx.run('MATCH (ep:Episode {uuid:$uuid}) SET ep.attributes=$attributes', {
           uuid: ep.uuid,
-          attributes: JSON.stringify(ep.attributes),
+          attributes: autonomousPersonalProcessingV4(() => JSON.stringify(ep.attributes)),
         });
         check();
       }
     }
 
-    const previousOperations = before.automatic_operations_v1?.operations ?? [];
-    const nextOperations = after.automatic_operations_v1?.operations ?? [];
-    const nextById = new Map<string, (typeof nextOperations)[number]>();
-    for (const operation of nextOperations) {
-      check();
-      nextById.set(operation.operationId, operation);
-    }
-    for (const prior of previousOperations) {
-      check();
-      if (!nextById.has(prior.operationId)) {
-        throw new Error('Engram automatic ledger: operation_delete_forbidden');
+    const { nextOperations, previousById } = autonomousPersonalProcessingV4(() => {
+      const previousOperations = before.automatic_operations_v1?.operations ?? [];
+      const nextOperations = after.automatic_operations_v1?.operations ?? [];
+      const nextById = new Map<string, (typeof nextOperations)[number]>();
+      for (const operation of nextOperations) {
+        check();
+        nextById.set(operation.operationId, operation);
       }
-    }
-    const previousById = new Map<string, (typeof previousOperations)[number]>();
-    for (const operation of previousOperations) {
-      check();
-      previousById.set(operation.operationId, operation);
-    }
+      for (const prior of previousOperations) {
+        check();
+        if (!nextById.has(prior.operationId)) {
+          throw new Error('Engram automatic ledger: operation_delete_forbidden');
+        }
+      }
+      const previousById = new Map<string, (typeof previousOperations)[number]>();
+      for (const operation of previousOperations) {
+        check();
+        previousById.set(operation.operationId, operation);
+      }
+      return { nextOperations, previousById };
+    });
     for (const [position, operation] of nextOperations.entries()) {
       check();
       const prior = previousById.get(operation.operationId);
-      const unchanged = prior && canonical(prior) === canonical(operation);
+      const unchanged =
+        prior &&
+        autonomousPersonalProcessingV4(() => canonical(prior)) ===
+          autonomousPersonalProcessingV4(() => canonical(operation));
       check();
       if (unchanged) continue;
       await tx.run(
@@ -3937,7 +4074,7 @@ export class Neo4jStorage implements IGraphStorage {
           namespace: operation.identity.namespace,
           source_id: operation.identity.sourceId,
           role: operation.identity.role,
-          record_json: JSON.stringify(operation),
+          record_json: autonomousPersonalProcessingV4(() => JSON.stringify(operation)),
         },
       );
       check();
@@ -4823,12 +4960,14 @@ export class Neo4jStorage implements IGraphStorage {
       check();
       if (prepared.kind === 'no_write') return prepared.resultProjection;
       if (prepared.kind !== 'same_initial_scope_candidate') return stopped('conflict');
-      const binding = findAutomaticBinding(
-        actual.graph,
-        scope.request.namespace,
-        scope.request.issuer,
-        scope.request.actorReference,
-        check,
+      const binding = autonomousPersonalProcessingV4(() =>
+        findAutomaticBinding(
+          actual.graph,
+          scope.request.namespace,
+          scope.request.issuer,
+          scope.request.actorReference,
+          check,
+        ),
       );
       if (!binding || binding.state !== 'active') return stopped('authority_changed');
       const bindingRef = {
@@ -4837,23 +4976,27 @@ export class Neo4jStorage implements IGraphStorage {
         subjectId: binding.subjectId,
         fingerprint: binding.fingerprint,
       };
-      assertAutomaticBindingIdentity(
-        actual.graph,
-        scope.request.namespace,
-        scope.request.issuer,
-        scope.request.actorReference,
-        bindingRef,
-        check,
+      autonomousPersonalProcessingV4(() =>
+        assertAutomaticBindingIdentity(
+          actual.graph,
+          scope.request.namespace,
+          scope.request.issuer,
+          scope.request.actorReference,
+          bindingRef,
+          check,
+        ),
       );
-      const observation = AutonomousPersonalCaptureProviderObservationV4Schema.parse({
-        source: prepared.episode,
-        descriptor: scope.descriptor,
-        operation: prepared.operation,
-        fence: prepared.fence,
-        binding: bindingRef,
-        backendNow: actual.backendNow,
-        readStartedAtMonotonicMs,
-      });
+      const observation = autonomousPersonalProcessingV4(() =>
+        AutonomousPersonalCaptureProviderObservationV4Schema.parse({
+          source: prepared.episode,
+          descriptor: scope.descriptor,
+          operation: prepared.operation,
+          fence: prepared.fence,
+          binding: bindingRef,
+          backendNow: actual.backendNow,
+          readStartedAtMonotonicMs,
+        }),
+      );
       check();
       const result = bindAutonomousPersonalCaptureProviderPreflightV4(this, access, observation);
       check();
@@ -4899,12 +5042,14 @@ export class Neo4jStorage implements IGraphStorage {
         check,
         recordWork,
       );
-      const binding = findAutomaticBinding(
-        preflight.graph,
-        request.namespace,
-        request.issuer,
-        request.actorReference,
-        check,
+      const binding = autonomousPersonalProcessingV4(() =>
+        findAutomaticBinding(
+          preflight.graph,
+          request.namespace,
+          request.issuer,
+          request.actorReference,
+          check,
+        ),
       );
       if (!binding || binding.state !== 'active') return stopped('authority_changed');
       const bindingRef = {
@@ -4914,13 +5059,15 @@ export class Neo4jStorage implements IGraphStorage {
         fingerprint: binding.fingerprint,
       };
       try {
-        assertAutomaticBindingIdentity(
-          preflight.graph,
-          request.namespace,
-          request.issuer,
-          request.actorReference,
-          bindingRef,
-          check,
+        autonomousPersonalProcessingV4(() =>
+          assertAutomaticBindingIdentity(
+            preflight.graph,
+            request.namespace,
+            request.issuer,
+            request.actorReference,
+            bindingRef,
+            check,
+          ),
         );
       } catch (error) {
         check();
@@ -4973,7 +5120,7 @@ export class Neo4jStorage implements IGraphStorage {
                 beforeRead,
               );
               if (graph.group_id === undefined) delete graph.group_id;
-              assertAutomaticLedgerSourceIntegrity(graph);
+              autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(graph));
               assertAutonomousPersonalRecordIntegrityV4(graph, recordWork, check);
               check();
               const tail = await tx.run(
@@ -5010,7 +5157,7 @@ export class Neo4jStorage implements IGraphStorage {
 
               let next: GraphData;
               if (candidate.kind === 'initial_candidate') {
-                next = {
+                next = autonomousPersonalProcessingV4(() => ({
                   ...graph,
                   episodes: [...graph.episodes, candidate.episode],
                   automatic_operations_v1: {
@@ -5021,10 +5168,14 @@ export class Neo4jStorage implements IGraphStorage {
                     ],
                   },
                   metadata: { ...graph.metadata, extraction_epoch: epoch },
-                };
-                assertAutomaticLedgerSourceIntegrity(next);
+                }));
+                autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(next));
                 assertAutonomousPersonalRecordIntegrityV4(next, recordWork, check);
-                if (!validateAutomaticCaptureCandidate(next, check))
+                if (
+                  !autonomousPersonalProcessingV4(() =>
+                    validateAutomaticCaptureCandidate(next, check),
+                  )
+                )
                   throw new RollbackAutonomousPersonalCaptureBeginV4({
                     kind: 'no_write',
                     resultProjection: { kind: 'capacity', eligibleFirstCommit: false },
@@ -5049,7 +5200,7 @@ export class Neo4jStorage implements IGraphStorage {
               } else {
                 if (!registeredBefore)
                   throw new Error('Engram automatic ledger: unregistered_native_format');
-                next = {
+                next = autonomousPersonalProcessingV4(() => ({
                   ...graph,
                   automatic_operations_v1: {
                     version: 1,
@@ -5060,10 +5211,14 @@ export class Neo4jStorage implements IGraphStorage {
                           : operation,
                     ),
                   },
-                };
-                assertAutomaticLedgerSourceIntegrity(next);
+                }));
+                autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(next));
                 assertAutonomousPersonalRecordIntegrityV4(next, recordWork, check);
-                if (!validateAutomaticCaptureCandidate(next, check))
+                if (
+                  !autonomousPersonalProcessingV4(() =>
+                    validateAutomaticCaptureCandidate(next, check),
+                  )
+                )
                   throw new RollbackAutonomousPersonalCaptureBeginV4({
                     kind: 'no_write',
                     resultProjection: { kind: 'capacity', eligibleFirstCommit: false },
@@ -5082,7 +5237,7 @@ export class Neo4jStorage implements IGraphStorage {
                 actualRead,
               );
               if (actual.group_id === undefined) delete actual.group_id;
-              assertAutomaticLedgerSourceIntegrity(actual);
+              autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(actual));
               assertAutonomousPersonalRecordIntegrityV4(actual, recordWork, check);
               const actualOperation = actual.automatic_operations_v1?.operations.find(
                 (operation) => operation.operationId === candidate.operation.operationId,
@@ -5093,15 +5248,22 @@ export class Neo4jStorage implements IGraphStorage {
                   : undefined;
               if (
                 !actualOperation ||
-                canonical(actualOperation) !== canonical(candidate.operation) ||
+                autonomousPersonalProcessingV4(() => canonical(actualOperation)) !==
+                  autonomousPersonalProcessingV4(() => canonical(candidate.operation)) ||
                 (candidate.kind === 'initial_candidate' &&
-                  (!actualSource || canonical(actualSource) !== canonical(candidate.episode)))
+                  (!actualSource ||
+                    autonomousPersonalProcessingV4(() => canonical(actualSource)) !==
+                      autonomousPersonalProcessingV4(() => canonical(candidate.episode))))
               )
                 throw new RollbackAutonomousPersonalCaptureBeginV4({
                   kind: 'no_write',
                   resultProjection: { kind: 'conflict', eligibleFirstCommit: false },
                 });
-              if (!validateAutomaticCaptureCandidate(actual, check))
+              if (
+                !autonomousPersonalProcessingV4(() =>
+                  validateAutomaticCaptureCandidate(actual, check),
+                )
+              )
                 throw new RollbackAutonomousPersonalCaptureBeginV4({
                   kind: 'no_write',
                   resultProjection: { kind: 'capacity', eligibleFirstCommit: false },
@@ -5257,7 +5419,7 @@ export class Neo4jStorage implements IGraphStorage {
         return coreOutcome(autonomousPersonalCompletionNoWriteNeo4jV4('invalid_input'));
       if (storeHash !== runtime.view.scope.context.storeHash)
         return coreOutcome(autonomousPersonalCompletionNoWriteNeo4jV4('conflict'));
-      scope = getAutomaticClaimReadScope(runtime.legacyReadBudget);
+      scope = runtime.readScope;
       if (!getAutomaticClaimReadScopeRemaining(scope))
         return coreOutcome(autonomousPersonalCompletionNoWriteNeo4jV4('invalid_input'));
     } catch (error) {
@@ -5336,7 +5498,7 @@ export class Neo4jStorage implements IGraphStorage {
         );
         if (actual.group_id === undefined) delete actual.group_id;
         scopeCheck();
-        assertAutomaticLedgerSourceIntegrity(actual);
+        autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(actual));
         scopeCheck();
         assertAutonomousPersonalRecordIntegrityV4(actual, ownedRuntime.typedSyntaxWork, scopeCheck);
         scopeCheck();
@@ -5421,7 +5583,7 @@ export class Neo4jStorage implements IGraphStorage {
           );
           if (graph.group_id === undefined) delete graph.group_id;
           scopeCheck();
-          assertAutomaticLedgerSourceIntegrity(graph);
+          autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(graph));
           scopeCheck();
           assertAutonomousPersonalRecordIntegrityV4(
             graph,
@@ -5461,14 +5623,16 @@ export class Neo4jStorage implements IGraphStorage {
             completionCallHash,
             audit,
           } = ownedRuntime.view;
-          const input = AutonomousPersonalCompletionPlanV4InputOwnedDataSchema.parse({
-            scope: completionScope,
-            stagedFresh,
-            outcome: outcome.kind === 'response' ? { kind: 'response' as const } : outcome,
-            backendNow,
-            completionCallHash,
-            audit,
-          });
+          const input = autonomousPersonalProcessingV4(() =>
+            AutonomousPersonalCompletionPlanV4InputOwnedDataSchema.parse({
+              scope: completionScope,
+              stagedFresh,
+              outcome: outcome.kind === 'response' ? { kind: 'response' as const } : outcome,
+              backendNow,
+              completionCallHash,
+              audit,
+            }),
+          );
           scopeCheck();
           const plan = planAutonomousPersonalCaptureCompletionV4(
             input,
@@ -5478,6 +5642,7 @@ export class Neo4jStorage implements IGraphStorage {
             ownedRuntime.typedSyntaxWork,
             check,
             ownedRuntime.legacyReadBudget,
+            ownedRuntime.readScope,
           );
           scopeCheck();
           if (plan.kind === 'no_write')
@@ -5549,7 +5714,7 @@ export class Neo4jStorage implements IGraphStorage {
           );
           if (actual.group_id === undefined) delete actual.group_id;
           scopeCheck();
-          assertAutomaticLedgerSourceIntegrity(actual);
+          autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(actual));
           scopeCheck();
           assertAutonomousPersonalRecordIntegrityV4(
             actual,
@@ -5558,12 +5723,14 @@ export class Neo4jStorage implements IGraphStorage {
           );
           scopeCheck();
           if (
-            !autonomousPersonalCompletionTargetRowsMatchV4(
-              actual,
-              candidate.graph,
-              input,
-              plan,
-              scopeCheck,
+            !autonomousPersonalProcessingV4(() =>
+              autonomousPersonalCompletionTargetRowsMatchV4(
+                actual,
+                candidate.graph,
+                input,
+                plan,
+                scopeCheck,
+              ),
             )
           )
             throw new RollbackAutonomousPersonalCompletionV4('conflict');
@@ -5682,7 +5849,7 @@ export class Neo4jStorage implements IGraphStorage {
       );
       if (graph.group_id === undefined) delete graph.group_id;
       check();
-      assertAutomaticLedgerSourceIntegrity(graph);
+      autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(graph));
       check();
       assertAutonomousPersonalRecordIntegrityV4(graph, recordWork, check);
       check();
@@ -7249,106 +7416,124 @@ export class Neo4jStorage implements IGraphStorage {
           ),
         );
         // Import entities
-        for (const entity of safeData.entities) {
-          await tx.run(
-            `MERGE (e:Entity {uuid: $uuid})
+        await executeOrderedNeo4jImportBatches(
+          tx,
+          safeData.entities,
+          (entity) => ({
+            ...entity,
+            attributes: JSON.stringify(entity.attributes),
+          }),
+          `UNWIND $rows AS row
+ WITH row ORDER BY row.ordinal
+ CALL {
+ WITH row
+MERGE (e:Entity {uuid: row.values.uuid})
 						 SET e += {
-							name: $name,
-							group_id: $group_id,
-							summary: $summary,
-							entity_type: $entity_type,
-							name_embedding: $name_embedding,
-							attributes: $attributes,
-							created_at: $created_at,
-							updated_at: $updated_at
-						 }`,
-            {
-              ...entity,
-              attributes: JSON.stringify(entity.attributes),
-            },
-          );
-        }
+							name: row.values.name,
+							group_id: row.values.group_id,
+							summary: row.values.summary,
+							entity_type: row.values.entity_type,
+							name_embedding: row.values.name_embedding,
+							attributes: row.values.attributes,
+							created_at: row.values.created_at,
+							updated_at: row.values.updated_at
+						 }
+ }`,
+        );
 
         // Import episodes
-        for (const episode of safeData.episodes) {
-          await tx.run(
-            `MERGE (ep:Episode {uuid: $uuid})
+        await executeOrderedNeo4jImportBatches(
+          tx,
+          safeData.episodes,
+          (episode) => ({
+            ...episode,
+            attributes: JSON.stringify(episode.attributes),
+            source_dedup_key: this.sourceDedupKey(episode),
+            idempotency_dedup_key: this.idempotencyDedupKey(episode),
+          }),
+          `UNWIND $rows AS row
+ WITH row ORDER BY row.ordinal
+ CALL {
+ WITH row
+MERGE (ep:Episode {uuid: row.values.uuid})
 						 SET ep += {
-							group_id: $group_id,
-							content: $content,
-							role: $role,
-							source_type: $source_type,
-							reference_time: $reference_time,
-							previous_episode_uuid: $previous_episode_uuid,
-							created_at: $created_at,
-							updated_at: $updated_at,
-							source_message_id: $source_message_id,
-							idempotency_key: $idempotency_key,
-							conversation_id: $conversation_id,
-							sender_id: $sender_id,
-							sender_name: $sender_name,
-							episode_kind: $episode_kind,
-							quoted_message_id: $quoted_message_id,
-							trust_level: $trust_level,
-							confidence: $confidence,
-							review_status: $review_status,
-							source_workflow_id: $source_workflow_id,
-							source_execution_id: $source_execution_id,
-							attributes: $attributes,
-							source_dedup_key: $source_dedup_key,
-							idempotency_dedup_key: $idempotency_dedup_key
-						 }`,
-            {
-              ...episode,
-              attributes: JSON.stringify(episode.attributes),
-              source_dedup_key: this.sourceDedupKey(episode),
-              idempotency_dedup_key: this.idempotencyDedupKey(episode),
-            },
-          );
-        }
+							group_id: row.values.group_id,
+							content: row.values.content,
+							role: row.values.role,
+							source_type: row.values.source_type,
+							reference_time: row.values.reference_time,
+							previous_episode_uuid: row.values.previous_episode_uuid,
+							created_at: row.values.created_at,
+							updated_at: row.values.updated_at,
+							source_message_id: row.values.source_message_id,
+							idempotency_key: row.values.idempotency_key,
+							conversation_id: row.values.conversation_id,
+							sender_id: row.values.sender_id,
+							sender_name: row.values.sender_name,
+							episode_kind: row.values.episode_kind,
+							quoted_message_id: row.values.quoted_message_id,
+							trust_level: row.values.trust_level,
+							confidence: row.values.confidence,
+							review_status: row.values.review_status,
+							source_workflow_id: row.values.source_workflow_id,
+							source_execution_id: row.values.source_execution_id,
+							attributes: row.values.attributes,
+							source_dedup_key: row.values.source_dedup_key,
+							idempotency_dedup_key: row.values.idempotency_dedup_key
+						 }
+ }`,
+        );
 
         // Import edges
-        for (const edge of safeData.edges) {
-          await tx.run(
-            `MATCH (source:Entity {uuid: $source_node_uuid})
-						 MATCH (target:Entity {uuid: $target_node_uuid})
-						 MERGE (source)-[r:RELATES_TO {uuid: $uuid}]->(target)
+        await executeOrderedNeo4jImportBatches(
+          tx,
+          safeData.edges,
+          (edge) => ({
+            ...edge,
+            attributes: JSON.stringify(edge.attributes),
+          }),
+          `UNWIND $rows AS row
+ WITH row ORDER BY row.ordinal
+ CALL {
+ WITH row
+MATCH (source:Entity {uuid: row.values.source_node_uuid})
+						 MATCH (target:Entity {uuid: row.values.target_node_uuid})
+						 MERGE (source)-[r:RELATES_TO {uuid: row.values.uuid}]->(target)
 						 SET r += {
-							group_id: $group_id,
-							source_node_uuid: $source_node_uuid,
-							target_node_uuid: $target_node_uuid,
-							name: $name,
-							fact: $fact,
-							fact_embedding: $fact_embedding,
-							episodes: $episodes,
-							valid_at: $valid_at,
-							invalid_at: $invalid_at,
-							expired_at: $expired_at,
-							attributes: $attributes,
-							created_at: $created_at,
-							updated_at: $updated_at
-						 }`,
-            {
-              ...edge,
-              attributes: JSON.stringify(edge.attributes),
-            },
-          );
-        }
+							group_id: row.values.group_id,
+							source_node_uuid: row.values.source_node_uuid,
+							target_node_uuid: row.values.target_node_uuid,
+							name: row.values.name,
+							fact: row.values.fact,
+							fact_embedding: row.values.fact_embedding,
+							episodes: row.values.episodes,
+							valid_at: row.values.valid_at,
+							invalid_at: row.values.invalid_at,
+							expired_at: row.values.expired_at,
+							attributes: row.values.attributes,
+							created_at: row.values.created_at,
+							updated_at: row.values.updated_at
+						 }
+ }`,
+        );
 
         // Recreate episode chains
-        for (const episode of safeData.episodes) {
-          if (episode.previous_episode_uuid) {
-            await tx.run(
-              `MATCH (prev:Episode {uuid: $prevUuid})
-							 MATCH (curr:Episode {uuid: $currUuid})
-							 MERGE (prev)-[:NEXT_EPISODE]->(curr)`,
-              {
-                prevUuid: episode.previous_episode_uuid,
-                currUuid: episode.uuid,
-              },
-            );
-          }
-        }
+        await executeOrderedNeo4jImportBatches(
+          tx,
+          safeData.episodes.filter((episode) => Boolean(episode.previous_episode_uuid)),
+          (episode) => ({
+            prevUuid: episode.previous_episode_uuid,
+            currUuid: episode.uuid,
+          }),
+          `UNWIND $rows AS row
+ WITH row ORDER BY row.ordinal
+ CALL {
+ WITH row
+MATCH (prev:Episode {uuid: row.values.prevUuid})
+							 MATCH (curr:Episode {uuid: row.values.currUuid})
+							 MERGE (prev)-[:NEXT_EPISODE]->(curr)
+ }`,
+        );
       });
     } finally {
       await session.close();

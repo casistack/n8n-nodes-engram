@@ -97,6 +97,24 @@ import {
   AutonomousPersonalProviderPromptFailureV1,
   prepareAutonomousPersonalProviderPromptV1,
 } from '../extraction/AutonomousPersonalProviderRequestV1';
+import { getAutomaticClaimReadScopeWithAbsoluteDeadline } from './AutomaticClaimReadScope';
+import {
+  AutonomousPersonalExecutionScopeBudgetError,
+  checkCurrentAutonomousPersonalExecutionScopeWorkV1,
+  createAutonomousPersonalExecutionScopeWorkV1,
+  markCurrentAutonomousPersonalExecutionStageV1,
+  recordCurrentAutonomousPersonalExecutionCompletionV1,
+} from './AutonomousPersonalExecutionScopeV1';
+import {
+  hashAutonomousPersonalExecutionBudgetV1,
+  resolveAutonomousPersonalExecutionBudgetV1,
+} from './AutonomousPersonalExecutionBudgetV1';
+import {
+  checkAutonomousPersonalEntryLiveV1,
+  clipAutonomousPersonalEntryToLeaseV1,
+  readCurrentAutonomousPersonalEntryTimingV1,
+  type AutonomousPersonalEntryTimingV1,
+} from '../utils/AutonomousPersonalExecutionEntryV1';
 
 declare const attemptV4Brand: unique symbol;
 declare const leaseHandleV4Brand: unique symbol;
@@ -152,6 +170,8 @@ interface NativeCaptureLifetimeV4 {
   overallDeadlineAtMonotonicMs?: number;
   deadlineTimer?: ReturnType<typeof setTimeout>;
   removeParentListener: boolean;
+  /** Configured captures only: clips the original entry to the same earlier lease deadline. */
+  clipEntry?: (deadline: number) => void;
 }
 
 interface AttemptRecord {
@@ -503,6 +523,7 @@ function clipOverallDeadlineV4(lifetime: NativeCaptureLifetimeV4, deadline: numb
     deadline,
   );
   armLifetimeDeadline(lifetime);
+  lifetime.clipEntry?.(deadline);
   checkLifetime(lifetime);
 }
 
@@ -671,7 +692,9 @@ async function runNativeBeginPrimitiveV4(
   startedAtMonotonicMs: number,
   lifetime?: NativeCaptureLifetimeV4,
   allowMissingProviderKey = false,
+  boundOverallMs?: number,
 ): Promise<NativeBeginRunV4> {
+  markCurrentAutonomousPersonalExecutionStageV1('begin');
   const resultSchema = getAutonomousPersonalCaptureBeginV4InternalResultSchema();
   const storageMethod = storageOwner.beginAndClaimAutonomousPersonalCaptureV4;
   if (typeof storageMethod !== 'function') {
@@ -692,6 +715,30 @@ async function runNativeBeginPrimitiveV4(
   if (config.kind !== 'ready') {
     return { result: resultSchema.parse(fixedDecision(config.kind)) };
   }
+  // The attempt must carry the same overall and budget body that the original entry bound.
+  if (
+    boundOverallMs !== undefined &&
+    (config.request.settings.invocationDeadlineMs !== boundOverallMs ||
+      config.request.settings.executionBudget === undefined)
+  ) {
+    return { result: resultSchema.parse(fixedDecision('invalid_input')) };
+  }
+
+  if (boundOverallMs !== undefined) {
+    try {
+      // Credentials/configuration may await: rejoin the original bound policy before mutation.
+      const timing = readCurrentAutonomousPersonalEntryTimingV1(ctx);
+      if (
+        timing.kind !== 'entry' ||
+        timing.overallMs !== config.request.settings.invocationDeadlineMs ||
+        timing.fingerprint !==
+          hashAutonomousPersonalExecutionBudgetV1(config.request.settings.executionBudget)
+      )
+        return { result: resultSchema.parse(fixedDecision('invalid_input')) };
+    } catch {
+      return { result: resultSchema.parse(fixedDecision('invalid_input')) };
+    }
+  }
 
   const deadlineAtMonotonicMs = startedAtMonotonicMs + config.request.settings.invocationDeadlineMs;
   try {
@@ -707,6 +754,7 @@ async function runNativeBeginPrimitiveV4(
 
   let attempt: PrivateAutonomousPersonalCaptureAttemptV4;
   try {
+    if (boundOverallMs !== undefined) checkAutonomousPersonalEntryLiveV1();
     attempt = mintAttemptV4(storageOwner, config, startedAtMonotonicMs, lifetime);
   } catch {
     return { result: resultSchema.parse(fixedDecision('invalid_input')) };
@@ -786,8 +834,49 @@ export async function dispatchNativeAutonomousPersonalCaptureV4(
   ctx: IExecuteFunctions,
   storageOwner: IGraphStorage,
 ): Promise<AutonomousPersonalCaptureBeginV4InternalResult> {
-  const startedAtMonotonicMs = performance.now();
-  return (await runNativeBeginPrimitiveV4(ctx, storageOwner, startedAtMonotonicMs)).result;
+  const resultSchema = getAutonomousPersonalCaptureBeginV4InternalResultSchema();
+  // A begin-only helper cannot create and immediately retire an enclosing entry.
+  // Configured calls require the already active, same-context native capture entry.
+  let timing: AutonomousPersonalEntryTimingV1;
+  try {
+    timing = readCurrentAutonomousPersonalEntryTimingV1(ctx);
+  } catch {
+    return resultSchema.parse(fixedDecision('invalid_input'));
+  }
+  if (timing.kind === 'missing') return resultSchema.parse(fixedDecision('unsupported_mode'));
+  const startedAtMonotonicMs =
+    timing.kind === 'entry' ? timing.startedAtMonotonicMs : performance.now();
+  return (
+    await runNativeBeginPrimitiveV4(
+      ctx,
+      storageOwner,
+      startedAtMonotonicMs,
+      undefined,
+      false,
+      timing.kind === 'entry' ? timing.overallMs : undefined,
+    )
+  ).result;
+}
+
+function nativeEntryLifetimeV4(
+  ctx: IExecuteFunctions,
+  timing: AutonomousPersonalEntryTimingV1,
+  lifetime: NativeCaptureLifetimeV4,
+): void {
+  if (timing.kind !== 'entry') return;
+  const { entry } = timing;
+  lifetime.clipEntry = (deadline) => {
+    try {
+      clipAutonomousPersonalEntryToLeaseV1(ctx, entry, deadline);
+    } catch (error) {
+      if (error instanceof AutonomousPersonalExecutionScopeBudgetError) {
+        throw providerFixedError(
+          error.budgetReason === 'cancelled' ? 'cancelled' : 'budget_exhausted',
+        );
+      }
+      throw error;
+    }
+  };
 }
 
 function readNativeExecutionCancelSignalV4(ctx: IExecuteFunctions): AbortSignal | undefined {
@@ -890,7 +979,17 @@ export async function prepareNativeAutonomousPersonalCaptureProviderV4(
   ctx: IExecuteFunctions,
   storageOwner: IGraphStorage,
 ): Promise<AutonomousPersonalCaptureProviderV4Result> {
-  const startedAtMonotonicMs = performance.now();
+  // Configured captures are anchored to the ORIGINAL entry token only; a begin-only or direct
+  // call without that fixed scope is explicitly unsupported, never silently legacy timing.
+  let timing: AutonomousPersonalEntryTimingV1;
+  try {
+    timing = readCurrentAutonomousPersonalEntryTimingV1(ctx);
+  } catch {
+    return providerFalseResultV4('invalid_input');
+  }
+  if (timing.kind === 'missing') return providerFalseResultV4('unsupported_mode');
+  const startedAtMonotonicMs =
+    timing.kind === 'entry' ? timing.startedAtMonotonicMs : performance.now();
   let lifetime: NativeCaptureLifetimeV4 | undefined;
   let transferred = false;
   try {
@@ -902,6 +1001,7 @@ export async function prepareNativeAutonomousPersonalCaptureProviderV4(
       return providerFalseResultV4('invalid_input');
     }
     lifetime = createNativeLifetimeV4(parentSignal);
+    nativeEntryLifetimeV4(ctx, timing, lifetime);
     if (lifetime.hostAborted) return cancelledProviderResultV4();
 
     const begin = await runNativeBeginPrimitiveV4(
@@ -910,6 +1010,7 @@ export async function prepareNativeAutonomousPersonalCaptureProviderV4(
       startedAtMonotonicMs,
       lifetime,
       true,
+      timing.kind === 'entry' ? timing.overallMs : undefined,
     );
     if (begin.result.kind !== 'claimed') {
       return providerRuntimeResultSchema.parse(begin.result);
@@ -955,6 +1056,7 @@ export async function prepareNativeAutonomousPersonalCaptureProviderV4(
 
     const preflightMethod = storageOwner.prepareAutonomousPersonalCaptureProviderV4;
     if (typeof preflightMethod !== 'function') return providerFalseResultV4('unsupported_mode');
+    markCurrentAutonomousPersonalExecutionStageV1('provider_preflight');
     let preflightValue: unknown;
     try {
       preflightValue = await preflightMethod.call(storageOwner, handle);
@@ -1134,6 +1236,7 @@ export async function prepareNativeAutonomousPersonalCaptureProviderV4(
 
       let rawResponse: unknown;
       let lastError: unknown;
+      markCurrentAutonomousPersonalExecutionStageV1('provider');
       for (let call = 0; call < maxCalls; call += 1) {
         lifetime && checkLifetime(lifetime);
         try {
@@ -1222,6 +1325,7 @@ export async function prepareNativeAutonomousPersonalCaptureProviderV4(
 
     let selection;
     try {
+      markCurrentAutonomousPersonalExecutionStageV1('selection');
       selection = compileAutonomousPersonalEvidenceSelectionV1(
         { source: preflight.source, descriptor: preflight.descriptor },
         providerResponse,
@@ -2086,6 +2190,8 @@ export type AutonomousPersonalCompletionAccessViewV4 = Readonly<{
   view: Readonly<AutonomousPersonalCompletionViewV4>;
   typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1;
   legacyReadBudget: SourceHydrationBudget;
+  /** The completion's own private read scope (absolute deadline when configured). */
+  readScope: AutomaticClaimReadScope;
   check: () => void;
 }>;
 
@@ -2121,6 +2227,12 @@ export function completionFalseResultV4(
 export function completionFailureResultV4(
   error: unknown,
 ): AutonomousPersonalCompletionDecisionV4Result {
+  // Genuine scope time exhaustion/cancellation only; other scope errors stay storage_error.
+  if (error instanceof AutonomousPersonalExecutionScopeBudgetError) {
+    return error.budgetReason === 'cancelled'
+      ? completionCancelledResultV4()
+      : completionFalseResultV4('budget_exhausted');
+  }
   const kind = getAutonomousPersonalCaptureProviderFailureKindV4(error);
   if (kind === 'cancelled') return completionCancelledResultV4();
   if (
@@ -2188,6 +2300,67 @@ async function compareAutonomousPersonalNativeContextV4(
   return { kind: 'match' };
 }
 
+function scopeFailureAsProviderV4(error: unknown): unknown {
+  if (error instanceof AutonomousPersonalExecutionScopeBudgetError) {
+    return providerFixedError(
+      error.budgetReason === 'cancelled' ? 'cancelled' : 'budget_exhausted',
+    );
+  }
+  return error;
+}
+
+/**
+ * Configured completion: the reviewed resolver picks the completion deadline (inherit the
+ * overall or the explicit limit) from the ORIGINAL anchors and the lease-clipped overall. One
+ * absolute-deadline read scope and one registered typed work share that deadline.
+ */
+function configuredCompletionV4(
+  ctx: IExecuteFunctions,
+  timing: Extract<AutonomousPersonalEntryTimingV1, { kind: 'entry' }>,
+  stage: AutonomousPersonalCaptureProviderStageAccessViewV4,
+  completionStartedAtMonotonicMs: number,
+): { readonly deadline: number; readonly work: AutonomousPersonalTypedSyntaxWorkV1 } {
+  const { scope } = stage.view;
+  const budget = scope.descriptor.executionBudget;
+  if (
+    budget === undefined ||
+    scope.descriptor.invocationDeadlineMs !== timing.overallMs ||
+    Math.abs(scope.deadlineAtMonotonicMs - timing.originalDeadlineAtMonotonicMs) > 1e-6
+  ) {
+    throw providerFixedError('authority_changed');
+  }
+  const resolution = resolveAutonomousPersonalExecutionBudgetV1(budget, {
+    originalStartedAt: timing.startedAtMonotonicMs,
+    configuredOverallMs: timing.overallMs,
+    originalOverallDeadlineAt: timing.originalDeadlineAtMonotonicMs,
+    existingLeaseDeadlineAt: stage.view.overallDeadlineAtMonotonicMs,
+    completionStartedAt: completionStartedAtMonotonicMs,
+  });
+  if (resolution.completionDeadlineAt === null) throw providerFixedError('conflict');
+  // Never later than the clipped entry: a lease only ever shortens, never extends.
+  const deadline = Math.min(
+    resolution.completionDeadlineAt,
+    stage.view.overallDeadlineAtMonotonicMs,
+    timing.effectiveDeadlineAtMonotonicMs,
+  );
+  recordCurrentAutonomousPersonalExecutionCompletionV1(
+    completionStartedAtMonotonicMs,
+    deadline,
+    resolution.finalizationReserveMs,
+  );
+  try {
+    const work = createAutonomousPersonalExecutionScopeWorkV1(
+      timing.entry,
+      ctx,
+      deadline,
+      stage.signal,
+    );
+    return { deadline, work };
+  } catch (error) {
+    throw scopeFailureAsProviderV4(error);
+  }
+}
+
 function makeCompletionCheckV4(
   storageOwner: object,
   originalStageCheck: () => void,
@@ -2210,6 +2383,12 @@ function makeCompletionCheckV4(
         !canUseAutomaticClaimReadScope(readScope)
       ) {
         throw providerFixedError('budget_exhausted');
+      }
+      // Registered configured work also meters the shared scope; unknown work is a no-op.
+      try {
+        checkCurrentAutonomousPersonalExecutionScopeWorkV1(work);
+      } catch (scopeError) {
+        throw scopeFailureAsProviderV4(scopeError);
       }
       if (
         record &&
@@ -2268,14 +2447,32 @@ export async function prepareNativeAutonomousPersonalCompletionV4(
     );
     const postProviderStartedAtMonotonicMs = performance.now();
     const legacyReadBudget: SourceHydrationBudget = { remaining: 512, deferred: 0 };
-    const legacyReadScope = getAutomaticClaimReadScope(legacyReadBudget);
-    const typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1 = Object.freeze({
-      absoluteMonotonicDeadlineMs: Math.min(
-        stageAccessView.view.overallDeadlineAtMonotonicMs,
-        postProviderStartedAtMonotonicMs + 5_000,
-      ),
-      signal: stageAccessView.signal,
-    });
+    let legacyReadScope: AutomaticClaimReadScope;
+    let typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1;
+    const timing = readCurrentAutonomousPersonalEntryTimingV1(ctx);
+    if (timing.kind === 'legacy') {
+      legacyReadScope = getAutomaticClaimReadScope(legacyReadBudget);
+      typedSyntaxWork = Object.freeze({
+        absoluteMonotonicDeadlineMs: Math.min(
+          stageAccessView.view.overallDeadlineAtMonotonicMs,
+          postProviderStartedAtMonotonicMs + 5_000,
+        ),
+        signal: stageAccessView.signal,
+      });
+    } else {
+      if (timing.kind !== 'entry') throw providerFixedError('unsupported_mode');
+      const configured = configuredCompletionV4(
+        ctx,
+        timing,
+        stageAccessView,
+        postProviderStartedAtMonotonicMs,
+      );
+      legacyReadScope = getAutomaticClaimReadScopeWithAbsoluteDeadline(
+        legacyReadBudget,
+        configured.deadline,
+      );
+      typedSyntaxWork = configured.work;
+    }
     const workCheck = makeCompletionCheckV4(
       storageOwner,
       stageAccessView.check,
@@ -2430,6 +2627,7 @@ export function getAutonomousPersonalCompletionAccessV4(
     view: record.view,
     typedSyntaxWork: record.typedSyntaxWork,
     legacyReadBudget: record.legacyReadBudget,
+    readScope: record.legacyReadScope,
     check: record.check,
   });
   record.check();

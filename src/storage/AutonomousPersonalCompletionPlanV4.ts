@@ -83,6 +83,8 @@ import {
   canUseAutomaticClaimReadScope,
   chargeAutomaticClaimContextBytes,
   getAutomaticClaimReadScope,
+  isAutomaticClaimReadScopeForBudget,
+  type AutomaticClaimReadScope,
   getAutomaticClaimReadScopeRemaining,
 } from './AutomaticClaimReadScope';
 import {
@@ -1708,6 +1710,7 @@ export function planAutonomousPersonalCaptureCompletionV4(
   typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
   trustedCheck: () => void,
   legacyReadBudgetValue: SourceHydrationBudget,
+  existingReadScope?: AutomaticClaimReadScope,
 ): AutonomousPersonalCompletionPlanV4 {
   if (
     typeof trustedCheck !== 'function' ||
@@ -1731,7 +1734,12 @@ export function planAutonomousPersonalCaptureCompletionV4(
     );
   }
 
-  const scope = getAutomaticClaimReadScope(legacyReadBudget);
+  if (
+    existingReadScope !== undefined &&
+    !isAutomaticClaimReadScopeForBudget(existingReadScope, legacyReadBudget)
+  )
+    return noWrite('invalid_input');
+  const scope = existingReadScope ?? getAutomaticClaimReadScope(legacyReadBudget);
   let trustedFailure: unknown;
   let trustedFailed = false;
   let latchedStop: PlanStop | undefined;

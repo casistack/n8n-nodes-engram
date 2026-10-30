@@ -15,6 +15,7 @@ import {
 import { AutonomousPersonalMemoryHandoffLocatorV4OwnedDataSchema } from '../schemas/AutonomousPersonalMemoryHandoffV4.schema';
 import { buildAutonomousPersonalProviderReferenceV4 } from './AutonomousPersonalCaptureNativeConfigV4';
 import { readAutomaticRuntime } from './automaticMemory';
+import { readNativeAutonomousPersonalExecutionBudgetV1 } from './autonomousPersonalExecutionBudget';
 import { readExtractionPolicy } from './advancedExtraction';
 import {
   readReplaySafeMemoryNativeContext,
@@ -209,6 +210,10 @@ export async function readAutonomousPersonalNativeMemoryConfigV4(
       throw new AutonomousPersonalNativeMemoryConfigV4Error('unsupported_configuration');
     }
 
+    const executionBudget = readNativeAutonomousPersonalExecutionBudgetV1(
+      ctx.getNode().parameters,
+      get,
+    );
     const native = {
       instance: ctx.getInstanceId(),
       workflow: ctx.getWorkflow().id ?? null,
@@ -231,6 +236,7 @@ export async function readAutonomousPersonalNativeMemoryConfigV4(
       quoteRegions: [],
       invocationDeadlineMs: policy.deadline_ms,
       providerReference,
+      ...(executionBudget === undefined ? {} : { executionBudget }),
     };
     const config = deepCloneAndParse(candidate);
 
@@ -240,6 +246,7 @@ export async function readAutonomousPersonalNativeMemoryConfigV4(
       intentSetting: config.explicitIntent,
       invocationDeadlineMs: config.invocationDeadlineMs,
       providerReference: config.providerReference,
+      ...(config.executionBudget === undefined ? {} : { executionBudget: config.executionBudget }),
     });
     return config;
   } catch (error) {

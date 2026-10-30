@@ -45,6 +45,10 @@ import {
   cloneBoundedAutomaticCaptureJson,
   isNativePlainAutomaticCaptureObject,
 } from '../storage/BoundedAutomaticCaptureJson';
+import {
+  checkCurrentAutonomousPersonalExecutionScopeWorkV1,
+  runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1,
+} from '../storage/AutonomousPersonalExecutionScopeV1';
 
 const HASH_64 = /^[a-f0-9]{64}$/u;
 const SOURCE_MAX_UTF16 = 65_536;
@@ -557,12 +561,44 @@ function checkInternalFailure(check: () => void, error: unknown): never {
   fail('internal');
 }
 
+/**
+ * Sticky check for registered configured work. The first scope error is latched and rethrown
+ * by identity: it is never remapped to a typed-syntax reason or `internal`.
+ */
+function createConfiguredWorkCheck(work: unknown): () => void {
+  readWorkContext(work);
+  let firstFailure: unknown;
+  let failed = false;
+  return () => {
+    if (failed) throw firstFailure;
+    try {
+      checkCurrentAutonomousPersonalExecutionScopeWorkV1(work);
+    } catch (error) {
+      failed = true;
+      firstFailure = error;
+      throw error;
+    }
+  };
+}
+
 export function compileAutonomousPersonalTypedSyntaxV1(
   input: unknown,
   work: AutonomousPersonalTypedSyntaxWorkV1,
 ): AutonomousPersonalTypedSyntaxV1 {
+  // Unknown or copied work keeps the exact legacy five-second branch. Registered work for a
+  // foreign or closed scope throws here, before any compilation.
+  if (checkCurrentAutonomousPersonalExecutionScopeWorkV1(work) === 'configured') {
+    const configuredCheck = createConfiguredWorkCheck(work);
+    configuredCheck();
+    return runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1(work, () =>
+      compileWithCheck(input, configuredCheck),
+    );
+  }
   const enteredAt = performance.now();
-  const check = createStickyWorkCheck(work, enteredAt);
+  return compileWithCheck(input, createStickyWorkCheck(work, enteredAt));
+}
+
+function compileWithCheck(input: unknown, check: () => void): AutonomousPersonalTypedSyntaxV1 {
   check();
   const owned = inputFromOwned(input);
   check();

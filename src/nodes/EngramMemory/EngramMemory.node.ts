@@ -1,3 +1,6 @@
+import { readNativeAutonomousPersonalExecutionBudgetV1 } from '../../utils/autonomousPersonalExecutionBudget';
+import { runAutonomousPersonalMemoryPreparationV1 } from '../../utils/AutonomousPersonalMemoryExecutionEntryV1';
+import { currentAutonomousPersonalExecutionScopeWorkV1 } from '../../storage/AutonomousPersonalExecutionScopeV1';
 import { advancedExtractionProperties, readExtractionPolicy } from '../../utils/advancedExtraction';
 import { automaticMemoryProperties, readAutomaticRuntime } from '../../utils/automaticMemory';
 import {
@@ -48,11 +51,22 @@ import {
   type PrivateAutonomousPersonalNativeMemoryAdapterTokenV4,
 } from '../../memory/AutonomousPersonalNativeMemoryAdapterV4';
 import { cloneBoundedAutomaticCaptureJson } from '../../storage/BoundedAutomaticCaptureJson';
+import { registerNativeMemoryWorkflowFinalizerV4 } from '../../utils/nativeMemoryWorkflowLifecycleV4';
+
+type NativeMemoryRunLeaseV4 = {
+  active: boolean;
+  inFlight: number;
+  drainPromise: Promise<void> | null;
+  resolveDrain: (() => void) | null;
+};
 
 type NativeMemoryContinuationV4 = {
   readonly scopeHash: string;
   readonly settingsHash: string;
+  readonly signalRef: WeakRef<AbortSignal>;
+  readonly signalState: NativeMemoryContinuationSignalStateV4;
   phase: 'initializing' | 'active' | 'closing' | 'closed';
+  lifecycleMode: 'uninitialized' | 'workflow' | 'legacy';
   ready: Promise<boolean>;
   resolveReady: (ready: boolean) => void;
   memory: EngramChatMemory | null;
@@ -63,6 +77,8 @@ type NativeMemoryContinuationV4 = {
   abortListener: ((event: Event) => void) | null;
   closePromise: Promise<void> | null;
   operationTail: Promise<void>;
+  operationInFlight: number;
+  runLease: NativeMemoryRunLeaseV4 | null;
 };
 
 type NativeMemoryContinuationSignalStateV4 = {
@@ -74,11 +90,108 @@ const nativeMemoryContinuationsV4 = new WeakMap<
   AbortSignal,
   NativeMemoryContinuationSignalStateV4
 >();
+const nativeMemoryLeaseMethodsV4 = new Set([
+  'loadMemoryVariables',
+  'loadMemoryVariablesWithDiagnostics',
+  'saveContext',
+  'saveContextWithDelivery',
+  'saveContextWithOutcome',
+  'saveMessagesWithOutcome',
+  'saveMessagesWithDelivery',
+]);
+const nativeHistoryLeaseMethodsV4 = new Set([
+  'getMessages',
+  'getMessagesWithDiagnostics',
+  'addMessages',
+  'addMessagesWithOutcome',
+  'addMessagesWithDelivery',
+  'addMessage',
+  'addMessageAndGetEpisodeUuid',
+  'addMessageAndGetEpisode',
+  'addMessagesAndGetEpisodes',
+  'appendMessageWrites',
+  'addUserMessage',
+  'addAIMessage',
+  'addAIChatMessage',
+  'clear',
+]);
 const nativeContinuationAbortedGetterV4 = Object.getOwnPropertyDescriptor(
   AbortSignal.prototype,
   'aborted',
 )?.get;
 const MAX_NATIVE_MEMORY_CONTINUATIONS_PER_SIGNAL_V4 = 8;
+
+function createNativeMemoryRunLeaseV4(): NativeMemoryRunLeaseV4 {
+  return { active: true, inFlight: 0, drainPromise: null, resolveDrain: null };
+}
+
+function finishNativeMemoryRunLeaseOperationV4(lease: NativeMemoryRunLeaseV4): void {
+  lease.inFlight = Math.max(0, lease.inFlight - 1);
+  if (!lease.active && lease.inFlight === 0) lease.resolveDrain?.();
+}
+
+function trackNativeMemoryRunLeaseOperationV4<T>(
+  lease: NativeMemoryRunLeaseV4,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  if (!lease.active)
+    return Promise.reject(new Error('Engram replay-safe memory: initialization_failed'));
+  lease.inFlight += 1;
+  let result: T | Promise<T>;
+  try {
+    result = operation();
+  } catch (error) {
+    finishNativeMemoryRunLeaseOperationV4(lease);
+    return Promise.reject(error);
+  }
+  return Promise.resolve(result).finally(() => finishNativeMemoryRunLeaseOperationV4(lease));
+}
+
+function sealNativeMemoryRunLeaseV4(lease: NativeMemoryRunLeaseV4 | null): Promise<void> {
+  if (!lease) return Promise.resolve();
+  lease.active = false;
+  if (lease.inFlight === 0) return Promise.resolve();
+  if (!lease.drainPromise) {
+    lease.drainPromise = new Promise<void>((resolve) => {
+      lease.resolveDrain = resolve;
+    });
+  }
+  return lease.drainPromise;
+}
+
+function guardNativeMemoryLeaseObjectV4<T extends object>(
+  target: T,
+  lease: NativeMemoryRunLeaseV4,
+  methodNames: ReadonlySet<string>,
+  historyGetter = false,
+): T {
+  let history: object | null = null;
+  return new Proxy(target, {
+    get(current, property, receiver) {
+      const value = Reflect.get(current, property, receiver) as unknown;
+      if (
+        historyGetter &&
+        property === 'chatHistory' &&
+        value !== null &&
+        typeof value === 'object'
+      ) {
+        history ??= guardNativeMemoryLeaseObjectV4(value, lease, nativeHistoryLeaseMethodsV4);
+        return history;
+      }
+      if (typeof property === 'string' && methodNames.has(property) && typeof value === 'function')
+        return (...args: unknown[]) =>
+          trackNativeMemoryRunLeaseOperationV4(lease, () => Reflect.apply(value, current, args));
+      return value;
+    },
+  });
+}
+
+function guardNativeMemoryResponseV4<T extends object>(
+  response: T,
+  lease: NativeMemoryRunLeaseV4,
+): T {
+  return guardNativeMemoryLeaseObjectV4(response, lease, nativeMemoryLeaseMethodsV4, true);
+}
 
 function isNativeAbortSignalV4(value: unknown): value is AbortSignal {
   if (
@@ -279,43 +392,123 @@ function closeNativeMemoryContinuationV4(
   if (record.phase === 'closed') return record.closePromise ?? Promise.resolve();
   const initializationPending = record.phase === 'initializing';
   if (record.phase !== 'closing') record.phase = 'closing';
-  if (signal && signalState) removeNativeContinuationFromSignalV4(signal, signalState, record);
+  const currentSignal = signal ?? record.signalRef.deref();
+  const currentState = signalState ?? record.signalState;
+  if (currentSignal && currentState)
+    removeNativeContinuationFromSignalV4(currentSignal, currentState, record);
   if (record.closePromise) return record.closePromise;
 
-  const memory = record.memory;
-  record.memory = null;
-  if (memory) memory.closeNativeMemoryV4();
-  const adapterToken = record.adapterToken;
-  record.adapterToken = null;
   const storageBeforeWait = record.storage;
-  if (storageBeforeWait && adapterToken)
-    closePreparedAutonomousPersonalNativeMemoryAdapterV4(storageBeforeWait, adapterToken);
   if (aborted && initializationPending && record.backend === 'neo4j' && storageBeforeWait)
     void closeNativeContinuationOwnerOnceV4(record, storageBeforeWait).catch(() => undefined);
 
   const pendingOperations = record.operationTail;
+  const leaseDrain = sealNativeMemoryRunLeaseV4(record.runLease);
+  if (
+    !initializationPending &&
+    record.operationInFlight === 0 &&
+    (record.runLease?.inFlight ?? 0) === 0
+  ) {
+    const memory = record.memory;
+    record.memory = null;
+    if (memory) memory.closeNativeMemoryV4();
+
+    const adapterToken = record.adapterToken;
+    record.adapterToken = null;
+    if (storageBeforeWait && adapterToken)
+      closePreparedAutonomousPersonalNativeMemoryAdapterV4(storageBeforeWait, adapterToken);
+  }
   record.closePromise = (async () => {
     await pendingOperations;
+    await leaseDrain;
     if (record.phase !== 'active') await record.ready;
-    const lateMemory = record.memory;
+    const memory = record.memory;
     record.memory = null;
-    if (lateMemory) lateMemory.closeNativeMemoryV4();
+    if (memory) memory.closeNativeMemoryV4();
 
     const storage = record.storage;
     const backend = record.backend;
-    const lateAdapterToken = record.adapterToken;
+    const adapterToken = record.adapterToken;
     record.adapterToken = null;
-    if (storage && lateAdapterToken)
-      closePreparedAutonomousPersonalNativeMemoryAdapterV4(storage, lateAdapterToken);
+    if (storage && adapterToken)
+      closePreparedAutonomousPersonalNativeMemoryAdapterV4(storage, adapterToken);
     try {
       if (storage && backend === 'neo4j') await closeNativeContinuationOwnerOnceV4(record, storage);
     } finally {
       record.storage = null;
       record.backend = null;
+      record.runLease = null;
       record.phase = 'closed';
     }
   })();
   return record.closePromise;
+}
+
+function closeNativeMemoryWorkflowContinuationV4(record: object): Promise<void> {
+  const continuation = record as NativeMemoryContinuationV4;
+  return closeNativeMemoryContinuationV4(
+    continuation,
+    continuation.signalRef.deref(),
+    continuation.signalState,
+  );
+}
+
+function registerNativeMemoryWorkflowContinuationV4(
+  ctx: IExecuteFunctions,
+  record: NativeMemoryContinuationV4,
+): 'workflow' | 'legacy' {
+  const result = registerNativeMemoryWorkflowFinalizerV4(
+    ctx,
+    record,
+    closeNativeMemoryWorkflowContinuationV4,
+  );
+  return result === 'registered' ? 'workflow' : 'legacy';
+}
+
+function nativeMemoryContinuationRunCloseFunctionV4(
+  record: NativeMemoryContinuationV4,
+  signal: AbortSignal,
+  signalState: NativeMemoryContinuationSignalStateV4,
+  lease: NativeMemoryRunLeaseV4,
+): () => Promise<void> {
+  let releasePromise: Promise<void> | null = null;
+  return () => {
+    if (releasePromise) return releasePromise;
+    releasePromise = (async () => {
+      await sealNativeMemoryRunLeaseV4(lease);
+      await record.operationTail;
+      if (nativeContinuationAbortedGetterV4?.call(signal))
+        await closeNativeMemoryContinuationV4(record, signal, signalState, true).catch(
+          () => undefined,
+        );
+    })();
+    void releasePromise.catch(() => undefined);
+    return releasePromise;
+  };
+}
+
+function nativeMemoryContinuationResponseV4(
+  record: NativeMemoryContinuationV4,
+  ctx: IExecuteFunctions,
+): SupplyData {
+  if (record.phase !== 'active' || record.lifecycleMode !== 'workflow' || !record.memory)
+    throw new Error('Engram replay-safe memory: initialization_failed');
+  const lease = createNativeMemoryRunLeaseV4();
+  record.runLease = lease;
+  const signal = record.signalRef.deref();
+  if (!signal) throw new Error('Engram replay-safe memory: initialization_failed');
+  const loggedResponse = logWrapper(record.memory, ctx);
+  if (!loggedResponse || typeof loggedResponse !== 'object')
+    throw new Error('Engram replay-safe memory: initialization_failed');
+  return {
+    response: guardNativeMemoryResponseV4(loggedResponse, lease),
+    closeFunction: nativeMemoryContinuationRunCloseFunctionV4(
+      record,
+      signal,
+      record.signalState,
+      lease,
+    ),
+  };
 }
 
 function reserveNativeMemoryContinuationV4(
@@ -347,7 +540,10 @@ function reserveNativeMemoryContinuationV4(
   const record: NativeMemoryContinuationV4 = {
     scopeHash,
     settingsHash,
+    signalRef: new WeakRef(signal),
+    signalState: state,
     phase: 'initializing',
+    lifecycleMode: 'uninitialized',
     ready,
     resolveReady,
     memory: null,
@@ -358,6 +554,8 @@ function reserveNativeMemoryContinuationV4(
     abortListener: null,
     closePromise: null,
     operationTail: Promise.resolve(),
+    operationInFlight: 0,
+    runLease: null,
   };
   state.records.set(scopeHash, record);
   state.spentScopes.add(scopeHash);
@@ -386,7 +584,14 @@ function serializeNativeMemoryContinuationOperationV4<T>(
   record: NativeMemoryContinuationV4,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const current = record.operationTail.then(operation);
+  const current = record.operationTail.then(async () => {
+    record.operationInFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      record.operationInFlight = Math.max(0, record.operationInFlight - 1);
+    }
+  });
   record.operationTail = current.then(
     () => undefined,
     () => undefined,
@@ -481,7 +686,9 @@ function nativeMemoryContinuationSettingsHashV4(
           credentialReference: credentialReference('engramNeo4jApi'),
         };
 
+  const executionBudget = readNativeAutonomousPersonalExecutionBudgetV1(node.parameters, get);
   const projection = {
+    ...(executionBudget === undefined ? {} : { executionBudget }),
     nativeCaptureHash,
     nativeConfigurationHash,
     storageBinding,
@@ -573,6 +780,8 @@ async function reuseNativeMemoryContinuationV4(
   settingsHash: string,
 ): Promise<SupplyData> {
   try {
+    const lifecycleMode = registerNativeMemoryWorkflowContinuationV4(ctx, record);
+    if (record.lifecycleMode !== lifecycleMode) throw new Error('invalid continuation lifecycle');
     if (
       record.settingsHash !== settingsHash ||
       record.phase === 'closing' ||
@@ -585,6 +794,9 @@ async function reuseNativeMemoryContinuationV4(
     return await serializeNativeMemoryContinuationOperationV4(record, async () => {
       if (record.phase !== 'active' || !record.memory || !record.storage)
         throw new Error('Engram replay-safe memory: initialization_failed');
+      if (record.lifecycleMode === 'workflow') await sealNativeMemoryRunLeaseV4(record.runLease);
+      if (record.phase !== 'active' || !record.memory || !record.storage)
+        throw new Error('Engram replay-safe memory: initialization_failed');
       const memory = record.memory;
       const storage = record.storage;
       const refreshed = await refreshAutonomousPersonalNativeMemoryAdapterV4(
@@ -595,6 +807,8 @@ async function reuseNativeMemoryContinuationV4(
       );
       if (!refreshed || record.phase !== 'active' || record.memory !== memory)
         throw new Error('Engram replay-safe memory: initialization_failed');
+      if (record.lifecycleMode === 'workflow')
+        return nativeMemoryContinuationResponseV4(record, ctx);
       return {
         response: logWrapper(memory, ctx),
         closeFunction: nativeMemoryContinuationCloseFunctionV4(record, signal, signalState),
@@ -1505,603 +1719,9 @@ export class EngramMemory implements INodeType {
   };
 
   async supplyData(this: IExecuteFunctions, itemIndex: number): Promise<SupplyData> {
-    const nativeCapture = readReplaySafeMemoryNativeContext(this, itemIndex);
-    const autonomousPersonal =
-      this.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1';
-    if (autonomousPersonal && !nativeCapture)
-      throw new NodeOperationError(
-        this.getNode(),
-        'Autonomous Personal Memory requires Replay Safe capture',
-      );
-    const sessionId = nativeCapture
-      ? readReplaySafeMemoryNamespace(this, itemIndex)
-      : getSessionId(this, itemIndex);
-    const backend = this.getNodeParameter('backend', itemIndex, 'embedded') as string;
-    const contextWindow = this.getNodeParameter('contextWindowLength', itemIndex, 10) as number;
-    const enableExtraction =
-      (this.getNodeParameter('enableExtraction', itemIndex, 'disabled') as string) === 'enabled';
-    const maxFactsPerQuery = this.getNodeParameter('maxFactsPerQuery', itemIndex, 10) as number;
-    const minRelevanceScore = this.getNodeParameter('minRelevanceScore', itemIndex, 0.5) as number;
-    const retentionType = this.getNodeParameter('retentionType', itemIndex, 'forever') as string;
-    const retentionValue = this.getNodeParameter('retentionValue', itemIndex, 30) as number;
-    const nodeVersion = this.getNode().typeVersion ?? 1;
-    const usesGovernanceControls = nodeVersion >= 2;
-    const storeHumanEpisodes = usesGovernanceControls
-      ? (this.getNodeParameter('storeHumanEpisodes', itemIndex, 'enabled') as string) === 'enabled'
-      : true;
-    const humanEpisodeKind = usesGovernanceControls
-      ? (this.getNodeParameter('humanEpisodeKind', itemIndex, 'active_human') as
-          | 'active_human'
-          | 'passive_human')
-      : 'active_human';
-    const storeAiEpisodes = usesGovernanceControls
-      ? (this.getNodeParameter('storeAiEpisodes', itemIndex, 'enabled') as string) === 'enabled'
-      : true;
-    const extractHuman = usesGovernanceControls
-      ? (this.getNodeParameter('extractHuman', itemIndex, 'enabled') as string) === 'enabled'
-      : true;
-    const extractAi = usesGovernanceControls
-      ? (this.getNodeParameter('extractAi', itemIndex, 'disabled') as string) === 'enabled'
-      : true;
-    const extractSystemTool = usesGovernanceControls
-      ? (this.getNodeParameter('extractSystemTool', itemIndex, 'disabled') as string) === 'enabled'
-      : false;
-    const autoAcceptConfidence = usesGovernanceControls
-      ? (this.getNodeParameter('autoAcceptConfidence', itemIndex, 0.85) as number)
-      : undefined;
-    const rejectBelowConfidence = usesGovernanceControls
-      ? (this.getNodeParameter('rejectBelowConfidence', itemIndex, 0.3) as number)
-      : undefined;
-    const acceptedOnlyRetrieval = usesGovernanceControls
-      ? (this.getNodeParameter('memoryFactPolicy', itemIndex, 'acceptedOnly') as string) ===
-        'acceptedOnly'
-      : false;
-
-    const policy = MemoryPolicySchema.parse(
-      usesGovernanceControls
-        ? {
-            historyFilter: this.getNodeParameter('historyFilter', itemIndex, 'off'),
-            maxHistoryScan: this.getNodeParameter('maxHistoryScan', itemIndex, 1000),
-            legacyArtifactHashes: (
-              this.getNodeParameter('legacyArtifactHashes', itemIndex, '') as string
-            )
-              .split(/[\s,]+/)
-              .filter(Boolean),
-            finalTurnWrites:
-              this.getNodeParameter('messageWritePolicy', itemIndex, 'legacy') === 'finalTurns',
-            storeToolAudit:
-              this.getNodeParameter('storeToolAudit', itemIndex, 'disabled') === 'enabled',
-          }
-        : {},
+    return runAutonomousPersonalMemoryPreparationV1(this, itemIndex, (registerFailureCleanup) =>
+      supplyMemoryDataWithinPreparationV1.call(this, itemIndex, registerFailureCleanup),
     );
-    // Resolve once in this supplyData item's expression context, never from previous history.
-    const currentHumanQuery = usesGovernanceControls
-      ? (this.getNodeParameter('currentHumanQuery', itemIndex, '') as string)
-      : '';
-
-    const nativeConfiguration = (() => {
-      if (!nativeCapture) return undefined;
-      try {
-        const automatic = readAutomaticRuntime(
-          (name, fallback) => this.getNodeParameter(name, itemIndex, fallback as string),
-          sessionId,
-          '0'.repeat(64),
-        );
-        // The legacy reader retains an own undefined optional. This new typed
-        // JSON boundary omits only that known, absent optional field.
-        if (automatic && automatic.rawHumanContent === undefined) delete automatic.rawHumanContent;
-        return {
-          policy: readExtractionPolicy((name, fallback) =>
-            this.getNodeParameter(name, itemIndex, fallback as string),
-          ),
-          automatic,
-        };
-      } catch {
-        throw new Error('Engram replay-safe memory: unsupported_configuration');
-      }
-    })();
-    const nativePolicy = nativeConfiguration?.policy;
-    const nativeAutomatic = nativeConfiguration?.automatic;
-    if (
-      nativeCapture &&
-      (!['embedded', 'neo4j'].includes(backend) ||
-        !nativeAutomatic?.capturedSourceId ||
-        !CurrentHumanQuerySchema.safeParse(currentHumanQuery).success ||
-        !currentHumanQuery ||
-        nativePolicy?.mode !== 'bounded' ||
-        this.getNodeParameter('extractionExecution', itemIndex, 'synchronous') !== 'synchronous' ||
-        retentionType !== 'forever' ||
-        !policy.finalTurnWrites ||
-        policy.historyFilter === 'off' ||
-        !storeHumanEpisodes ||
-        !storeAiEpisodes ||
-        extractAi ||
-        extractSystemTool ||
-        !acceptedOnlyRetrieval)
-    )
-      throw new Error('Engram replay-safe memory: unsupported_configuration');
-
-    let continuation:
-      | {
-          signal: AbortSignal;
-          state: NativeMemoryContinuationSignalStateV4;
-          record: NativeMemoryContinuationV4;
-        }
-      | undefined;
-    if (nativeCapture && autonomousPersonal) {
-      const scope = nativeMemoryContinuationScopeV4(this);
-      if (!scope)
-        throw new NodeOperationError(
-          this.getNode(),
-          'Engram replay-safe memory: initialization_failed',
-        );
-      let settingsHash: string;
-      try {
-        settingsHash = nativeMemoryContinuationSettingsHashV4(
-          this,
-          itemIndex,
-          sessionId,
-          nativeCapture,
-          nativeConfiguration,
-        );
-      } catch {
-        throw new NodeOperationError(
-          this.getNode(),
-          'Engram replay-safe memory: initialization_failed',
-        );
-      }
-      try {
-        const reservation = reserveNativeMemoryContinuationV4(
-          scope.signal,
-          scope.scopeHash,
-          settingsHash,
-        );
-        if (!reservation.initial)
-          return await reuseNativeMemoryContinuationV4(
-            this,
-            itemIndex,
-            scope.signal,
-            reservation.state,
-            reservation.record,
-            settingsHash,
-          );
-        if (reservation.record.phase !== 'initializing')
-          throw new Error('Engram replay-safe memory: initialization_failed');
-        continuation = {
-          signal: scope.signal,
-          state: reservation.state,
-          record: reservation.record,
-        };
-      } catch {
-        throw new NodeOperationError(
-          this.getNode(),
-          'Engram replay-safe memory: initialization_failed',
-        );
-      }
-    }
-
-    let autonomousStorage: IGraphStorage | undefined;
-    let autonomousAdapter: PrivateAutonomousPersonalNativeMemoryAdapterTokenV4 | undefined;
-    try {
-      if (continuation && continuation.record.phase !== 'initializing')
-        throw new Error('Engram replay-safe memory: initialization_failed');
-      // Get or create storage instance
-      let storage;
-      let storeIdentity: string;
-      if (backend === 'neo4j') {
-        const credentials = await this.getCredentials('engramNeo4jApi');
-        storeIdentity = fingerprint({
-          backend,
-          uri: credentials.uri,
-          database: credentials.database ?? 'neo4j',
-        });
-        if (nativeCapture) {
-          const identity = neo4jAutomaticCaptureStoreHash(
-            credentials.uri as string,
-            credentials.database as string | undefined,
-          );
-          if (!identity) throw new Error('Engram replay-safe memory: unsupported_configuration');
-          storeIdentity = identity;
-        }
-        storage = createStorage({
-          backend: 'neo4j',
-          uri: credentials.uri as string,
-          username: credentials.username as string,
-          password: credentials.password as string,
-          database: credentials.database as string,
-        });
-      } else {
-        const workflowId = this.getWorkflow().id ?? 'default';
-        const customPath = this.getNodeParameter('customStoragePath', itemIndex, '') as string;
-        const persistPath = resolveStoragePath({
-          customStoragePath: customPath,
-          workflowId,
-        });
-        storeIdentity = fingerprint({ backend: 'embedded', persistPath });
-        if (nativeCapture) {
-          const identity = embeddedAutomaticCaptureStoreHash(persistPath);
-          if (!identity) throw new Error('Engram replay-safe memory: unsupported_configuration');
-          storeIdentity = identity;
-        }
-
-        if (!nativeCapture)
-          migrateStorageIfNeeded({
-            newPath: persistPath,
-            workflowId,
-            staticData: this.getWorkflowStaticData('node'),
-            logger: this.logger,
-          });
-
-        storage = createStorage({
-          backend: 'embedded',
-          persistPath,
-        });
-      }
-
-      if (autonomousPersonal) autonomousStorage = storage;
-      if (continuation) {
-        continuation.record.storage = storage;
-        continuation.record.backend = backend;
-      }
-      if (continuation && continuation.record.phase !== 'initializing')
-        throw new Error('Engram replay-safe memory: initialization_failed');
-      await storage.initialize();
-      if (continuation && continuation.record.phase !== 'initializing')
-        throw new Error('Engram replay-safe memory: initialization_failed');
-
-      const extractionExecution = usesGovernanceControls
-        ? (this.getNodeParameter('extractionExecution', itemIndex, 'synchronous') as
-            | 'synchronous'
-            | 'durable')
-        : 'synchronous';
-      if (extractionExecution === 'durable' && retentionType !== 'forever')
-        throw new Error(
-          'Durable extraction requires Keep Forever retention until jobs are explicitly resolved',
-        );
-      // Apply retention policy before loading
-      if (retentionType !== 'forever') {
-        await storage.applyRetention(sessionId, {
-          type: retentionType as 'days' | 'max_episodes',
-          value: retentionValue,
-        });
-      }
-
-      // Build extraction LLM config if enabled
-      let llmConfig;
-      let entityTypes;
-      let extractionCreds;
-      if (enableExtraction && !nativeCapture) {
-        extractionCreds = await this.getCredentials('engramExtractionApi');
-        const model = this.getNodeParameter('extractionModel', itemIndex, '') as string;
-        if (!model) {
-          throw new NodeOperationError(
-            this.getNode(),
-            'Extraction Model is required when Knowledge Extraction is enabled',
-            {
-              description:
-                'Select a model from the dropdown. If the list is empty, verify your Engram Extraction LLM credential has a valid Base URL and API Key.',
-            },
-          );
-        }
-        const temperatureMode = this.getNodeParameter(
-          'extractionTemperatureMode',
-          itemIndex,
-          'legacy',
-        ) as string;
-        const temperature = ExtractionTemperatureSchema.parse(
-          temperatureMode === 'custom'
-            ? {
-                mode: temperatureMode,
-                value: this.getNodeParameter('extractionTemperature', itemIndex, 0),
-              }
-            : { mode: temperatureMode },
-        );
-        llmConfig = {
-          temperature,
-          apiKey: extractionCreds.apiKey as string,
-          baseUrl: extractionCreds.baseUrl as string,
-          model,
-        };
-
-        const entityTypesRaw = this.getNodeParameter(
-          'entityTypes',
-          itemIndex,
-          'person, organization, location, concept, event',
-        ) as string;
-        entityTypes = entityTypesRaw
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean);
-      }
-
-      // Build embedding config if enabled
-      let embeddingConfig;
-      if (enableExtraction && llmConfig) {
-        const enableEmbeddings =
-          (this.getNodeParameter('enableEmbeddings', itemIndex, 'disabled') as string) ===
-          'enabled';
-
-        if (enableEmbeddings) {
-          const embeddingModel = this.getNodeParameter('embeddingModel', itemIndex, '') as string;
-
-          if (embeddingModel && extractionCreds) {
-            // Reuse the extraction API credential already fetched above
-            embeddingConfig = {
-              apiKey: extractionCreds.apiKey as string,
-              baseUrl: extractionCreds.baseUrl as string,
-              model: embeddingModel,
-            };
-          }
-        }
-      }
-      if (
-        nativeCapture &&
-        this.getNodeParameter('enableEmbeddings', itemIndex, 'disabled') === 'enabled'
-      ) {
-        const model = this.getNodeParameter('embeddingModel', itemIndex, '') as string;
-        if (model) {
-          const credentials = await this.getCredentials('engramExtractionApi');
-          embeddingConfig = {
-            apiKey: credentials.apiKey as string,
-            baseUrl: credentials.baseUrl as string,
-            model,
-          };
-        }
-        if (continuation && continuation.record.phase !== 'initializing')
-          throw new Error('Engram replay-safe memory: initialization_failed');
-      }
-
-      // Build traversal config if enabled
-      let enableTraversal = false;
-      let traversalHops = 1;
-      if (enableExtraction || autonomousPersonal) {
-        enableTraversal =
-          (this.getNodeParameter('enableTraversal', itemIndex, 'disabled') as string) === 'enabled';
-        if (enableTraversal) {
-          traversalHops = this.getNodeParameter('traversalHops', itemIndex, 1) as number;
-        }
-      }
-
-      if (continuation && continuation.record.phase !== 'initializing')
-        throw new Error('Engram replay-safe memory: initialization_failed');
-      if (autonomousPersonal)
-        autonomousAdapter = await prepareNativeAutonomousPersonalMemoryAdapterV4(
-          this,
-          itemIndex,
-          storage,
-        );
-      if (continuation) {
-        continuation.record.adapterToken = autonomousAdapter ?? null;
-        if (continuation.record.phase !== 'initializing')
-          throw new Error('Engram replay-safe memory: initialization_failed');
-      }
-
-      const memory = new EngramChatMemory(
-        {
-          ...nativeCapture,
-          automaticMemory:
-            nativeCapture && nativeAutomatic
-              ? { ...nativeAutomatic, storeIdentity }
-              : nodeVersion >= 3
-                ? readAutomaticRuntime(
-                    (name, fallback) => this.getNodeParameter(name, itemIndex, fallback as string),
-                    sessionId,
-                    storeIdentity,
-                  )
-                : undefined,
-          storage,
-          groupId: sessionId,
-          policy,
-          currentHumanQuery,
-          memoryKey: 'chat_history',
-          returnMessages: true,
-          inputKey: 'input',
-          outputKey: 'output',
-          contextWindow,
-          maxFactsPerQuery,
-          minRelevanceScore,
-          enableExtraction: enableExtraction && !!llmConfig,
-          llmConfig,
-          entityTypes,
-          extractionPolicy:
-            nativePolicy ??
-            (usesGovernanceControls
-              ? readExtractionPolicy((name, fallback) =>
-                  this.getNodeParameter(name, itemIndex, fallback as string),
-                )
-              : undefined),
-          extractionExecution,
-          extractionRouteId: usesGovernanceControls
-            ? (this.getNodeParameter('extractionRouteId', itemIndex, '') as string)
-            : undefined,
-          retrievalMode: usesGovernanceControls
-            ? (this.getNodeParameter('graphContextPolicy', itemIndex, 'legacy') as
-                | 'legacy'
-                | 'current'
-                | 'historical'
-                | 'asOf')
-            : 'legacy',
-          retrievalAt: usesGovernanceControls
-            ? (this.getNodeParameter('graphContextAt', itemIndex, '') as string)
-            : undefined,
-          graphEvidenceBudgets: usesGovernanceControls
-            ? {
-                durable: this.getNodeParameter('graphDurableTokens', itemIndex, 4096) as number,
-                historical: this.getNodeParameter(
-                  'graphHistoricalTokens',
-                  itemIndex,
-                  2048,
-                ) as number,
-              }
-            : undefined,
-          embeddingConfig,
-          enableTraversal,
-          traversalHops,
-          storeHumanEpisodes,
-          humanEpisodeKind,
-          storeAiEpisodes,
-          extractHuman,
-          extractAi,
-          extractSystemTool,
-          acceptedOnlyRetrieval,
-          contextTokenBudget: usesGovernanceControls
-            ? (this.getNodeParameter('contextTokenBudget', itemIndex, 2000) as number)
-            : undefined,
-          includeProvenanceInContext: usesGovernanceControls,
-          retrievalFilters: usesGovernanceControls
-            ? {
-                sender_id:
-                  (this.getNodeParameter('retrievalSenderId', itemIndex, '') as string).trim() ||
-                  undefined,
-                episode_kind: ((this.getNodeParameter(
-                  'retrievalEpisodeKind',
-                  itemIndex,
-                  '',
-                ) as string) || undefined) as
-                  | 'active_human'
-                  | 'passive_human'
-                  | 'assistant_reply'
-                  | 'monitor_summary'
-                  | 'tool_output'
-                  | 'system'
-                  | 'legacy'
-                  | undefined,
-                trust_level: ((this.getNodeParameter(
-                  'retrievalTrustLevel',
-                  itemIndex,
-                  '',
-                ) as string) || undefined) as
-                  | 'trusted'
-                  | 'standard'
-                  | 'unverified'
-                  | 'untrusted'
-                  | undefined,
-                source_workflow_id:
-                  (
-                    this.getNodeParameter('retrievalSourceWorkflowId', itemIndex, '') as string
-                  ).trim() || undefined,
-                source_execution_id:
-                  (
-                    this.getNodeParameter('retrievalSourceExecutionId', itemIndex, '') as string
-                  ).trim() || undefined,
-                reference_after:
-                  (this.getNodeParameter('retrievalReferenceAfter', itemIndex, '') as string) ||
-                  undefined,
-                reference_before:
-                  (this.getNodeParameter('retrievalReferenceBefore', itemIndex, '') as string) ||
-                  undefined,
-              }
-            : undefined,
-          requireExtractionConfidence: usesGovernanceControls,
-          extractionThresholdPolicy: usesGovernanceControls
-            ? {
-                autoAcceptThreshold: autoAcceptConfidence!,
-                rejectBelowThreshold: rejectBelowConfidence!,
-              }
-            : undefined,
-          episodeMetadata: usesGovernanceControls
-            ? {
-                source_message_id:
-                  (this.getNodeParameter('sourceMessageId', itemIndex, '') as string).trim() ||
-                  null,
-                idempotency_key:
-                  (
-                    this.getNodeParameter('episodeIdempotencyKey', itemIndex, '') as string
-                  ).trim() || null,
-                conversation_id:
-                  (this.getNodeParameter('conversationId', itemIndex, '') as string).trim() ||
-                  sessionId,
-                sender_id:
-                  (this.getNodeParameter('senderId', itemIndex, '') as string).trim() || null,
-                sender_name:
-                  (this.getNodeParameter('senderName', itemIndex, '') as string).trim() || null,
-                quoted_message_id:
-                  (this.getNodeParameter('quotedMessageId', itemIndex, '') as string).trim() ||
-                  null,
-                trust_level: this.getNodeParameter('episodeTrustLevel', itemIndex, 'standard') as
-                  | 'trusted'
-                  | 'standard'
-                  | 'unverified'
-                  | 'untrusted',
-                source_workflow_id: this.getWorkflow().id ?? null,
-                source_execution_id: this.getExecutionId(),
-                attributes: parseEpisodeAttributes(
-                  this.getNodeParameter('episodeAttributes', itemIndex, '{}'),
-                ),
-              }
-            : undefined,
-        },
-        autonomousAdapter,
-      );
-
-      if (continuation) {
-        if (continuation.record.phase !== 'initializing') {
-          memory.closeNativeMemoryV4();
-          throw new Error('Engram replay-safe memory: initialization_failed');
-        }
-        continuation.record.memory = memory;
-        continuation.record.adapterToken = null;
-        resolveNativeMemoryContinuationV4(continuation.record, true);
-      }
-
-      return {
-        response: logWrapper(memory, this),
-        ...(autonomousPersonal
-          ? {
-              closeFunction: continuation
-                ? nativeMemoryContinuationCloseFunctionV4(
-                    continuation.record,
-                    continuation.signal,
-                    continuation.state,
-                  )
-                : async () => {
-                    memory.closeNativeMemoryV4();
-                    // Embedded StorageFactory instances are shared with other
-                    // executions. This node owns only its Neo4j connection.
-                    if (backend === 'neo4j') await storage.close();
-                  },
-            }
-          : {}),
-      };
-    } catch (error: unknown) {
-      if (autonomousStorage && autonomousAdapter)
-        closePreparedAutonomousPersonalNativeMemoryAdapterV4(autonomousStorage, autonomousAdapter);
-      if (continuation) {
-        continuation.record.adapterToken = null;
-        if (autonomousStorage) {
-          continuation.record.storage = autonomousStorage;
-          continuation.record.backend = backend;
-        }
-        resolveNativeMemoryContinuationV4(continuation.record, false);
-        await closeNativeMemoryContinuationV4(
-          continuation.record,
-          continuation.signal,
-          continuation.state,
-        ).catch(() => undefined);
-      } else if (autonomousStorage && backend === 'neo4j') {
-        try {
-          await autonomousStorage.close();
-        } catch {
-          // Preserve the redacted initialization failure.
-        }
-      }
-      if (nativeCapture)
-        throw new NodeOperationError(
-          this.getNode(),
-          'Engram replay-safe memory: initialization_failed',
-        );
-      if (error instanceof NodeOperationError) throw error;
-      throw new NodeOperationError(
-        this.getNode(),
-        `Failed to initialize Engram memory: ${(error as Error).message}`,
-        {
-          description:
-            backend === 'neo4j'
-              ? 'Check your Neo4j credentials and server connection'
-              : 'Check file system permissions for embedded storage',
-        },
-      );
-    }
   }
 }
 
@@ -2117,5 +1737,644 @@ function parseEpisodeAttributes(value: unknown): Record<string, unknown> {
       : {};
   } catch {
     return {};
+  }
+}
+
+async function supplyMemoryDataWithinPreparationV1(
+  this: IExecuteFunctions,
+  itemIndex: number,
+  registerPreparationFailureCleanup: (cleanup: () => Promise<void>) => void,
+): Promise<SupplyData> {
+  const nativeCapture = readReplaySafeMemoryNativeContext(this, itemIndex);
+  const autonomousPersonal =
+    this.getNode().parameters?.automaticPreferenceInterpreter === 'autonomousPersonalV1';
+  if (autonomousPersonal && !nativeCapture)
+    throw new NodeOperationError(
+      this.getNode(),
+      'Autonomous Personal Memory requires Replay Safe capture',
+    );
+  const sessionId = nativeCapture
+    ? readReplaySafeMemoryNamespace(this, itemIndex)
+    : getSessionId(this, itemIndex);
+  const backend = this.getNodeParameter('backend', itemIndex, 'embedded') as string;
+  const contextWindow = this.getNodeParameter('contextWindowLength', itemIndex, 10) as number;
+  const enableExtraction =
+    (this.getNodeParameter('enableExtraction', itemIndex, 'disabled') as string) === 'enabled';
+  const maxFactsPerQuery = this.getNodeParameter('maxFactsPerQuery', itemIndex, 10) as number;
+  const minRelevanceScore = this.getNodeParameter('minRelevanceScore', itemIndex, 0.5) as number;
+  const retentionType = this.getNodeParameter('retentionType', itemIndex, 'forever') as string;
+  const retentionValue = this.getNodeParameter('retentionValue', itemIndex, 30) as number;
+  const nodeVersion = this.getNode().typeVersion ?? 1;
+  const usesGovernanceControls = nodeVersion >= 2;
+  const storeHumanEpisodes = usesGovernanceControls
+    ? (this.getNodeParameter('storeHumanEpisodes', itemIndex, 'enabled') as string) === 'enabled'
+    : true;
+  const humanEpisodeKind = usesGovernanceControls
+    ? (this.getNodeParameter('humanEpisodeKind', itemIndex, 'active_human') as
+        | 'active_human'
+        | 'passive_human')
+    : 'active_human';
+  const storeAiEpisodes = usesGovernanceControls
+    ? (this.getNodeParameter('storeAiEpisodes', itemIndex, 'enabled') as string) === 'enabled'
+    : true;
+  const extractHuman = usesGovernanceControls
+    ? (this.getNodeParameter('extractHuman', itemIndex, 'enabled') as string) === 'enabled'
+    : true;
+  const extractAi = usesGovernanceControls
+    ? (this.getNodeParameter('extractAi', itemIndex, 'disabled') as string) === 'enabled'
+    : true;
+  const extractSystemTool = usesGovernanceControls
+    ? (this.getNodeParameter('extractSystemTool', itemIndex, 'disabled') as string) === 'enabled'
+    : false;
+  const autoAcceptConfidence = usesGovernanceControls
+    ? (this.getNodeParameter('autoAcceptConfidence', itemIndex, 0.85) as number)
+    : undefined;
+  const rejectBelowConfidence = usesGovernanceControls
+    ? (this.getNodeParameter('rejectBelowConfidence', itemIndex, 0.3) as number)
+    : undefined;
+  const acceptedOnlyRetrieval = usesGovernanceControls
+    ? (this.getNodeParameter('memoryFactPolicy', itemIndex, 'acceptedOnly') as string) ===
+      'acceptedOnly'
+    : false;
+
+  const policy = MemoryPolicySchema.parse(
+    usesGovernanceControls
+      ? {
+          historyFilter: this.getNodeParameter('historyFilter', itemIndex, 'off'),
+          maxHistoryScan: this.getNodeParameter('maxHistoryScan', itemIndex, 1000),
+          legacyArtifactHashes: (
+            this.getNodeParameter('legacyArtifactHashes', itemIndex, '') as string
+          )
+            .split(/[\s,]+/)
+            .filter(Boolean),
+          finalTurnWrites:
+            this.getNodeParameter('messageWritePolicy', itemIndex, 'legacy') === 'finalTurns',
+          storeToolAudit:
+            this.getNodeParameter('storeToolAudit', itemIndex, 'disabled') === 'enabled',
+        }
+      : {},
+  );
+  // Resolve once in this supplyData item's expression context, never from previous history.
+  const currentHumanQuery = usesGovernanceControls
+    ? (this.getNodeParameter('currentHumanQuery', itemIndex, '') as string)
+    : '';
+
+  const nativeConfiguration = (() => {
+    if (!nativeCapture) return undefined;
+    try {
+      const automatic = readAutomaticRuntime(
+        (name, fallback) => this.getNodeParameter(name, itemIndex, fallback as string),
+        sessionId,
+        '0'.repeat(64),
+      );
+      // The legacy reader retains an own undefined optional. This new typed
+      // JSON boundary omits only that known, absent optional field.
+      if (automatic && automatic.rawHumanContent === undefined) delete automatic.rawHumanContent;
+      return {
+        policy: readExtractionPolicy((name, fallback) =>
+          this.getNodeParameter(name, itemIndex, fallback as string),
+        ),
+        automatic,
+      };
+    } catch {
+      throw new Error('Engram replay-safe memory: unsupported_configuration');
+    }
+  })();
+  const nativePolicy = nativeConfiguration?.policy;
+  const nativeAutomatic = nativeConfiguration?.automatic;
+  if (
+    nativeCapture &&
+    (!['embedded', 'neo4j'].includes(backend) ||
+      !nativeAutomatic?.capturedSourceId ||
+      !CurrentHumanQuerySchema.safeParse(currentHumanQuery).success ||
+      !currentHumanQuery ||
+      nativePolicy?.mode !== 'bounded' ||
+      this.getNodeParameter('extractionExecution', itemIndex, 'synchronous') !== 'synchronous' ||
+      retentionType !== 'forever' ||
+      !policy.finalTurnWrites ||
+      policy.historyFilter === 'off' ||
+      !storeHumanEpisodes ||
+      !storeAiEpisodes ||
+      extractAi ||
+      extractSystemTool ||
+      !acceptedOnlyRetrieval)
+  )
+    throw new Error('Engram replay-safe memory: unsupported_configuration');
+
+  let continuation:
+    | {
+        signal: AbortSignal;
+        state: NativeMemoryContinuationSignalStateV4;
+        record: NativeMemoryContinuationV4;
+      }
+    | undefined;
+  if (nativeCapture && autonomousPersonal) {
+    const scope = nativeMemoryContinuationScopeV4(this);
+    if (!scope)
+      throw new NodeOperationError(
+        this.getNode(),
+        'Engram replay-safe memory: initialization_failed',
+      );
+    let settingsHash: string;
+    try {
+      settingsHash = nativeMemoryContinuationSettingsHashV4(
+        this,
+        itemIndex,
+        sessionId,
+        nativeCapture,
+        nativeConfiguration,
+      );
+    } catch {
+      throw new NodeOperationError(
+        this.getNode(),
+        'Engram replay-safe memory: initialization_failed',
+      );
+    }
+    try {
+      const reservation = reserveNativeMemoryContinuationV4(
+        scope.signal,
+        scope.scopeHash,
+        settingsHash,
+      );
+      if (!reservation.initial) {
+        const reusedResponse: { value: SupplyData | undefined } = { value: undefined };
+        registerPreparationFailureCleanup(async () => {
+          await reusedResponse.value?.closeFunction?.();
+        });
+        reusedResponse.value = await reuseNativeMemoryContinuationV4(
+          this,
+          itemIndex,
+          scope.signal,
+          reservation.state,
+          reservation.record,
+          settingsHash,
+        );
+        currentAutonomousPersonalExecutionScopeWorkV1();
+        return reusedResponse.value;
+      }
+      if (reservation.record.phase !== 'initializing')
+        throw new Error('Engram replay-safe memory: initialization_failed');
+      continuation = {
+        signal: scope.signal,
+        state: reservation.state,
+        record: reservation.record,
+      };
+      reservation.record.lifecycleMode = registerNativeMemoryWorkflowContinuationV4(
+        this,
+        reservation.record,
+      );
+    } catch {
+      if (continuation) {
+        resolveNativeMemoryContinuationV4(continuation.record, false);
+        await closeNativeMemoryContinuationV4(
+          continuation.record,
+          continuation.signal,
+          continuation.state,
+        ).catch(() => undefined);
+      }
+      throw new NodeOperationError(
+        this.getNode(),
+        'Engram replay-safe memory: initialization_failed',
+      );
+    }
+  }
+
+  let autonomousStorage: IGraphStorage | undefined;
+  let autonomousAdapter: PrivateAutonomousPersonalNativeMemoryAdapterTokenV4 | undefined;
+  let returnedMemory: EngramChatMemory | undefined;
+  let preparedForReturn = false;
+  registerPreparationFailureCleanup(async () => {
+    if (!preparedForReturn) return;
+    returnedMemory?.closeNativeMemoryV4();
+    if (continuation) {
+      await closeNativeMemoryContinuationV4(
+        continuation.record,
+        continuation.signal,
+        continuation.state,
+      );
+    } else if (autonomousStorage && backend === 'neo4j') {
+      await autonomousStorage.close();
+    }
+  });
+  try {
+    if (continuation && continuation.record.phase !== 'initializing')
+      throw new Error('Engram replay-safe memory: initialization_failed');
+    // Get or create storage instance
+    let storage;
+    let storeIdentity: string;
+    if (backend === 'neo4j') {
+      const credentials = await this.getCredentials('engramNeo4jApi');
+      storeIdentity = fingerprint({
+        backend,
+        uri: credentials.uri,
+        database: credentials.database ?? 'neo4j',
+      });
+      if (nativeCapture) {
+        const identity = neo4jAutomaticCaptureStoreHash(
+          credentials.uri as string,
+          credentials.database as string | undefined,
+        );
+        if (!identity) throw new Error('Engram replay-safe memory: unsupported_configuration');
+        storeIdentity = identity;
+      }
+      storage = createStorage({
+        backend: 'neo4j',
+        uri: credentials.uri as string,
+        username: credentials.username as string,
+        password: credentials.password as string,
+        database: credentials.database as string,
+      });
+    } else {
+      const workflowId = this.getWorkflow().id ?? 'default';
+      const customPath = this.getNodeParameter('customStoragePath', itemIndex, '') as string;
+      const persistPath = resolveStoragePath({
+        customStoragePath: customPath,
+        workflowId,
+      });
+      storeIdentity = fingerprint({ backend: 'embedded', persistPath });
+      if (nativeCapture) {
+        const identity = embeddedAutomaticCaptureStoreHash(persistPath);
+        if (!identity) throw new Error('Engram replay-safe memory: unsupported_configuration');
+        storeIdentity = identity;
+      }
+
+      if (!nativeCapture)
+        migrateStorageIfNeeded({
+          newPath: persistPath,
+          workflowId,
+          staticData: this.getWorkflowStaticData('node'),
+          logger: this.logger,
+        });
+
+      storage = createStorage({
+        backend: 'embedded',
+        persistPath,
+      });
+    }
+
+    if (autonomousPersonal) autonomousStorage = storage;
+    if (continuation) {
+      continuation.record.storage = storage;
+      continuation.record.backend = backend;
+    }
+    if (continuation && continuation.record.phase !== 'initializing')
+      throw new Error('Engram replay-safe memory: initialization_failed');
+    await storage.initialize();
+    if (continuation && continuation.record.phase !== 'initializing')
+      throw new Error('Engram replay-safe memory: initialization_failed');
+
+    const extractionExecution = usesGovernanceControls
+      ? (this.getNodeParameter('extractionExecution', itemIndex, 'synchronous') as
+          | 'synchronous'
+          | 'durable')
+      : 'synchronous';
+    if (extractionExecution === 'durable' && retentionType !== 'forever')
+      throw new Error(
+        'Durable extraction requires Keep Forever retention until jobs are explicitly resolved',
+      );
+    // Apply retention policy before loading
+    if (retentionType !== 'forever') {
+      await storage.applyRetention(sessionId, {
+        type: retentionType as 'days' | 'max_episodes',
+        value: retentionValue,
+      });
+    }
+
+    // Build extraction LLM config if enabled
+    let llmConfig;
+    let entityTypes;
+    let extractionCreds;
+    if (enableExtraction && !nativeCapture) {
+      extractionCreds = await this.getCredentials('engramExtractionApi');
+      const model = this.getNodeParameter('extractionModel', itemIndex, '') as string;
+      if (!model) {
+        throw new NodeOperationError(
+          this.getNode(),
+          'Extraction Model is required when Knowledge Extraction is enabled',
+          {
+            description:
+              'Select a model from the dropdown. If the list is empty, verify your Engram Extraction LLM credential has a valid Base URL and API Key.',
+          },
+        );
+      }
+      const temperatureMode = this.getNodeParameter(
+        'extractionTemperatureMode',
+        itemIndex,
+        'legacy',
+      ) as string;
+      const temperature = ExtractionTemperatureSchema.parse(
+        temperatureMode === 'custom'
+          ? {
+              mode: temperatureMode,
+              value: this.getNodeParameter('extractionTemperature', itemIndex, 0),
+            }
+          : { mode: temperatureMode },
+      );
+      llmConfig = {
+        temperature,
+        apiKey: extractionCreds.apiKey as string,
+        baseUrl: extractionCreds.baseUrl as string,
+        model,
+      };
+
+      const entityTypesRaw = this.getNodeParameter(
+        'entityTypes',
+        itemIndex,
+        'person, organization, location, concept, event',
+      ) as string;
+      entityTypes = entityTypesRaw
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+    }
+
+    // Build embedding config if enabled
+    let embeddingConfig;
+    if (enableExtraction && llmConfig) {
+      const enableEmbeddings =
+        (this.getNodeParameter('enableEmbeddings', itemIndex, 'disabled') as string) === 'enabled';
+
+      if (enableEmbeddings) {
+        const embeddingModel = this.getNodeParameter('embeddingModel', itemIndex, '') as string;
+
+        if (embeddingModel && extractionCreds) {
+          // Reuse the extraction API credential already fetched above
+          embeddingConfig = {
+            apiKey: extractionCreds.apiKey as string,
+            baseUrl: extractionCreds.baseUrl as string,
+            model: embeddingModel,
+          };
+        }
+      }
+    }
+    if (
+      nativeCapture &&
+      this.getNodeParameter('enableEmbeddings', itemIndex, 'disabled') === 'enabled'
+    ) {
+      const model = this.getNodeParameter('embeddingModel', itemIndex, '') as string;
+      if (model) {
+        const credentials = await this.getCredentials('engramExtractionApi');
+        embeddingConfig = {
+          apiKey: credentials.apiKey as string,
+          baseUrl: credentials.baseUrl as string,
+          model,
+        };
+      }
+      if (continuation && continuation.record.phase !== 'initializing')
+        throw new Error('Engram replay-safe memory: initialization_failed');
+    }
+
+    // Build traversal config if enabled
+    let enableTraversal = false;
+    let traversalHops = 1;
+    if (enableExtraction || autonomousPersonal) {
+      enableTraversal =
+        (this.getNodeParameter('enableTraversal', itemIndex, 'disabled') as string) === 'enabled';
+      if (enableTraversal) {
+        traversalHops = this.getNodeParameter('traversalHops', itemIndex, 1) as number;
+      }
+    }
+
+    if (continuation && continuation.record.phase !== 'initializing')
+      throw new Error('Engram replay-safe memory: initialization_failed');
+    if (autonomousPersonal)
+      autonomousAdapter = await prepareNativeAutonomousPersonalMemoryAdapterV4(
+        this,
+        itemIndex,
+        storage,
+      );
+    if (continuation) {
+      continuation.record.adapterToken = autonomousAdapter ?? null;
+      if (continuation.record.phase !== 'initializing')
+        throw new Error('Engram replay-safe memory: initialization_failed');
+    }
+
+    const memory = new EngramChatMemory(
+      {
+        ...nativeCapture,
+        automaticMemory:
+          nativeCapture && nativeAutomatic
+            ? { ...nativeAutomatic, storeIdentity }
+            : nodeVersion >= 3
+              ? readAutomaticRuntime(
+                  (name, fallback) => this.getNodeParameter(name, itemIndex, fallback as string),
+                  sessionId,
+                  storeIdentity,
+                )
+              : undefined,
+        storage,
+        groupId: sessionId,
+        policy,
+        currentHumanQuery,
+        memoryKey: 'chat_history',
+        returnMessages: true,
+        inputKey: 'input',
+        outputKey: 'output',
+        contextWindow,
+        maxFactsPerQuery,
+        minRelevanceScore,
+        enableExtraction: enableExtraction && !!llmConfig,
+        llmConfig,
+        entityTypes,
+        extractionPolicy:
+          nativePolicy ??
+          (usesGovernanceControls
+            ? readExtractionPolicy((name, fallback) =>
+                this.getNodeParameter(name, itemIndex, fallback as string),
+              )
+            : undefined),
+        extractionExecution,
+        extractionRouteId: usesGovernanceControls
+          ? (this.getNodeParameter('extractionRouteId', itemIndex, '') as string)
+          : undefined,
+        retrievalMode: usesGovernanceControls
+          ? (this.getNodeParameter('graphContextPolicy', itemIndex, 'legacy') as
+              | 'legacy'
+              | 'current'
+              | 'historical'
+              | 'asOf')
+          : 'legacy',
+        retrievalAt: usesGovernanceControls
+          ? (this.getNodeParameter('graphContextAt', itemIndex, '') as string)
+          : undefined,
+        graphEvidenceBudgets: usesGovernanceControls
+          ? {
+              durable: this.getNodeParameter('graphDurableTokens', itemIndex, 4096) as number,
+              historical: this.getNodeParameter('graphHistoricalTokens', itemIndex, 2048) as number,
+            }
+          : undefined,
+        embeddingConfig,
+        enableTraversal,
+        traversalHops,
+        storeHumanEpisodes,
+        humanEpisodeKind,
+        storeAiEpisodes,
+        extractHuman,
+        extractAi,
+        extractSystemTool,
+        acceptedOnlyRetrieval,
+        contextTokenBudget: usesGovernanceControls
+          ? (this.getNodeParameter('contextTokenBudget', itemIndex, 2000) as number)
+          : undefined,
+        includeProvenanceInContext: usesGovernanceControls,
+        retrievalFilters: usesGovernanceControls
+          ? {
+              sender_id:
+                (this.getNodeParameter('retrievalSenderId', itemIndex, '') as string).trim() ||
+                undefined,
+              episode_kind: ((this.getNodeParameter(
+                'retrievalEpisodeKind',
+                itemIndex,
+                '',
+              ) as string) || undefined) as
+                | 'active_human'
+                | 'passive_human'
+                | 'assistant_reply'
+                | 'monitor_summary'
+                | 'tool_output'
+                | 'system'
+                | 'legacy'
+                | undefined,
+              trust_level: ((this.getNodeParameter(
+                'retrievalTrustLevel',
+                itemIndex,
+                '',
+              ) as string) || undefined) as
+                | 'trusted'
+                | 'standard'
+                | 'unverified'
+                | 'untrusted'
+                | undefined,
+              source_workflow_id:
+                (
+                  this.getNodeParameter('retrievalSourceWorkflowId', itemIndex, '') as string
+                ).trim() || undefined,
+              source_execution_id:
+                (
+                  this.getNodeParameter('retrievalSourceExecutionId', itemIndex, '') as string
+                ).trim() || undefined,
+              reference_after:
+                (this.getNodeParameter('retrievalReferenceAfter', itemIndex, '') as string) ||
+                undefined,
+              reference_before:
+                (this.getNodeParameter('retrievalReferenceBefore', itemIndex, '') as string) ||
+                undefined,
+            }
+          : undefined,
+        requireExtractionConfidence: usesGovernanceControls,
+        extractionThresholdPolicy: usesGovernanceControls
+          ? {
+              autoAcceptThreshold: autoAcceptConfidence!,
+              rejectBelowThreshold: rejectBelowConfidence!,
+            }
+          : undefined,
+        episodeMetadata: usesGovernanceControls
+          ? {
+              source_message_id:
+                (this.getNodeParameter('sourceMessageId', itemIndex, '') as string).trim() || null,
+              idempotency_key:
+                (this.getNodeParameter('episodeIdempotencyKey', itemIndex, '') as string).trim() ||
+                null,
+              conversation_id:
+                (this.getNodeParameter('conversationId', itemIndex, '') as string).trim() ||
+                sessionId,
+              sender_id:
+                (this.getNodeParameter('senderId', itemIndex, '') as string).trim() || null,
+              sender_name:
+                (this.getNodeParameter('senderName', itemIndex, '') as string).trim() || null,
+              quoted_message_id:
+                (this.getNodeParameter('quotedMessageId', itemIndex, '') as string).trim() || null,
+              trust_level: this.getNodeParameter('episodeTrustLevel', itemIndex, 'standard') as
+                | 'trusted'
+                | 'standard'
+                | 'unverified'
+                | 'untrusted',
+              source_workflow_id: this.getWorkflow().id ?? null,
+              source_execution_id: this.getExecutionId(),
+              attributes: parseEpisodeAttributes(
+                this.getNodeParameter('episodeAttributes', itemIndex, '{}'),
+              ),
+            }
+          : undefined,
+      },
+      autonomousAdapter,
+    );
+
+    returnedMemory = memory;
+    currentAutonomousPersonalExecutionScopeWorkV1();
+    if (continuation) {
+      if (continuation.record.phase !== 'initializing') {
+        memory.closeNativeMemoryV4();
+        throw new Error('Engram replay-safe memory: initialization_failed');
+      }
+      continuation.record.memory = memory;
+      continuation.record.adapterToken = null;
+      resolveNativeMemoryContinuationV4(continuation.record, true);
+    }
+
+    currentAutonomousPersonalExecutionScopeWorkV1();
+    preparedForReturn = true;
+    if (continuation?.record.lifecycleMode === 'workflow')
+      return nativeMemoryContinuationResponseV4(continuation.record, this);
+
+    return {
+      response: logWrapper(memory, this),
+      ...(autonomousPersonal
+        ? {
+            closeFunction: continuation
+              ? nativeMemoryContinuationCloseFunctionV4(
+                  continuation.record,
+                  continuation.signal,
+                  continuation.state,
+                )
+              : async () => {
+                  memory.closeNativeMemoryV4();
+                  // Embedded StorageFactory instances are shared with other
+                  // executions. This node owns only its Neo4j connection.
+                  if (backend === 'neo4j') await storage.close();
+                },
+          }
+        : {}),
+    };
+  } catch (error: unknown) {
+    preparedForReturn = false;
+    returnedMemory?.closeNativeMemoryV4();
+    if (autonomousStorage && autonomousAdapter)
+      closePreparedAutonomousPersonalNativeMemoryAdapterV4(autonomousStorage, autonomousAdapter);
+    if (continuation) {
+      continuation.record.adapterToken = null;
+      if (autonomousStorage) {
+        continuation.record.storage = autonomousStorage;
+        continuation.record.backend = backend;
+      }
+      resolveNativeMemoryContinuationV4(continuation.record, false);
+      await closeNativeMemoryContinuationV4(
+        continuation.record,
+        continuation.signal,
+        continuation.state,
+      ).catch(() => undefined);
+    } else if (autonomousStorage && backend === 'neo4j') {
+      try {
+        await autonomousStorage.close();
+      } catch {
+        // Preserve the redacted initialization failure.
+      }
+    }
+    if (nativeCapture)
+      throw new NodeOperationError(
+        this.getNode(),
+        'Engram replay-safe memory: initialization_failed',
+      );
+    if (error instanceof NodeOperationError) throw error;
+    throw new NodeOperationError(
+      this.getNode(),
+      `Failed to initialize Engram memory: ${(error as Error).message}`,
+      {
+        description:
+          backend === 'neo4j'
+            ? 'Check your Neo4j credentials and server connection'
+            : 'Check file system permissions for embedded storage',
+      },
+    );
   }
 }

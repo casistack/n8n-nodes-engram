@@ -13,6 +13,7 @@ import { findAutomaticBinding, assertAutomaticBindingIdentity } from '../storage
 import { captureReplaySafeHumanMemory } from '../memory/ReplaySafeCapture';
 import { readReplaySafeHumanCaptureRequest } from './replaySafeAutomaticAdmin';
 import { executeAutonomousPersonalAdminV4 } from './autonomousPersonalAdmin';
+import { readNativeAutonomousPersonalExecutionBudgetV1 } from './autonomousPersonalExecutionBudget';
 import { compileAutonomousPersonalPolicyV3 } from '../schemas/AutonomousPersonalPolicyV3.schema';
 
 const show = { resource: ['automaticMemory'], '@version': [3] };
@@ -168,6 +169,9 @@ export async function executeAutomaticAdmin(
   }
   if (operation === 'previewAutomatic') {
     const policy = readAutomaticPolicy(get);
+    const executionBudget = autonomousPersonal
+      ? readNativeAutonomousPersonalExecutionBudgetV1(ctx.getNode().parameters, get)
+      : undefined;
     let identityReady = false;
     if (storage.readExtractionSnapshot && namespace) {
       const graph = await storage.readExtractionSnapshot(namespace);
@@ -203,6 +207,7 @@ export async function executeAutomaticAdmin(
             executionRequirement: 'synchronous_replay_safe',
           }
         : {}),
+      ...(executionBudget === undefined ? {} : { executionBudget }),
       limits: readExtractionPolicy(get),
       identityReady,
       supportedClaims: autonomousPersonal

@@ -5,6 +5,7 @@ const http = require('http');
 const { spawn, execFileSync } = require('child_process');
 const assert = require('assert/strict');
 const { randomUUID, createHash } = require('crypto');
+const { getNativeRuntimeIdentity } = require('./runtime.cjs');
 const work = fs.mkdtempSync(path.join(require('os').tmpdir(), 'engram-native-contract-'));
 const runtime = process.env.ENGRAM_N8N_RUNTIME;
 assert.ok(runtime, 'Explicit n8n runtime required');
@@ -25,7 +26,7 @@ const identities = [
   { actor: 'synthetic-memory-actor-a', turn: 'synthetic-memory-event-a' },
   { actor: 'synthetic-memory-actor-b', turn: 'synthetic-memory-event-b' },
 ];
-assert.equal(require(path.join(runtime, 'node_modules/n8n/package.json')).version, '2.12.3');
+const runtimeIdentity = getNativeRuntimeIdentity();
 fs.mkdirSync(work, { recursive: true });
 const storeDir = fs.mkdtempSync(path.join(work, 'store-'));
 const storeFile = path.join(storeDir, `${workflowId}-engram.json`);
@@ -433,7 +434,7 @@ function decode(execution) {
   );
   assert.deepEqual(counts, { model: 0, extraction: 0, outbound: 0, stopped: 0 });
   const proof = {
-    n8n: '2.12.3',
+    ...runtimeIdentity,
     nativeMemoryNodeSha256,
     scope: 'actual native Memory multi-parent fail-closed gate',
     actorCount: 2,

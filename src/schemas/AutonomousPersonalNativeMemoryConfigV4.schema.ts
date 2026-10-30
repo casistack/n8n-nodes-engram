@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AutomaticRuntimeSchema } from './AutomaticRuntime.schema';
 import { AutonomousPersonalDescriptorV4InputOwnedDataSchema } from './AutonomousPersonalDescriptorV4.schema';
+import { AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema } from './AutonomousPersonalExecutionBudgetV1.schema';
 import { CurrentHumanQuerySchema } from './MemoryPolicy.schema';
 import { AutonomousPersonalMemoryHandoffLocatorV4OwnedDataSchema } from './AutonomousPersonalMemoryHandoffV4.schema';
 import { AutonomousPersonalMemoryHandoffNativeTupleV4OwnedDataSchema } from './AutonomousPersonalMemoryHandoffV4.schema';
@@ -59,6 +60,8 @@ export const AutonomousPersonalNativeMemoryConfigV4OwnedDataSchema = z
     invocationDeadlineMs:
       AutonomousPersonalDescriptorV4InputOwnedDataSchema.shape.invocationDeadlineMs,
     providerReference: AutonomousPersonalDescriptorV4InputOwnedDataSchema.shape.providerReference,
+    // Absence means legacy; the key is only present for a configured body.
+    executionBudget: AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema.optional(),
   })
   .strict();
 

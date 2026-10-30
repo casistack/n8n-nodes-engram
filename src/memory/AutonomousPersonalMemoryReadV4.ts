@@ -1,3 +1,4 @@
+import { currentAutonomousPersonalExecutionScopeWorkV1 } from '../storage/AutonomousPersonalExecutionScopeV1';
 /// <reference lib="es2021.weakref" />
 
 import { performance } from 'node:perf_hooks';
@@ -18,6 +19,7 @@ import type { AutomaticClaimReadScope } from '../storage/AutomaticClaimReadScope
 import {
   canUseAutomaticClaimReadScope,
   getAutomaticClaimReadScope,
+  getAutomaticClaimReadScopeWithAbsoluteDeadline,
   getAutomaticClaimReadScopeRemaining,
 } from '../storage/AutomaticClaimReadScope';
 import type { IGraphStorage } from '../storage/IGraphStorage';
@@ -399,12 +401,22 @@ export async function openAutonomousPersonalMemoryReadV4(
     if (!owner || !lineage || !initialSnapshot) reject('invalid_adapter');
     if (nativeCancellationAvailable && !signal) reject('invalid_adapter');
 
+    const configuredWork = currentAutonomousPersonalExecutionScopeWorkV1();
+    if (initialSnapshot.config.executionBudget !== undefined && !configuredWork)
+      reject('invalid_configuration');
     const nativeWork = createAutonomousPersonalNativeMemoryWorkV4(
       nativeWorkHostV4(signal, nativeCancellationAvailable),
       initialSnapshot.config.invocationDeadlineMs,
+      memoryInstance as object,
     );
     const budget = SourceHydrationBudgetSchema.parse({ remaining: 512, deferred: 0 });
-    const scope = getAutomaticClaimReadScope(budget);
+    const scope =
+      configuredWork && nativeWork.work === configuredWork
+        ? getAutomaticClaimReadScopeWithAbsoluteDeadline(
+            budget,
+            configuredWork.absoluteMonotonicDeadlineMs,
+          )
+        : getAutomaticClaimReadScope(budget);
     const check = createReadCheckV4(access, nativeWork, scope, failure);
 
     check();
@@ -438,6 +450,7 @@ export async function openAutonomousPersonalMemoryReadV4(
       owner,
       liveParentReader,
       budget,
+      scope,
     );
     check();
     if (compatibility.status !== 'ready') reject(mapCompatibilityReason(compatibility.reason));

@@ -312,7 +312,64 @@ describe('Graphology native completion proof V4', () => {
     expect(
       JSON.parse(fs.readFileSync(file, 'utf8')).automatic_operations_v1.operations,
     ).toContainEqual(expect.objectContaining({ version: 4, state: 'committed' }));
+    // Expiry cannot mint proof, but an acknowledged durable write does not
+    // make the persisted graph corrupt or require operator recovery.
+    replacementVisible = false;
+    expect((await store.exportGraph()).automatic_operations_v1?.operations).toContainEqual(
+      expect.objectContaining({ version: 4, state: 'committed' }),
+    );
   });
+
+  it.each(['unknown-ack-timeout', 'known-ack-read-io'] as const)(
+    'retains recovery protection for %s',
+    async (fault) => {
+      const handle = await prepare(`native-proof-recovery-${fault}`);
+      const originalNow = performance.now.bind(performance);
+      let offsetMs = 0;
+      const clock = jest
+        .spyOn(performance, 'now')
+        .mockImplementation(() => originalNow() + offsetMs);
+      const originalRename = fs.promises.rename.bind(fs.promises);
+      jest.spyOn(fs.promises, 'rename').mockImplementation(async (source, target) => {
+        await originalRename(source, target);
+        if (String(target) === file && fault === 'unknown-ack-timeout') {
+          offsetMs = 6_000;
+          throw new Error('synthetic_unknown_replacement_ack');
+        }
+      });
+      let acknowledged = false;
+      let injectedReadFailure = false;
+      const originalOpen = fs.promises.open.bind(fs.promises);
+      jest.spyOn(fs.promises, 'open').mockImplementation(async (target, flags, mode) => {
+        if (acknowledged && String(target) === file && fault === 'known-ack-read-io') {
+          injectedReadFailure = true;
+          throw new Error('synthetic_known_ack_read_io_failure');
+        }
+        return originalOpen(target, flags, mode);
+      });
+      const { token, consume } = await store.withExtractionDiagnostics(
+        (event) => {
+          if (
+            event.acknowledged &&
+            store.getLastMutationDiagnostics()?.operation === 'autonomous_personal_completion_v4'
+          ) {
+            acknowledged = true;
+          }
+        },
+        () => nativeOutcome(handle),
+      );
+      const result = consume(store, handle, token);
+      expect(result?.observation).toEqual({ kind: 'unconfirmed' });
+      expect(result?.proof).toBeNull();
+      expect(acknowledged).toBe(fault === 'known-ack-read-io');
+      expect(injectedReadFailure).toBe(fault === 'known-ack-read-io');
+      expect(
+        JSON.parse(fs.readFileSync(file, 'utf8')).automatic_operations_v1.operations,
+      ).toContainEqual(expect.objectContaining({ version: 4, state: 'committed' }));
+      clock.mockRestore();
+      await expect(store.exportGraph()).rejects.toThrow('recovery_required');
+    },
+  );
 
   it.each(['invalid_input', 'conflict', 'capacity'] as const)(
     'preserves the native-origin %s reason before any graph replacement',
