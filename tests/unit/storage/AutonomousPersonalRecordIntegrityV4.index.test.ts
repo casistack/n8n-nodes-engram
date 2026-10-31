@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import * as lossless from '../../../src/storage/LosslessAutomaticCaptureGraph';
 import * as qualifiedClaims from '../../../src/extraction/AutonomousPersonalQualifiedClaimV4';
 import { AutonomousPersonalTypedSyntaxFailureV1 } from '../../../src/extraction/AutonomousPersonalTypedSyntaxV1';
 import type { AutonomousPersonalTypedSyntaxWorkV1 } from '../../../src/schemas/AutonomousPersonalTypedSyntaxV1.schema';
@@ -108,16 +109,17 @@ function isDeeplyFrozen(value: unknown): boolean {
 }
 
 describe('AutonomousPersonalRecordIntegrityV4 checked index', () => {
+  // The package and ts-jest compile to CommonJS; this observes its imported parse boundary.
   it('constructs one checked index for a creator graph and returns the same frozen owned graph', () => {
     const graph = graphCopy();
-    const construct = jest.spyOn(qualifiedClaims, 'createAutonomousPersonalClaimIndexV4');
+    const parse = jest.spyOn(lossless, 'parseLosslessAutomaticCaptureGraph');
     const index = createIntegrityCheckedAutonomousPersonalClaimIndexV4(
       graph,
       work(),
       () => undefined,
     );
 
-    expect(construct).toHaveBeenCalledTimes(1);
+    expect(parse).toHaveBeenCalledTimes(1);
     const ownedGraph = qualifiedClaims.getAutonomousPersonalClaimIndexGraphV4(index);
     expect(qualifiedClaims.getAutonomousPersonalClaimIndexGraphV4(index)).toBe(ownedGraph);
     expect(ownedGraph).not.toBe(graph);
@@ -125,7 +127,10 @@ describe('AutonomousPersonalRecordIntegrityV4 checked index', () => {
     expect(graph.edges).toHaveLength(1);
     expect(
       qualifiedClaims.inspectAutonomousPersonalClaimCreatorV4(index, baseline.edge.uuid),
-    ).toMatchObject({ status: 'structural', proof: { claimId: baseline.edge.uuid } });
+    ).toMatchObject({
+      status: 'structural',
+      proof: { claimId: baseline.edge.uuid },
+    });
     expect(
       qualifiedClaims.qualifyAutonomousPersonalClaimCreatorV4(index, baseline.request),
     ).toMatchObject({ status: 'qualified' });
@@ -136,14 +141,14 @@ describe('AutonomousPersonalRecordIntegrityV4 checked index', () => {
     (kind) => {
       const graph = checkedTerminalWithoutPairs(kind);
       expect(graph.edges).toHaveLength(0);
-      const construct = jest.spyOn(qualifiedClaims, 'createAutonomousPersonalClaimIndexV4');
+      const parse = jest.spyOn(lossless, 'parseLosslessAutomaticCaptureGraph');
       const index = createIntegrityCheckedAutonomousPersonalClaimIndexV4(
         graph,
         work(),
         () => undefined,
       );
 
-      expect(construct).toHaveBeenCalledTimes(1);
+      expect(parse).toHaveBeenCalledTimes(1);
       const ownedGraph = qualifiedClaims.getAutonomousPersonalClaimIndexGraphV4(index);
       expect(ownedGraph).not.toBe(graph);
       expect(ownedGraph.edges).toHaveLength(0);
@@ -175,7 +180,7 @@ describe('AutonomousPersonalRecordIntegrityV4 checked index', () => {
         },
       },
     ) as unknown as AutonomousPersonalTypedSyntaxWorkV1;
-    const construct = jest.spyOn(qualifiedClaims, 'createAutonomousPersonalClaimIndexV4');
+    const parse = jest.spyOn(lossless, 'parseLosslessAutomaticCaptureGraph');
     const trustedCheck = jest.fn();
 
     expect(() =>
@@ -183,7 +188,7 @@ describe('AutonomousPersonalRecordIntegrityV4 checked index', () => {
     ).not.toThrow();
     expect(trustedCheck).toHaveBeenCalled();
     expect(workReads).toBe(0);
-    expect(construct).not.toHaveBeenCalled();
+    expect(parse).toHaveBeenCalledTimes(1);
   });
 
   it('refuses malformed or orphaned creator DATA before returning an index', () => {

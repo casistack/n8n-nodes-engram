@@ -115,6 +115,35 @@ export function migrateGraphData(input: unknown): GraphMigrationResult {
   };
 }
 
+/**
+ * Report-only: for data the caller has already parsed losslessly with GraphDataSchema,
+ * returns the report `migrateGraphData` would produce, or undefined unless the graph is
+ * current and every episode carries every default field (i.e. nothing would migrate).
+ * Never returns or normalizes data and grants no authority; does not mutate its input.
+ */
+export function currentGraphMigrationReport(data: GraphData): GraphMigrationReport | undefined {
+  if (data.version !== CURRENT_GRAPH_DATA_VERSION) return undefined;
+  for (const episode of data.episodes) {
+    if (typeof episode !== 'object' || episode === null) return undefined;
+    for (const field of EPISODE_DEFAULT_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(episode, field)) return undefined;
+    }
+  }
+  return {
+    source_version: CURRENT_GRAPH_DATA_VERSION,
+    target_version: CURRENT_GRAPH_DATA_VERSION,
+    migration_required: false,
+    source_checksum_removed: false,
+    records: {
+      entities: data.entities.length,
+      facts: data.edges.length,
+      episodes: data.episodes.length,
+    },
+    episode_defaults_applied: emptyDefaults(),
+    warnings: integrityWarnings(data),
+  };
+}
+
 function rawEpisodeRecords(input: unknown): Array<Record<string, unknown>> {
   if (typeof input !== 'object' || input === null) return [];
   const episodes = (input as { episodes?: unknown }).episodes;

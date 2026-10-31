@@ -15,6 +15,12 @@ import type { StoredAutomaticOperation } from '../schemas/AutomaticLedger.schema
 import { CompositionalCaptureNamespaceV3Schema } from '../schemas/CompositionalCaptureNamespaceV3.schema';
 import { z } from 'zod';
 import { parseLosslessAutomaticCaptureGraph } from '../storage/LosslessAutomaticCaptureGraph';
+import { getOwnedImmutableGraphData } from '../storage/ImmutableGraphSnapshot';
+
+// The indexes below freeze their graph anyway; owned immutable DATA skips only the parse.
+function ownedOrParsedGraph(graphValue: unknown) {
+  return getOwnedImmutableGraphData(graphValue) ?? parseLosslessAutomaticCaptureGraph(graphValue);
+}
 import { cloneBoundedAutomaticCaptureJson } from '../storage/BoundedAutomaticCaptureJson';
 import {
   assertAutomaticBindingIdentity,
@@ -326,7 +332,7 @@ export function createCompositionalSnapshotIndexV3(
   const check = scope ? scopedCheck(scope, externalCheck) : externalCheck;
   check();
   const domain = domainSchema.parse(cloneBoundedAutomaticCaptureJson(domainValue, 'beginRequest'));
-  const graph = parseLosslessAutomaticCaptureGraph(graphValue);
+  const graph = ownedOrParsedGraph(graphValue);
   check();
   return indexParsedGraph(graph, domain, check, scope);
 }
@@ -342,7 +348,7 @@ export function createCompositionalOperationSnapshotIndexV3(
   const selector = CompositionalOperationSnapshotIndexRequestV3Schema.parse(
     cloneBoundedAutomaticCaptureJson(selectorValue, 'beginRequest'),
   );
-  const graph = parseLosslessAutomaticCaptureGraph(graphValue);
+  const graph = ownedOrParsedGraph(graphValue);
   check();
   const matches = (graph.automatic_operations_v1?.operations ?? []).filter((op) => {
     check();
@@ -376,7 +382,7 @@ export function createCompositionalRetrievalSnapshotIndexV3(
   const domain = retrievalDomainSchema.parse(
     cloneBoundedAutomaticCaptureJson(namespaceValue, 'beginRequest'),
   );
-  const graph = parseLosslessAutomaticCaptureGraph(graphValue);
+  const graph = ownedOrParsedGraph(graphValue);
   check();
   const root = createOwnedIndexRoot(graph, domain.namespace, check, undefined, true);
   check();

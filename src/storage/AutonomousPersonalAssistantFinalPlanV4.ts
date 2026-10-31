@@ -47,6 +47,7 @@ import {
 } from './BoundedAutomaticCaptureJson';
 import { assertAutonomousPersonalMemoryCurrentParentGraphV4 } from './AutonomousPersonalMemoryParentIntegrityV4';
 import { parseLosslessAutomaticCaptureGraph } from './LosslessAutomaticCaptureGraph';
+import { getOwnedImmutableGraphData } from './ImmutableGraphSnapshot';
 
 type DecisionReason = Extract<
   z.infer<typeof AutomaticAssistantFinalWriterResultV2Schema>,
@@ -219,7 +220,8 @@ function ownedPlanData(
 function ownedGraph(value: unknown, check: () => void): GraphData {
   check();
   try {
-    const graph = parseLosslessAutomaticCaptureGraph(value);
+    // Never mutated: the candidate below is a fresh full parse of spread copies.
+    const graph = getOwnedImmutableGraphData(value) ?? parseLosslessAutomaticCaptureGraph(value);
     check();
     return graph;
   } catch (error) {

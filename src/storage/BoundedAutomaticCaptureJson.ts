@@ -248,12 +248,7 @@ export function cloneBoundedAutomaticCaptureJson<T>(
       addBudgetBytes(budget, encodedJsonStringBytes(key, budget.maxBytes - budget.bytes));
       addBudgetBytes(budget, 1); // colon
       const child = clone(descriptor.value, depth + 1);
-      Object.defineProperty(cloned, key, {
-        value: child,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
+      cloned[key] = child;
       propertyIndex += 1;
     }
     budget.active.delete(current);

@@ -23,7 +23,10 @@ import type { EpisodicNode } from '../schemas/EpisodicNode.schema';
 import type { GraphData } from '../schemas/GraphData.schema';
 import type { StoredAutomaticOperation } from '../schemas/AutomaticLedger.schema';
 import { prepareAutonomousPersonalCaptureSnapshotV4 } from './AutonomousPersonalCaptureBeginV4';
-import { assertAutonomousPersonalRecordIntegrityV4 } from './AutonomousPersonalRecordIntegrityV4';
+import {
+  assertAutonomousPersonalRecordIntegrityV4,
+  getRegisteredAutonomousPersonalClaimIndexGraphV4,
+} from './AutonomousPersonalRecordIntegrityV4';
 import { buildCommittedAutonomousPersonalOperationV4 } from './AutonomousPersonalTerminalOperationV4';
 import { assertAutomaticLedgerSourceIntegrity } from './AutomaticIdentity';
 import { inputAndPlanJoinV4 } from './AutonomousPersonalCompletionJoinsV4';
@@ -33,6 +36,7 @@ import {
   isNativePlainAutomaticCaptureObject,
 } from './BoundedAutomaticCaptureJson';
 import { parseLosslessAutomaticCaptureGraph } from './LosslessAutomaticCaptureGraph';
+import { getOwnedImmutableGraphData } from './ImmutableGraphSnapshot';
 
 const UUID = z.string().uuid();
 const nativeAbortSignalAbortedGetter = Object.getOwnPropertyDescriptor(
@@ -421,20 +425,26 @@ export function prepareAutonomousPersonalCompletionGraphCandidateV4(
     return closeCandidateFailure(sticky, error);
   }
   const { check } = sticky;
+  // Known-index guard failures propagate before entering the raw-data error mapping.
+  const registered = getRegisteredAutonomousPersonalClaimIndexGraphV4(graphValue);
 
   try {
     let graph: GraphData;
     try {
-      graph = parseLosslessAutomaticCaptureGraph(graphValue);
+      graph =
+        registered ??
+        getOwnedImmutableGraphData(graphValue) ??
+        parseLosslessAutomaticCaptureGraph(graphValue);
     } catch (error) {
       if (error instanceof BoundedAutomaticCaptureJsonError && error.reason !== 'invalid_json')
         fail('capacity');
       fail('inspection_incomplete');
     }
     check();
+    const snapshot: unknown = registered ? graphValue : graph;
     assertAutomaticLedgerSourceIntegrity(graph);
     check();
-    assertAutonomousPersonalRecordIntegrityV4(graph, typedSyntaxWork, check);
+    assertAutonomousPersonalRecordIntegrityV4(snapshot, typedSyntaxWork, check);
     check();
 
     const request = AutonomousPersonalCaptureSnapshotPreparationV4InputOwnedDataSchema.safeParse({
@@ -450,7 +460,7 @@ export function prepareAutonomousPersonalCompletionGraphCandidateV4(
     });
     check();
     if (!request.success) fail('invalid_input');
-    const prepared = prepareAutonomousPersonalCaptureSnapshotV4(request.data, graph, check);
+    const prepared = prepareAutonomousPersonalCaptureSnapshotV4(request.data, snapshot, check);
     check();
     if (prepared.kind !== 'same_initial_scope_candidate') {
       if (prepared.kind === 'no_write') fail(mapPreparationNoWrite(prepared));
@@ -550,6 +560,7 @@ export function prepareAutonomousPersonalCompletionGraphCandidateV4(
     check();
     return Object.freeze({ kind: 'candidate' as const, graph: frozen });
   } catch (error) {
+    if (registered) getRegisteredAutonomousPersonalClaimIndexGraphV4(graphValue);
     return closeCandidateFailure(sticky, error);
   }
 }
@@ -605,7 +616,10 @@ export function validateAutonomousPersonalCompletionReadbackV4(
   }
 
   try {
-    const graph = parseLosslessAutomaticCaptureGraph(actualGraphValue);
+    // Read-only comparison: owned immutable DATA skips only the schema parse.
+    const graph =
+      getOwnedImmutableGraphData(actualGraphValue) ??
+      parseLosslessAutomaticCaptureGraph(actualGraphValue);
     sticky.check();
     assertAutomaticLedgerSourceIntegrity(graph);
     sticky.check();

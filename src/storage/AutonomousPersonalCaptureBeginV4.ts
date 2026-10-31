@@ -64,6 +64,8 @@ import {
   cloneBoundedAutomaticCaptureJson,
 } from './BoundedAutomaticCaptureJson';
 import { parseLosslessAutomaticCaptureGraph } from './LosslessAutomaticCaptureGraph';
+import { getOwnedImmutableGraphData } from './ImmutableGraphSnapshot';
+import { getRegisteredAutonomousPersonalClaimIndexGraphV4 } from './AutonomousPersonalRecordIntegrityV4';
 
 const MAX_BEGIN_BYTES = 512 * 1024;
 type SnapshotInput = z.infer<
@@ -747,10 +749,15 @@ export function prepareAutonomousPersonalCaptureSnapshotV4(
     return stop('invalid_input');
   }
 
+  // A known claim index supplies its frozen graph; its guard errors are not mapped below.
+  const registered = getRegisteredAutonomousPersonalClaimIndexGraphV4(rawGraph);
   let graph: GraphData;
   try {
     check();
-    graph = parseLosslessAutomaticCaptureGraph(rawGraph);
+    graph =
+      registered ??
+      getOwnedImmutableGraphData(rawGraph) ??
+      parseLosslessAutomaticCaptureGraph(rawGraph);
     check();
     assertAutomaticBindingRegistryIntegrity(graph, check);
     assertAutomaticLedgerSourceIntegrity(graph);

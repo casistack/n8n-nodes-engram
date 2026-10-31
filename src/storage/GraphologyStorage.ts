@@ -64,6 +64,8 @@ import {
 import {
   assertAutonomousPersonalRecordIntegrityV4 as assertAutonomousPersonalRecordIntegrityV4Unmetered,
   AutonomousPersonalRecordIntegrityV4Error,
+  parseIntegrityCheckedAutonomousPersonalGraphV4,
+  validateOwnedAutonomousPersonalRecordGraphV4,
 } from './AutonomousPersonalRecordIntegrityV4';
 import type { AutonomousPersonalTypedSyntaxWorkV1 } from '../schemas/AutonomousPersonalTypedSyntaxV1.schema';
 import {
@@ -199,6 +201,7 @@ import {
   AutomaticLegacyObservationResultSchema,
   assertNoImportedAutomaticOperations,
 } from '../schemas';
+import { currentGraphMigrationReport } from '../schemas/GraphDataMigration';
 import type {
   AutomaticLedger,
   AutomaticLegacyObservationRequest,
@@ -248,6 +251,10 @@ import {
   type PrivateConsumedAutomaticCaptureInvocation,
 } from './AutomaticCaptureHandles';
 import { ExtractionBudgetError } from '../extraction/ExtractionDiagnostics';
+import {
+  AutonomousPersonalClaimIndexV4Error,
+  createAutonomousPersonalClaimIndexV4,
+} from '../extraction/AutonomousPersonalQualifiedClaimV4';
 import { prepareHumanCaptureBeginV2 } from './AutomaticCaptureBegin';
 import { embeddedAutomaticCaptureStoreHash } from './AutomaticCaptureStore';
 import {
@@ -286,7 +293,11 @@ import {
   prepareAutonomousPersonalAssistantFinalV4,
   reconcileAutonomousPersonalAssistantFinalV4,
 } from './AutonomousPersonalAssistantFinalPlanV4';
-import { parseLosslessAutomaticCaptureGraph as parseLosslessAutomaticCaptureGraphUnmetered } from './LosslessAutomaticCaptureGraph';
+import {
+  parseLosslessAutomaticCaptureGraph as parseLosslessAutomaticCaptureGraphUnmetered,
+  provenIdenticalLosslessGraphData,
+} from './LosslessAutomaticCaptureGraph';
+import { cloneOwnedImmutableGraphData, parseImmutableGraphData } from './ImmutableGraphSnapshot';
 import {
   buildCommittedCompositionalCaptureOperationV3,
   CompositionalCaptureTerminalOperationFailureV3,
@@ -352,6 +363,21 @@ interface MutationOptions<T> {
     onSnapshotReplaced: () => void;
     onSnapshotDurableAcknowledged?: () => void;
   };
+}
+
+// Freezes a detached structuredClone result so a read-only callback cannot mutate it.
+function deepFreezeOwnedSnapshotV4(value: unknown): void {
+  const pending: object[] = [];
+  if (value !== null && typeof value === 'object') pending.push(value);
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (Object.isFrozen(current)) continue;
+    Object.freeze(current);
+    for (const child of Object.values(current)) {
+      if (child !== null && typeof child === 'object' && !Object.isFrozen(child))
+        pending.push(child);
+    }
+  }
 }
 
 declare const trustedCompletedAutonomousPersonalWriteV4Brand: unique symbol;
@@ -720,6 +746,24 @@ function assertAutonomousPersonalGraphIntegrityV4(
   }, guard.typedSyntaxWork);
 }
 
+// Same checks and order as assertAutonomousPersonalGraphIntegrityV4. Returns the
+// record parser's private output those checks ran on (undefined if none was made).
+function validateOwnedAutonomousPersonalGraphV4(
+  graph: GraphData,
+  guard: AutonomousPersonalStructuralGuardContextV4,
+): GraphData | undefined {
+  return autonomousPersonalProcessingV4(() => {
+    guard.check();
+    assertAutomaticLedgerSourceIntegrity(graph);
+    guard.check();
+    const owned = autonomousPersonalProcessingV4(() =>
+      validateOwnedAutonomousPersonalRecordGraphV4(graph, guard.typedSyntaxWork, guard.check),
+    );
+    guard.check();
+    return owned;
+  }, guard.typedSyntaxWork);
+}
+
 class CompositionalRetrievalSnapshotReadError extends Error {
   constructor(readonly reason: 'invalid_snapshot' | 'resource_exhausted' | 'concurrent_snapshot') {
     super(`Engram compositional retrieval: ${reason}`);
@@ -842,8 +886,32 @@ function prepareCompositionalCompletionGraphCandidateV3(
   return validateAutomaticCaptureCandidate(candidate as GraphData, check);
 }
 
+/**
+ * Raised once the latest persisted load of an embedded store failed. The message is fixed
+ * and carries no path or data; the original failure is a non-enumerable `cause`.
+ */
+export class EngramStorageLoadFailedError extends Error {
+  readonly reason = 'initialize_failed' as const;
+
+  constructor(cause: unknown) {
+    super('Engram storage: persisted load failed; a successful initialize() is required');
+    this.name = 'EngramStorageLoadFailedError';
+    Object.defineProperty(this, 'cause', {
+      value: cause,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+  }
+}
+
 export class GraphologyStorage implements IGraphStorage {
   private graph: MultiDirectedGraph<GraphNodeAttributes, GraphEdgeAttributes>;
+  /**
+   * The original error of the latest failed persisted load. Set and cleared only while the
+   * persist lock is held, so lock order is outcome order. Never persisted.
+   */
+  private loadFailure: Error | null = null;
   private automaticOperations: AutomaticLedger | undefined;
   private searchProvider: MinisearchProvider;
   private persistPath: string | undefined;
@@ -875,6 +943,21 @@ export class GraphologyStorage implements IGraphStorage {
   private lastMutationDiagnostics: StorageMutationDiagnostics | null = null;
   private recoveryRequired = false;
   private automaticClaimSnapshots = new WeakMap<AutomaticClaimReadScope, AutomaticClaimSnapshot>();
+  /**
+   * At most one stable-read DATA entry: the factory-owned immutable graph for exact raw
+   * file bytes. Proves values only, never permission or currency; every read still opens,
+   * charges, reads, hashes, stat-checks and integrity-checks. Never handed to Core.
+   */
+  private immutableReadCacheV4:
+    | {
+        readonly persistPath: string;
+        readonly byteLength: number;
+        readonly digest: Buffer;
+        readonly graph: GraphData;
+      }
+    | undefined;
+  /** Benchmark-only bounded counters; no hashes, paths or content. */
+  private readonly immutableReadCacheCountersV4 = { hits: 0, misses: 0 };
   private readonly automaticCaptureHandles = createAutomaticCaptureHandleRegistry();
   private readonly compositionalCaptureHandlesV3 =
     createCompositionalAutomaticCaptureHandleRegistryV3();
@@ -925,13 +1008,20 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    if (this.initialized && !this.loadFailure) return;
 
     if (this.persistPath) {
       await this.loadFromDisk();
     }
 
+    // A newer failed load (or a missing file after a failure) must not be overwritten by
+    // an older continuation that resolves later.
+    if (this.loadFailure) throw new EngramStorageLoadFailedError(this.loadFailure);
     this.initialized = true;
+  }
+
+  private assertLoaded(): void {
+    if (this.loadFailure) throw new EngramStorageLoadFailedError(this.loadFailure);
   }
 
   async close(): Promise<void> {
@@ -1158,6 +1248,7 @@ export class GraphologyStorage implements IGraphStorage {
   /** Capture and refresh without a write; serialize state/index swap with local mutations. */
   async readExtractionSnapshot(groupId?: string): Promise<GraphData> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const previous = this.mutationTail;
     let release!: () => void;
     this.mutationTail = new Promise<void>((resolve) => {
@@ -2031,6 +2122,8 @@ export class GraphologyStorage implements IGraphStorage {
     });
     await previous;
     try {
+      // Reads the persisted file under its own validation (not the in-memory graph), so
+      // an empty-graph read is impossible and the baseline behavior is preserved.
       this.assertRecoveryReady();
       this.assertQueueFilePresent();
       if (!this.persistPath) return { status: 'unavailable', reason: 'missing_store' };
@@ -2133,7 +2226,8 @@ export class GraphologyStorage implements IGraphStorage {
     if (!getAutomaticClaimReadScopeRemaining(scope)) return failure('invalid', 'invalid_scope');
     if (!canUseAutomaticClaimReadScope(scope)) return failure('deferred', 'budget_exhausted');
     if (this.recoveryRequired) return failure('unavailable', 'recovery_required');
-    if (!this.initialized || !this.persistPath) return failure('unavailable', 'missing_store');
+    if (!this.initialized || !this.persistPath || this.loadFailure)
+      return failure('unavailable', 'missing_store');
     if (!beginAutomaticClaimReadAttempt(scope)) return failure('deferred', 'budget_exhausted');
 
     let checkFailed = false;
@@ -2188,10 +2282,13 @@ export class GraphologyStorage implements IGraphStorage {
 
     try {
       check();
-      const result = await this.runMutation(
-        async () => {
+      const result = await this.readOwnedSnapshotV4(
+        () => {
           check();
-          const graph = await this.exportGraph();
+          // The read frame just refreshed Core under the same lock. Export synchronously
+          // so no caller can change its live records before the result schema owns them.
+          this.assertLoaded();
+          const graph = autonomousPersonalProcessingV4(() => this.exportGraphData());
           if (graph.group_id === undefined) delete graph.group_id;
           // Preserve this backend's recent-message order in the returned copy:
           // creation time, then persisted insertion order for equal times.
@@ -2225,15 +2322,12 @@ export class GraphologyStorage implements IGraphStorage {
         },
         {
           operation: 'compositional_retrieval_snapshot_v3',
-          captureRecords: 'lossless',
-          requireExistingSnapshot: true,
           captureRead: {
             scope,
             check,
             attemptReserved: true,
             verifyStableSnapshot: true,
           },
-          shouldWriteSnapshot: () => false,
         },
       );
       check();
@@ -2401,6 +2495,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getEntity(uuid: string): Promise<EntityNode | null> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     if (!this.graph.hasNode(uuid)) return null;
     const attrs = this.graph.getNodeAttributes(uuid);
     if (attrs.type !== 'entity') return null;
@@ -2409,6 +2504,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getEntityByName(name: string, groupId: string): Promise<EntityNode | null> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const normalized = name.toLowerCase().trim();
     let found: EntityNode | null = null;
 
@@ -2469,6 +2565,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async listEntities(groupId: string, options?: ListOptions): Promise<EntityNode[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const entities: EntityNode[] = [];
 
     this.graph.forEachNode((_key, attrs) => {
@@ -2539,6 +2636,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getEdge(uuid: string): Promise<EntityEdge | null> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     if (!this.graph.hasEdge(uuid)) return null;
     const attrs = this.graph.getEdgeAttributes(uuid);
     if (attrs.type !== 'entity_edge') return null;
@@ -2551,6 +2649,7 @@ export class GraphologyStorage implements IGraphStorage {
     limit?: number,
   ): Promise<EntityEdge[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 129)) {
       throw new Error('Edge limit must be an integer between 1 and 129');
     }
@@ -2588,6 +2687,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getEdgesForEntity(entityUuid: string): Promise<EntityEdge[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const edges: EntityEdge[] = [];
 
     if (!this.graph.hasNode(entityUuid)) return edges;
@@ -2620,12 +2720,10 @@ export class GraphologyStorage implements IGraphStorage {
       if (!this.initialized || !this.persistPath || !storeHash) return stopped('unsupported_mode');
       if (storeHash !== scope.context.storeHash) return stopped('conflict');
       const readStartedAtMonotonicMs = performance.now();
-      const snapshot = await this.runMutation(
-        async () => {
+      const snapshot = await this.readOwnedSnapshotV4(
+        (graph) => {
           check();
-          const graph = await this.exportGraph();
           return autonomousPersonalProcessingV4(() => {
-            if (graph.group_id === undefined) delete graph.group_id;
             const backendNow = nowIso();
             const prepared = prepareAutonomousPersonalCaptureSnapshotV4(
               {
@@ -2683,12 +2781,7 @@ export class GraphologyStorage implements IGraphStorage {
             return { kind: 'observation' as const, observation };
           });
         },
-        {
-          operation: 'autonomous_personal_provider_preflight_v4',
-          captureRecords: 'lossless',
-          requireExistingSnapshot: true,
-          shouldWriteSnapshot: () => false,
-        },
+        { operation: 'autonomous_personal_provider_preflight_v4' },
       );
       check();
       if (snapshot.kind === 'decision') return snapshot.result;
@@ -2757,12 +2850,10 @@ export class GraphologyStorage implements IGraphStorage {
     const readback = async (): Promise<AutonomousPersonalCompletionStorageV4Result> => {
       if (!access || !expectedInput || !expectedPlan) return unconfirmed();
       try {
-        const result = await this.runMutation(
-          async () => {
+        const result = await this.readOwnedSnapshotV4(
+          (graph) => {
             check();
-            const graph = await this.exportGraph();
             return autonomousPersonalProcessingV4(() => {
-              if (graph.group_id === undefined) delete graph.group_id;
               check();
               return validateAutonomousPersonalCompletionReadbackV4(
                 graph,
@@ -2775,16 +2866,8 @@ export class GraphologyStorage implements IGraphStorage {
           },
           {
             operation: 'autonomous_personal_completion_v4_readback',
-            captureRecords: 'lossless',
-            requireExistingSnapshot: true,
             captureRead,
-            shouldWriteSnapshot: () => false,
-            autonomousPersonalCompletionV4: {
-              typedSyntaxWork: runtime.typedSyntaxWork,
-              check,
-              onSnapshotReplacementAttempted: () => {},
-              onSnapshotReplaced: () => {},
-            },
+            autonomousPersonalCompletionV4: { typedSyntaxWork: runtime.typedSyntaxWork, check },
           },
         );
         return AutonomousPersonalCompletionStorageV4ResultOwnedDataSchema.parse(result);
@@ -2868,9 +2951,22 @@ export class GraphologyStorage implements IGraphStorage {
                 audit,
               });
               check();
+              // Parse and freeze this unchanged export once; planner and candidate share it as
+              // DATA only. Data-shape failures retain the original raw-path classification.
+              let snapshot: unknown = graph;
+              try {
+                snapshot = createAutonomousPersonalClaimIndexV4(
+                  graph,
+                  runtime.typedSyntaxWork,
+                  check,
+                );
+              } catch (error) {
+                // Do not restart work after cancellation or deadline exhaustion.
+                if (!(error instanceof AutonomousPersonalClaimIndexV4Error)) throw error;
+              }
               const plan = planAutonomousPersonalCaptureCompletionV4(
                 input,
-                graph,
+                snapshot,
                 outcome.kind === 'response' ? outcome.response : null,
                 selection,
                 runtime.typedSyntaxWork,
@@ -2892,7 +2988,7 @@ export class GraphologyStorage implements IGraphStorage {
                   ? preparedExtractionEpoch
                   : null;
               const candidate = prepareAutonomousPersonalCompletionGraphCandidateV4(
-                graph,
+                snapshot,
                 input,
                 plan,
                 extractionEpoch,
@@ -3014,22 +3110,17 @@ export class GraphologyStorage implements IGraphStorage {
     let freshStaged = false;
     let mutationPrepared = false;
     try {
-      const preflight = await this.runMutation(
-        async () => {
+      const preflight = await this.readOwnedSnapshotV4(
+        (graph) => {
           check();
-          const graph = await this.exportGraph();
           return autonomousPersonalProcessingV4(() => {
-            if (graph.group_id === undefined) delete graph.group_id;
             check();
-            return parseLosslessAutomaticCaptureGraph(graph);
+            // Read-only binding lookups below: an owned root is reused (no parse); any
+            // other graph still gets the full lossless parse, now frozen.
+            return parseImmutableGraphData(graph);
           });
         },
-        {
-          operation: 'autonomous_personal_preflight_v4',
-          captureRecords: 'lossless',
-          requireExistingSnapshot: true,
-          shouldWriteSnapshot: () => false,
-        },
+        { operation: 'autonomous_personal_preflight_v4' },
       );
       check();
       const request = admitted.scope.request;
@@ -3168,12 +3259,10 @@ export class GraphologyStorage implements IGraphStorage {
         acknowledged ? 'acknowledged' : 'unknown',
       );
       try {
-        return await this.runMutation(
-          async () => {
+        return await this.readOwnedSnapshotV4(
+          (graph) => {
             check();
-            const graph = await this.exportGraph();
             return autonomousPersonalProcessingV4(() => {
-              if (graph.group_id === undefined) delete graph.group_id;
               const source = graph.episodes.find((episode) => episode.uuid === scope.sourceId);
               const operation = graph.automatic_operations_v1?.operations.find(
                 (row) => row.operationId === scope.operationId,
@@ -3200,12 +3289,7 @@ export class GraphologyStorage implements IGraphStorage {
               });
             });
           },
-          {
-            operation: 'autonomous_personal_readback_v4',
-            captureRecords: 'lossless',
-            requireExistingSnapshot: true,
-            shouldWriteSnapshot: () => false,
-          },
+          { operation: 'autonomous_personal_readback_v4' },
         );
       } catch (error) {
         if (isAutonomousPersonalCaptureProvenCommitBudgetFailureV4(error))
@@ -3937,6 +4021,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getEpisode(uuid: string): Promise<EpisodicNode | null> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     if (!this.graph.hasNode(uuid)) return null;
     const attrs = this.graph.getNodeAttributes(uuid);
     if (attrs.type !== 'episode') return null;
@@ -3945,6 +4030,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getEpisodes(uuids: string[]): Promise<EpisodicNode[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const episodes: EpisodicNode[] = [];
     for (const uuid of [...new Set(uuids)]) {
       const episode = await this.getEpisode(uuid);
@@ -3954,6 +4040,7 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async listEpisodes(groupId: string, options: EpisodeFilterOptions = {}): Promise<EpisodicNode[]> {
+    this.assertLoaded();
     return this.collectEpisodes(groupId, options);
   }
 
@@ -4048,6 +4135,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getRecentEpisodes(groupId: string, limit: number): Promise<EpisodicNode[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const episodes: EpisodicNode[] = [];
 
     this.graph.forEachNode((_key, attrs) => {
@@ -4068,6 +4156,7 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async getEpisodeCount(groupId: string, filters: EpisodeFilterOptions = {}): Promise<number> {
+    this.assertLoaded();
     const countFilters = { ...filters };
     delete countFilters.limit;
     delete countFilters.offset;
@@ -4081,6 +4170,7 @@ export class GraphologyStorage implements IGraphStorage {
     limit?: number,
   ): Promise<EpisodicNode[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const episodes: EpisodicNode[] = [];
 
     this.graph.forEachNode((_key, attrs) => {
@@ -4263,6 +4353,7 @@ export class GraphologyStorage implements IGraphStorage {
     options?: { limit?: number },
   ): Promise<ChangelogEntry[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const entries: ChangelogEntry[] = [];
     const sinceTs = new Date(since).getTime();
 
@@ -4329,6 +4420,7 @@ export class GraphologyStorage implements IGraphStorage {
     options?: EntitySearchOptions,
   ): Promise<EntitySearchResult[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const limit = options?.limit ?? 10;
     const minScore = options?.min_score ?? 0;
 
@@ -4359,6 +4451,7 @@ export class GraphologyStorage implements IGraphStorage {
     options?: EdgeSearchOptions,
   ): Promise<EdgeSearchResult[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const limit = options?.limit ?? 10;
     const minScore = options?.min_score ?? 0;
     const includeExpired = options?.include_expired ?? false;
@@ -4401,6 +4494,7 @@ export class GraphologyStorage implements IGraphStorage {
     options?: VectorSearchOptions,
   ): Promise<EntitySearchResult[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const limit = options?.limit ?? 10;
     const minScore = options?.min_score ?? 0;
     const results: EntitySearchResult[] = [];
@@ -4431,6 +4525,7 @@ export class GraphologyStorage implements IGraphStorage {
     options?: VectorSearchOptions,
   ): Promise<EdgeSearchResult[]> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     const limit = options?.limit ?? 10;
     const minScore = options?.min_score ?? 0;
     const results: EdgeSearchResult[] = [];
@@ -4536,6 +4631,7 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   async exportGraph(groupId?: string): Promise<GraphData> {
+    this.assertLoaded();
     return autonomousPersonalProcessingV4(() => this.exportGraphData(groupId));
   }
 
@@ -4620,6 +4716,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async getStats(groupId?: string): Promise<GraphStats> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     let entityCount = 0;
     let edgeCount = 0;
     let episodeCount = 0;
@@ -4673,6 +4770,7 @@ export class GraphologyStorage implements IGraphStorage {
 
   async rebuildSearchIndex(): Promise<{ indexed_entities: number; indexed_edges: number }> {
     this.assertRecoveryReady();
+    this.assertLoaded();
     let indexedEntities = 0;
     let indexedEdges = 0;
 
@@ -4778,6 +4876,182 @@ export class GraphologyStorage implements IGraphStorage {
 
   // ===== Persistence =====
 
+  /**
+   * Private locked read for explicit read-only V4 phases. Serializes with the
+   * mutation queue and persist lock, performs the same verified locked read as
+   * a mutation refresh, keeps the public graph fresh from that read, and hands
+   * the synchronous callback a detached deep-frozen copy. It never writes a
+   * snapshot and the callback has no write path.
+   */
+  private async readOwnedSnapshotV4<T>(
+    read: (graph: GraphData) => T,
+    options: {
+      operation: string;
+      captureRead?: MutationOptions<T>['captureRead'];
+      autonomousPersonalCompletionV4?: {
+        typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1;
+        check: () => void;
+      };
+    },
+  ): Promise<T> {
+    this.assertRecoveryReady();
+    const structuralGuardContext = options.autonomousPersonalCompletionV4
+      ? {
+          typedSyntaxWork: options.autonomousPersonalCompletionV4.typedSyntaxWork,
+          check: options.autonomousPersonalCompletionV4.check,
+        }
+      : ordinaryAutonomousPersonalStructuralGuardContextV4();
+    options.captureRead?.check();
+    options.autonomousPersonalCompletionV4?.check();
+    const startedAt = nowIso();
+    const totalStarted = performance.now();
+    const queueStarted = performance.now();
+    const previousMutation = this.mutationTail;
+    let releaseQueue!: () => void;
+    this.mutationTail = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+
+    await previousMutation;
+    const queueWaitMs = performance.now() - queueStarted;
+
+    let releaseFileLock: () => Promise<void> = async () => {};
+    let lockWaitMs = 0;
+    let diskRefreshMs = 0;
+    let readMs = 0;
+    let refreshAttempted = false;
+    let success = false;
+    try {
+      options.captureRead?.check();
+      options.autonomousPersonalCompletionV4?.check();
+      if (!this.persistPath) throw new Error('Embedded persistence path is not configured');
+      const lockStarted = performance.now();
+      try {
+        releaseFileLock = await this.acquirePersistLock(
+          options.captureRead?.check ??
+            (currentAutonomousPersonalExecutionScopeWorkV1()
+              ? structuralGuardContext.check
+              : undefined),
+        );
+      } finally {
+        lockWaitMs = performance.now() - lockStarted;
+      }
+      options.captureRead?.check();
+      const refreshStarted = performance.now();
+      refreshAttempted = true;
+      let owned: GraphData;
+      try {
+        if (!fs.existsSync(this.persistPath)) this.immutableReadCacheV4 = undefined;
+        this.assertQueueFilePresent();
+        const { data, integrityVerified, immutable } =
+          await this.readAndMigratePersistedDataUnderLock(
+            'lossless',
+            options.captureRead,
+            structuralGuardContext,
+            true,
+          );
+        // No await from here to the callback return: the verified object, the
+        // detached copy, and the public graph all describe this one locked read.
+        options.captureRead?.check();
+        // A stable read returns the factory-owned immutable graph of these exact bytes
+        // (no group_id key); `data` is a separate fresh copy, so no clone is needed.
+        owned =
+          immutable ??
+          autonomousPersonalProcessingV4(() => {
+            const copy = structuredClone(data);
+            if (copy.group_id === undefined) delete copy.group_id;
+            return copy;
+          });
+        this.replaceGraphData(data);
+        this.loadFailure = null;
+        options.captureRead?.check();
+        this.assertLoaded();
+        // `integrityVerified` is local to this call: readAndMigrate asserted ledger and
+        // record integrity (assertAutonomousPersonalGraphIntegrityV4, same guard and
+        // lock) on `data` or a proven-identical lossless graph, and `owned` is a
+        // value-identical clone taken before any other code saw `data`.
+        if (integrityVerified) structuralGuardContext.check();
+        else {
+          const protectsAutonomousSources =
+            owned.episodes.some(hasAutonomousSourceOwnership) ||
+            (owned.automatic_operations_v1?.operations.some(
+              (operation) => operation.version === 4,
+            ) ??
+              false);
+          if (protectsAutonomousSources)
+            autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(owned));
+          if (autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(owned))) {
+            assertAutonomousPersonalRecordIntegrityV4(
+              owned,
+              structuralGuardContext.typedSyntaxWork,
+              structuralGuardContext.check,
+            );
+            assertAutonomousPersonalGraphIntegrityV4(owned, structuralGuardContext);
+          }
+        }
+        autonomousPersonalProcessingV4(() => deepFreezeOwnedSnapshotV4(owned));
+        structuralGuardContext.check();
+      } finally {
+        diskRefreshMs = performance.now() - refreshStarted;
+      }
+      options.autonomousPersonalCompletionV4?.check();
+      const readStarted = performance.now();
+      let result: T;
+      try {
+        result = read(owned);
+      } finally {
+        readMs = performance.now() - readStarted;
+      }
+      if (result instanceof Promise)
+        throw new Error('Engram storage: read callback must be synchronous');
+      options.autonomousPersonalCompletionV4?.check();
+      success = true;
+      return result;
+    } finally {
+      try {
+        await releaseFileLock();
+      } finally {
+        const round = (value: number): number => Math.round(value * 1000) / 1000;
+        this.lastMutationDiagnostics = {
+          operation: options.operation,
+          started_at: startedAt,
+          success,
+          persistence_enabled: Boolean(this.persistPath),
+          snapshot_written: false,
+          item_count: 1,
+          queue_wait_ms: round(queueWaitMs),
+          lock_wait_ms: round(lockWaitMs),
+          // Locked read, migration/integrity validation, detached copy and freeze.
+          disk_refresh_ms: round(diskRefreshMs),
+          rollback_export_ms: 0,
+          // Read-only callback time.
+          mutation_ms: round(readMs),
+          snapshot_write_ms: 0,
+          rollback_restore_ms: 0,
+          total_ms: round(performance.now() - totalStarted),
+          snapshot_bytes: null,
+        };
+        try {
+          this.extractionObservers.getStore()?.({
+            backend: 'embedded',
+            acknowledged: success,
+            total_ms: this.lastMutationDiagnostics.total_ms,
+            queue_wait_ms: this.lastMutationDiagnostics.queue_wait_ms,
+            lock_wait_ms: this.persistPath ? this.lastMutationDiagnostics.lock_wait_ms : null,
+            disk_refresh_ms: refreshAttempted ? this.lastMutationDiagnostics.disk_refresh_ms : null,
+            snapshot_write_ms: null,
+            snapshot_bytes: null,
+            transaction_ms: null,
+            serialization_ms: null,
+          });
+        } catch {
+          /* Diagnostic delivery cannot change a completed read. */
+        }
+        releaseQueue();
+      }
+    }
+  }
+
   private async runMutation<T>(
     mutation: () => T | Promise<T>,
     options: MutationOptions<T> = {},
@@ -4854,6 +5128,10 @@ export class GraphologyStorage implements IGraphStorage {
         }
       }
 
+      // A still-failed load (for example the file went missing after a failure) must
+      // refuse the write before any mutation or snapshot, and before rollback state exists.
+      this.assertLoaded();
+
       const rollbackExportStarted = performance.now();
       try {
         rollbackData = await this.exportGraph();
@@ -4900,10 +5178,15 @@ export class GraphologyStorage implements IGraphStorage {
       ) {
         throw new Error('Engram autonomous personal capture: native_write_required');
       }
+      // Private post-validation copy of this exact post-state; never exposed.
+      let validatedSnapshotData: GraphData | undefined;
       if (
         autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(postMutationGraph))
       ) {
-        assertAutonomousPersonalGraphIntegrityV4(postMutationGraph, structuralGuardContext);
+        validatedSnapshotData = validateOwnedAutonomousPersonalGraphV4(
+          postMutationGraph,
+          structuralGuardContext,
+        );
       } else if (
         protectsAutonomousSources ||
         this.hasAutonomousSourceInMemory() ||
@@ -4956,7 +5239,9 @@ export class GraphologyStorage implements IGraphStorage {
               snapshotReplacementAttempted = true;
               options.autonomousPersonalCompletionV4?.onSnapshotReplacementAttempted();
             },
+            validatedSnapshotData,
           );
+          validatedSnapshotData = undefined;
         } finally {
           snapshotWriteMs = performance.now() - snapshotWriteStarted;
         }
@@ -5057,24 +5342,42 @@ export class GraphologyStorage implements IGraphStorage {
       currentAutonomousPersonalExecutionScopeWorkV1() ? structuralGuardContext.check : undefined,
     );
     try {
-      const data = await this.readAndMigratePersistedDataUnderLock(
+      const { data, integrityVerified } = await this.readAndMigratePersistedDataUnderLock(
         undefined,
         undefined,
         structuralGuardContext,
       );
       if (hasAutonomousPersonalV4Enrollment(data)) {
-        assertAutonomousPersonalGraphIntegrityV4(data, structuralGuardContext);
+        // `integrityVerified` is an ephemeral local result for this exact object,
+        // asserted synchronously in the read above. Scope and abort checks that
+        // the skipped assertion performed after the awaits still run.
+        if (integrityVerified) structuralGuardContext.check();
+        else assertAutonomousPersonalGraphIntegrityV4(data, structuralGuardContext);
       }
       this.replaceGraphData(data);
+      this.loadFailure = null;
     } catch (error) {
+      // Recorded inside the lock (the finally below releases it) for ANY error, including
+      // cancellation and deadline: the graph is unloaded or stale, so reads must not
+      // return it. The original error is still what this call throws.
+      this.loadFailure = error instanceof Error ? error : new Error(String(error));
+      this.initialized = false;
       if (
         error instanceof ExtractionBudgetError ||
         error instanceof AutonomousPersonalExecutionScopeError
       )
         throw error;
-      throw new Error(
+      const wrapped = new Error(
         `Engram: Failed to load or migrate embedded storage at ${this.persistPath}: ${(error as Error).message}`,
       );
+      // Additive diagnostics only: the original error stays reachable unchanged.
+      Object.defineProperty(wrapped, 'cause', {
+        value: error,
+        enumerable: false,
+        writable: true,
+        configurable: true,
+      });
+      throw wrapped;
     } finally {
       await releaseFileLock();
     }
@@ -5091,16 +5394,21 @@ export class GraphologyStorage implements IGraphStorage {
     },
     structuralGuardContext: AutonomousPersonalStructuralGuardContextV4 = ordinaryAutonomousPersonalStructuralGuardContextV4(),
   ): Promise<void> {
+    // A missing file (thrown or skipped) never keeps a previous read entry.
+    if (!this.persistPath || !fs.existsSync(this.persistPath))
+      this.immutableReadCacheV4 = undefined;
     this.assertQueueFilePresent();
     if (!this.persistPath || (!requireExisting && !fs.existsSync(this.persistPath))) return;
 
-    const data = await this.readAndMigratePersistedDataUnderLock(
+    const { data } = await this.readAndMigratePersistedDataUnderLock(
       captureRecords,
       captureRead,
       structuralGuardContext,
     );
     captureRead?.check();
     this.replaceGraphData(data);
+    // Data from a verified read replaced the in-memory graph: a corrected file recovers.
+    this.loadFailure = null;
     captureRead?.check();
   }
 
@@ -5142,17 +5450,28 @@ export class GraphologyStorage implements IGraphStorage {
     onReplaced?: () => void,
     compactCapture = false,
     onReplacementAttempted?: () => void,
+    validatedData?: GraphData,
   ): Promise<number> {
     if (!this.persistPath) return 0;
 
-    const exported = await this.exportGraph();
+    // `validatedData` is runMutation's private record-parser output for this
+    // post-state. It equals compactCaptureSnapshotData of the same export, so the
+    // compact branch serializes it directly instead of re-exporting and re-parsing.
+    const useValidated =
+      validatedData !== undefined &&
+      autonomousPersonalProcessingV4(
+        () => compactCapture || hasRawReplaySafeCaptureState(validatedData),
+      );
+    const exported = useValidated ? validatedData! : await this.exportGraph();
     const payload = autonomousPersonalProcessingV4(() => {
       compactCapture ||= hasRawReplaySafeCaptureState(exported);
-      const data = compactCapture
-        ? compactCaptureSnapshotData(exported)
-        : exported.automatic_operations_v1
-          ? GraphDataSchema.parse(exported)
-          : exported;
+      const data = useValidated
+        ? exported
+        : compactCapture
+          ? compactCaptureSnapshotData(exported)
+          : exported.automatic_operations_v1
+            ? GraphDataSchema.parse(exported)
+            : exported;
       if (this.automaticOperations && !data.automatic_operations_v1) {
         throw new Error('Engram automatic ledger: native_root_missing');
       }
@@ -5189,8 +5508,15 @@ export class GraphologyStorage implements IGraphStorage {
       verifyStableSnapshot?: boolean;
     },
     structuralGuardContext: AutonomousPersonalStructuralGuardContextV4 = ordinaryAutonomousPersonalStructuralGuardContextV4(),
-  ): Promise<GraphData> {
+    // Private, set only by readOwnedSnapshotV4: also return registered immutable DATA for
+    // a current enrolled file. DATA shape only; grants and skips no check.
+    ownedReadData = false,
+  ): Promise<{ data: GraphData; integrityVerified: boolean; immutable?: GraphData }> {
     if (!this.persistPath) throw new Error('Embedded persistence path is not configured');
+    // Taken locally and cleared before any await: any failure below leaves no entry, and
+    // only a fully checked stable read installs one.
+    const cachedRead = this.immutableReadCacheV4;
+    this.immutableReadCacheV4 = undefined;
     const boundedRead =
       currentAutonomousPersonalExecutionScopeWorkV1() !== undefined ||
       captureRead !== undefined ||
@@ -5202,7 +5528,8 @@ export class GraphologyStorage implements IGraphStorage {
             operation.version === 2 || operation.version === 3 || operation.version === 4,
         ),
       );
-    let raw: string;
+    let rawBytes: Buffer | undefined;
+    let rawText: string | undefined;
     let opened: fs.BigIntStats | undefined;
     if (boundedRead) {
       if (
@@ -5216,10 +5543,9 @@ export class GraphologyStorage implements IGraphStorage {
       captureRead?.check();
       const file = await fs.promises.open(this.persistPath, 'r');
       try {
-        const stat = captureRead?.verifyStableSnapshot
-          ? await file.stat({ bigint: true })
-          : await file.stat();
-        if (captureRead?.verifyStableSnapshot) opened = stat as fs.BigIntStats;
+        const exactStat = captureRead?.verifyStableSnapshot || ownedReadData;
+        const stat = exactStat ? await file.stat({ bigint: true }) : await file.stat();
+        if (exactStat) opened = stat as fs.BigIntStats;
         const bytes = Number(stat.size);
         if (!stat.isFile() || !Number.isSafeInteger(bytes) || bytes > 100 * 1024 * 1024)
           throw new Error('Engram automatic capture: snapshot_limit');
@@ -5228,70 +5554,168 @@ export class GraphologyStorage implements IGraphStorage {
           captureRead.check();
           throw new ExtractionBudgetError('snapshot_limit');
         }
-        raw = await file.readFile('utf8');
+        // Raw bytes, not a decoded string: distinct invalid UTF-8 can decode identically.
+        rawBytes = await file.readFile();
         captureRead?.check();
       } finally {
         await file.close();
       }
       captureRead?.check();
-    } else raw = await fs.promises.readFile(this.persistPath, 'utf-8');
+    } else rawText = await fs.promises.readFile(this.persistPath, 'utf-8');
     captureRead?.check();
-    const decoded: unknown = autonomousPersonalProcessingV4(() => JSON.parse(raw));
     if (captureRead?.verifyStableSnapshot) {
-      if (
-        !opened ||
-        decoded === null ||
-        typeof decoded !== 'object' ||
-        Array.isArray(decoded) ||
-        Object.prototype.hasOwnProperty.call(decoded, 'group_id')
-      )
-        throw new CompositionalRetrievalSnapshotReadError('invalid_snapshot');
-      const afterRead = await fs.promises.stat(this.persistPath, { bigint: true });
-      captureRead.check();
-      if (automaticClaimFileSignature(opened) !== automaticClaimFileSignature(afterRead))
-        throw new CompositionalRetrievalSnapshotReadError('concurrent_snapshot');
+      const bytes = rawBytes!;
+      const persistPath = this.persistPath;
+      const digest = autonomousPersonalProcessingV4(() =>
+        createHash('sha256').update(bytes).digest(),
+      );
+      // Exact full-byte match only. Equal bytes already passed the deterministic shape check
+      // and full lossless parse below; stat/epoch/mtime never stand in for this.
+      const hit =
+        cachedRead !== undefined &&
+        cachedRead.persistPath === persistPath &&
+        cachedRead.byteLength === bytes.length &&
+        cachedRead.digest.equals(digest) &&
+        // Owned reads may cache a group-scoped graph; stable full-store reads may not.
+        !Object.prototype.hasOwnProperty.call(cachedRead.graph, 'group_id');
       let snapshot: GraphData;
-      try {
-        snapshot = autonomousPersonalProcessingV4(() =>
-          parseLosslessAutomaticCaptureGraph(decoded),
+      if (hit) {
+        if (!opened) throw new CompositionalRetrievalSnapshotReadError('invalid_snapshot');
+        const afterRead = await fs.promises.stat(persistPath, { bigint: true });
+        captureRead.check();
+        if (automaticClaimFileSignature(opened) !== automaticClaimFileSignature(afterRead))
+          throw new CompositionalRetrievalSnapshotReadError('concurrent_snapshot');
+        snapshot = cachedRead!.graph;
+      } else {
+        const decoded: unknown = autonomousPersonalProcessingV4(() =>
+          JSON.parse(bytes.toString('utf8')),
         );
-      } catch (error) {
         if (
-          error instanceof ExtractionBudgetError ||
-          error instanceof AutonomousPersonalExecutionScopeError
+          !opened ||
+          decoded === null ||
+          typeof decoded !== 'object' ||
+          Array.isArray(decoded) ||
+          Object.prototype.hasOwnProperty.call(decoded, 'group_id')
         )
-          throw error;
-        throw new CompositionalRetrievalSnapshotReadError(
-          isCompositionalSnapshotResourceFailure(error) ? 'resource_exhausted' : 'invalid_snapshot',
-        );
+          throw new CompositionalRetrievalSnapshotReadError('invalid_snapshot');
+        const afterRead = await fs.promises.stat(persistPath, { bigint: true });
+        captureRead.check();
+        if (automaticClaimFileSignature(opened) !== automaticClaimFileSignature(afterRead))
+          throw new CompositionalRetrievalSnapshotReadError('concurrent_snapshot');
+        try {
+          snapshot = autonomousPersonalProcessingV4(() => parseImmutableGraphData(decoded));
+        } catch (error) {
+          if (
+            error instanceof ExtractionBudgetError ||
+            error instanceof AutonomousPersonalExecutionScopeError
+          )
+            throw error;
+          throw new CompositionalRetrievalSnapshotReadError(
+            isCompositionalSnapshotResourceFailure(error)
+              ? 'resource_exhausted'
+              : 'invalid_snapshot',
+          );
+        }
       }
       captureRead.check();
-      if (hasAutonomousPersonalV4Enrollment(snapshot)) {
+      // Fresh semantic checks on every read, hit or miss; no verdict is cached.
+      const snapshotEnrolled = hasAutonomousPersonalV4Enrollment(snapshot);
+      if (snapshotEnrolled) {
         assertAutonomousPersonalGraphIntegrityV4(snapshot, structuralGuardContext);
       }
-      const afterValidation = await fs.promises.stat(this.persistPath, { bigint: true });
+      const afterValidation = await fs.promises.stat(persistPath, { bigint: true });
       captureRead.check();
       if (automaticClaimFileSignature(opened) !== automaticClaimFileSignature(afterValidation))
         throw new CompositionalRetrievalSnapshotReadError('concurrent_snapshot');
-      return snapshot;
+      // Core keeps references: it gets a fresh mutable copy shaped like the old parser
+      // output (prototypes, key order), never the cached DATA.
+      const data = autonomousPersonalProcessingV4(() => cloneOwnedImmutableGraphData(snapshot));
+      captureRead.check();
+      this.immutableReadCacheV4 = {
+        persistPath,
+        byteLength: bytes.length,
+        digest,
+        graph: snapshot,
+      };
+      const counters = this.immutableReadCacheCountersV4;
+      if (hit) counters.hits = Math.min(counters.hits + 1, Number.MAX_SAFE_INTEGER);
+      else counters.misses = Math.min(counters.misses + 1, Number.MAX_SAFE_INTEGER);
+      return { data, integrityVerified: snapshotEnrolled, immutable: snapshot };
     }
+    const raw = rawText ?? rawBytes!.toString('utf8');
+    const decoded: unknown = autonomousPersonalProcessingV4(() => JSON.parse(raw));
     let losslessRawGraph: GraphData | undefined;
     const rawV4Enrollment = rawGraphHasAutonomousPersonalV4Enrollment(decoded);
+    // Owned read: the exact raw bytes select a previously parsed immutable root; a changed,
+    // unknown or unenrolled file takes the full parse. Integrity runs fresh either way.
+    const ownedBytes = ownedReadData && rawV4Enrollment ? rawBytes : undefined;
+    const ownedDigest = ownedBytes
+      ? autonomousPersonalProcessingV4(() => createHash('sha256').update(ownedBytes).digest())
+      : undefined;
+    const ownedHit =
+      ownedDigest !== undefined &&
+      cachedRead !== undefined &&
+      cachedRead.persistPath === this.persistPath &&
+      cachedRead.byteLength === ownedBytes!.length &&
+      cachedRead.digest.equals(ownedDigest);
     if (boundedRead || hasRawReplaySafeCaptureState(decoded) || rawV4Enrollment) {
-      losslessRawGraph = autonomousPersonalProcessingV4(() =>
-        parseLosslessAutomaticCaptureGraph(decoded),
-      );
-    }
-    if (rawV4Enrollment) {
-      assertAutonomousPersonalGraphIntegrityV4(losslessRawGraph!, structuralGuardContext);
+      if (ownedDigest !== undefined) {
+        // Same ledger + record integrity as parseIntegrityChecked…, on the immutable root.
+        const owned = autonomousPersonalProcessingV4(() =>
+          parseImmutableGraphData(ownedHit ? cachedRead!.graph : decoded),
+        );
+        assertAutonomousPersonalGraphIntegrityV4(owned, structuralGuardContext);
+        losslessRawGraph = owned;
+      } else {
+        // Enrolled: one parse shared by ledger and record integrity, returned only after both.
+        losslessRawGraph = rawV4Enrollment
+          ? parseIntegrityCheckedAutonomousPersonalGraphV4(
+              decoded,
+              structuralGuardContext.typedSyntaxWork,
+              structuralGuardContext.check,
+            )
+          : autonomousPersonalProcessingV4(() => parseLosslessAutomaticCaptureGraph(decoded));
+      }
     }
     captureRead?.check();
-    const migration = autonomousPersonalProcessingV4(() => migrateGraphData(decoded));
+    // Enrolled current file with no missing defaults: the lossless parse above already ran
+    // the same CurrentRawSchema pipeline migrateGraphData would, proved it normalized
+    // nothing, and integrity-checked this local graph, which has not escaped or changed.
+    // Reuse it with a report-only summary instead of reparsing and re-comparing.
+    const currentReport =
+      rawV4Enrollment && losslessRawGraph !== undefined
+        ? autonomousPersonalProcessingV4(() => currentGraphMigrationReport(losslessRawGraph!))
+        : undefined;
+    const migration =
+      currentReport !== undefined
+        ? {
+            // Lossless parsing proved this private JSON.parse value already equals the
+            // current schema output. Reuse it to retain the original realm/prototypes.
+            data: decoded as GraphData,
+            report: currentReport,
+          }
+        : autonomousPersonalProcessingV4(() => migrateGraphData(decoded));
     captureRead?.check();
     if (captureRead && migration.report.migration_required)
       throw new Error('Engram compositional capture: unsupported_mode');
-    if (rawV4Enrollment || hasAutonomousPersonalV4Enrollment(migration.data)) {
-      assertAutonomousPersonalGraphIntegrityV4(migration.data, structuralGuardContext);
+    const integrityVerified = rawV4Enrollment || hasAutonomousPersonalV4Enrollment(migration.data);
+    if (integrityVerified) {
+      // Same-call, synchronous proof (no await since the raw assertion above): the raw
+      // assertion already passed on a graph that is structurally identical to the migrated
+      // one and nothing migrated. The comparison runs inside processing charge and its
+      // guard `check` propagates cancellation/deadline. Any non-true result asserts as before.
+      const migratedProvenSameAsRaw =
+        currentReport !== undefined ||
+        (rawV4Enrollment &&
+          !migration.report.migration_required &&
+          losslessRawGraph !== undefined &&
+          autonomousPersonalProcessingV4(() =>
+            provenIdenticalLosslessGraphData(losslessRawGraph!, migration.data, {
+              check: structuralGuardContext.check,
+            }),
+          ));
+      if (migratedProvenSameAsRaw) structuralGuardContext.check();
+      else assertAutonomousPersonalGraphIntegrityV4(migration.data, structuralGuardContext);
     }
     const backupPath = `${this.persistPath}${EMBEDDED_BACKUP_SUFFIX}`;
     const legacyEpisodeCount = Math.max(
@@ -5316,7 +5740,7 @@ export class GraphologyStorage implements IGraphStorage {
           path: backupPath,
         },
       };
-      return migration.data;
+      return { data: migration.data, integrityVerified };
     }
 
     const existingBackup = await this.inspectExistingBackup(backupPath, migration.data);
@@ -5336,7 +5760,29 @@ export class GraphologyStorage implements IGraphStorage {
         path: existingBackup ? backupPath : null,
       },
     };
-    return migration.data;
+    if (ownedDigest === undefined || currentReport === undefined || !losslessRawGraph)
+      return { data: migration.data, integrityVerified };
+    // Current enrolled file, nothing migrated: the immutable root is the full parse of the
+    // exact bytes Core's `data` was decoded from. Install it only if the file is unchanged.
+    // A failed stat only skips installation; it adds no new failure to this read.
+    const afterValidation = await fs.promises
+      .stat(this.persistPath, { bigint: true })
+      .catch(() => undefined);
+    if (
+      opened &&
+      afterValidation &&
+      automaticClaimFileSignature(opened) === automaticClaimFileSignature(afterValidation)
+    )
+      this.immutableReadCacheV4 = {
+        persistPath: this.persistPath,
+        byteLength: ownedBytes!.length,
+        digest: ownedDigest,
+        graph: losslessRawGraph,
+      };
+    const counters = this.immutableReadCacheCountersV4;
+    if (ownedHit) counters.hits = Math.min(counters.hits + 1, Number.MAX_SAFE_INTEGER);
+    else counters.misses = Math.min(counters.misses + 1, Number.MAX_SAFE_INTEGER);
+    return { data: migration.data, integrityVerified, immutable: losslessRawGraph };
   }
 
   private async ensureVerifiedMigrationBackup(raw: string, backupPath: string): Promise<boolean> {
@@ -5422,6 +5868,9 @@ export class GraphologyStorage implements IGraphStorage {
     onReplaced?: () => void,
     onReplacementAttempted?: () => void,
   ): Promise<void> {
+    // Any replacement attempt (write, migration, import, rollback) drops the read entry
+    // before touching disk; it is never promoted from a write.
+    if (targetPath === this.persistPath) this.immutableReadCacheV4 = undefined;
     const dir = path.dirname(targetPath);
     await fs.promises.mkdir(dir, { recursive: true });
     const tmpPath = `${targetPath}.${process.pid}.${generateUuid()}.tmp`;
