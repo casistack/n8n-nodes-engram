@@ -60,6 +60,7 @@ import { buildAutonomousPersonalClaimCandidateV1 } from '../extraction/Autonomou
 import { projectCompositionalPreferenceV2Meaning } from '../extraction/CompositionalPreferenceV2Meaning';
 import {
   createAutonomousPersonalClaimIndexV4,
+  getRegisteredAutonomousPersonalClaimIndexGraphV4,
   inspectAutonomousPersonalClaimCreatorV4,
   qualifyAutonomousPersonalClaimCreatorV4,
   AutonomousPersonalClaimIndexV4Error,
@@ -73,6 +74,7 @@ import { buildCommittedAutonomousPersonalOperationV4 } from './AutonomousPersona
 import { AutonomousPersonalCaptureSnapshotPreparationV4InputOwnedDataSchema } from '../schemas/AutonomousPersonalCaptureSnapshotPreparationV4.schema';
 import { prepareAutonomousPersonalCaptureSnapshotV4 } from './AutonomousPersonalCaptureBeginV4';
 import { parseLosslessAutomaticCaptureGraph } from './LosslessAutomaticCaptureGraph';
+import { getOwnedImmutableGraphData } from './ImmutableGraphSnapshot';
 import {
   BoundedAutomaticCaptureJsonError,
   cloneBoundedAutomaticCaptureJson,
@@ -932,6 +934,7 @@ function rawClaimKey(edge: EntityEdge): string | null {
 
 function inspectExistingFamily4(
   graph: GraphData,
+  snapshot: unknown,
   namespace: string,
   subjectId: string,
   storeHash: string,
@@ -956,7 +959,7 @@ function inspectExistingFamily4(
     stop('inspection_incomplete');
   // Complete B1b structural classification first. Only actual structural
   // family4 proofs leave the legacy universe; raw tags and IDs never do.
-  const claimIndex = createAutonomousPersonalClaimIndexV4(graph, typedWork, check);
+  const claimIndex = createAutonomousPersonalClaimIndexV4(snapshot, typedWork, check);
   check();
   const rows: ExistingFamily4[] = [];
   const rowsByKey = new Map<string, ExistingFamily4[]>();
@@ -1637,6 +1640,7 @@ type VerifiedInitialCandidate = Extract<
 function verifyInputSource(
   input: AutonomousPersonalCompletionPlanV4Input,
   graph: GraphData,
+  snapshot: unknown,
   check: () => void,
 ): VerifiedInitialCandidate {
   const { scope, stagedFresh } = input;
@@ -1673,7 +1677,7 @@ function verifyInputSource(
   });
   if (!request.success) stop('invalid_input');
   check();
-  const prepared = prepareAutonomousPersonalCaptureSnapshotV4(request.data, graph, check);
+  const prepared = prepareAutonomousPersonalCaptureSnapshotV4(request.data, snapshot, check);
   check();
   if (prepared.kind === 'no_write') stop(beginProjectionReason(prepared.resultProjection));
   if (prepared.kind !== 'same_initial_scope_candidate') stop('conflict');
@@ -1743,6 +1747,7 @@ export function planAutonomousPersonalCaptureCompletionV4(
   let trustedFailure: unknown;
   let trustedFailed = false;
   let latchedStop: PlanStop | undefined;
+  let snapshotIndexed = false;
   const workDeadline = Math.min(work.deadline, input.scope.deadlineAtMonotonicMs);
   const check = () => {
     if (trustedFailed) throw trustedFailure;
@@ -1784,17 +1789,31 @@ export function planAutonomousPersonalCaptureCompletionV4(
     check();
     if (nativeBudget(legacyReadBudgetValue) !== legacyReadBudget) stop('invalid_input');
 
+    // A module-registered claim index shares its frozen graph DATA; raw input parses as before.
+    let registered: GraphData | undefined;
+    try {
+      registered = getRegisteredAutonomousPersonalClaimIndexGraphV4(graphValue);
+    } catch (error) {
+      // Only a known index throws here; keep its guard failure out of the raw mapping.
+      snapshotIndexed = true;
+      throw error;
+    }
+    snapshotIndexed = registered !== undefined;
     let graph: GraphData;
     try {
-      graph = parseLosslessAutomaticCaptureGraph(graphValue);
+      graph =
+        registered ??
+        getOwnedImmutableGraphData(graphValue) ??
+        parseLosslessAutomaticCaptureGraph(graphValue);
     } catch (error) {
       if (error instanceof BoundedAutomaticCaptureJsonError && error.reason !== 'invalid_json')
         stop('capacity');
       stop('conflict');
     }
     check();
+    const snapshot: unknown = registered ? graphValue : graph;
 
-    const prepared = verifyInputSource(input, graph, check);
+    const prepared = verifyInputSource(input, graph, snapshot, check);
     const source = prepared.episode;
     const stored = reconstructAutonomousPersonalStoredSourceIdentityV4({
       source,
@@ -1977,6 +1996,7 @@ export function planAutonomousPersonalCaptureCompletionV4(
     const groups = makeGroups(occurrences);
     const index = inspectExistingFamily4(
       graph,
+      snapshot,
       input.scope.context.namespace,
       input.scope.context.binding.subjectId,
       input.scope.context.storeHash,
@@ -2078,6 +2098,8 @@ export function planAutonomousPersonalCaptureCompletionV4(
       },
     );
   } catch (error) {
+    // A known DATA index retains its own sticky guard failure, without raw-error mapping.
+    if (snapshotIndexed) getRegisteredAutonomousPersonalClaimIndexGraphV4(graphValue);
     if (trustedFailed) throw trustedFailure;
     if (latchedStop) return noWrite(latchedStop.reason);
     if (error instanceof PlanStop) return noWrite(error.reason);

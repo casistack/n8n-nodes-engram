@@ -42,6 +42,10 @@ import {
 } from '../schemas/AutonomousPersonalOperationV4.schema';
 import { hashAutonomousPersonalDescriptorV4 } from '../schemas/AutonomousPersonalDescriptorV4.schema';
 import {
+  AutonomousPersonalRecordIntegrityV4FailureReasonSchema,
+  type AutonomousPersonalRecordIntegrityV4FailureReason,
+} from '../schemas/AutonomousPersonalRecordIntegrityV4.schema';
+import {
   ExtractionMetadataV2Schema,
   extractionMetadataFromAttributes,
 } from '../schemas/ExtractionMetadata.schema';
@@ -53,11 +57,19 @@ import { deriveAutonomousPersonalRecordIdsV1 } from '../storage/AutonomousPerson
 import { buildAutonomousPersonalClaimCandidateV1 } from './AutonomousPersonalClaimCandidateV1';
 import { compileAutonomousPersonalTypedSyntaxV1 } from './AutonomousPersonalTypedSyntaxV1';
 import { parseLosslessAutomaticCaptureGraph } from '../storage/LosslessAutomaticCaptureGraph';
+import { getOwnedImmutableGraphData } from '../storage/ImmutableGraphSnapshot';
 import {
   BoundedAutomaticCaptureJsonError,
   isNativePlainAutomaticCaptureObject,
 } from '../storage/BoundedAutomaticCaptureJson';
-import { assertAutomaticBindingRegistryIntegrity } from '../storage/AutomaticIdentity';
+import {
+  assertAutomaticBindingRegistryIntegrity,
+  assertAutomaticLedgerSourceIntegrity,
+} from '../storage/AutomaticIdentity';
+import {
+  currentAutonomousPersonalExecutionScopeWorkV1,
+  runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1,
+} from '../storage/AutonomousPersonalExecutionScopeV1';
 import { AutonomousPersonalTypedSyntaxFailureV1 } from './AutonomousPersonalTypedSyntaxV1';
 
 const EDGE_CLAIM_ATTRIBUTE = 'engram_claim_v1';
@@ -78,8 +90,13 @@ export class AutonomousPersonalClaimIndexV4Error extends Error {
   }
 }
 
-type BindingEntry = Readonly<{ record: AutomaticBindingRecord; subjectId: string }>;
-type CompleteSourceScan = AutonomousPersonalSourceScanV1 & { readonly status: 'complete' };
+type BindingEntry = Readonly<{
+  record: AutomaticBindingRecord;
+  subjectId: string;
+}>;
+type CompleteSourceScan = AutonomousPersonalSourceScanV1 & {
+  readonly status: 'complete';
+};
 type CommittedPersonalOperationV4 = Extract<AutonomousPersonalOperationV4, { state: 'committed' }>;
 
 type ReadySourceEvidence = Readonly<{
@@ -167,7 +184,10 @@ function readWorkContext(value: unknown): {
       throw new AutonomousPersonalTypedSyntaxFailureV1('internal');
     }
     nativeAbortSignalAbortedGetter.call(signalProperty.value);
-    return { deadline: deadlineProperty.value, signal: signalProperty.value as AbortSignal };
+    return {
+      deadline: deadlineProperty.value,
+      signal: signalProperty.value as AbortSignal,
+    };
   } catch (error) {
     if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
     throw new AutonomousPersonalTypedSyntaxFailureV1('internal');
@@ -264,7 +284,10 @@ function bindingKey(namespace: string, issuer: string, actorReference: string): 
 function indexBindings(
   graph: GraphData,
   check: () => void,
-): { readonly valid: boolean; readonly byIdentity: Map<string, BindingEntry[]> } {
+): {
+  readonly valid: boolean;
+  readonly byIdentity: Map<string, BindingEntry[]>;
+} {
   let valid = true;
   try {
     assertAutomaticBindingRegistryIntegrity(graph, check);
@@ -322,10 +345,65 @@ export function createAutonomousPersonalClaimIndexV4(
 ): AutonomousPersonalClaimIndexV4 {
   const sticky = stickyCheck(codeOwnedCheck, typedSyntaxWork);
   const { check } = sticky;
+  // A module-registered index supplies its frozen graph; its guard errors propagate unmapped.
+  const registered = getRegisteredAutonomousPersonalClaimIndexGraphV4(graphValue);
   try {
     check();
-    const graph = parseLosslessAutomaticCaptureGraph(graphValue);
+    // An owned immutable snapshot skips only the schema parse; indexing reruns below.
+    const graph =
+      registered ??
+      getOwnedImmutableGraphData(graphValue) ??
+      parseLosslessAutomaticCaptureGraph(graphValue);
     check();
+    // Rebinds maps to this caller's check; freeze stops at the already-frozen root.
+    return indexOwnedParsedGraph(graph, sticky, true);
+  } catch (error) {
+    mapClaimIndexFailure(error, sticky);
+  }
+}
+
+/**
+ * Indexes one module-local parser output. Private: the graph must be a fresh
+ * owned result of parseLosslessAutomaticCaptureGraph, never caller input.
+ * freezeGraph may be false only when the index never escapes. The graph can
+ * be returned after validation completes, when that ephemeral index is unreachable.
+ */
+function indexParsedGraphV4(
+  graph: GraphData,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  codeOwnedCheck: () => void,
+  freezeGraph: boolean,
+): AutonomousPersonalClaimIndexV4 {
+  const sticky = stickyCheck(codeOwnedCheck, typedSyntaxWork);
+  try {
+    sticky.check();
+    // Retain both guard boundaries from the public parse path.
+    sticky.check();
+    return indexOwnedParsedGraph(graph, sticky, freezeGraph);
+  } catch (error) {
+    mapClaimIndexFailure(error, sticky);
+  }
+}
+
+function mapClaimIndexFailure(
+  error: unknown,
+  sticky: { readonly rethrowFailure: () => void },
+): never {
+  sticky.rethrowFailure();
+  if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
+  if (error instanceof BoundedAutomaticCaptureJsonError && error.reason !== 'invalid_json') {
+    snapshotFailure('snapshot_capacity');
+  }
+  snapshotFailure('invalid_snapshot');
+}
+
+function indexOwnedParsedGraph(
+  graph: GraphData,
+  sticky: ReturnType<typeof stickyCheck>,
+  freezeGraph: boolean,
+): AutonomousPersonalClaimIndexV4 {
+  const { check } = sticky;
+  {
     ensureGlobalIdsUnique(graph, check);
     const entities = indexRows(graph.entities, check);
     const edges = indexRows(graph.edges, check);
@@ -340,7 +418,7 @@ export function createAutonomousPersonalClaimIndexV4(
     for (const rows of operationsById.values()) Object.freeze(rows);
     for (const rows of operationsBySource.values()) Object.freeze(rows);
     const bindingIndex = indexBindings(graph, check);
-    freeze(graph, check);
+    if (freezeGraph) freeze(graph, check);
     const root: OwnedIndexRoot = {
       graph,
       entities,
@@ -358,13 +436,6 @@ export function createAutonomousPersonalClaimIndexV4(
     const token = Object.freeze(Object.create(null)) as AutonomousPersonalClaimIndexV4;
     indices.set(token as object, root);
     return token;
-  } catch (error) {
-    sticky.rethrowFailure();
-    if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
-    if (error instanceof BoundedAutomaticCaptureJsonError && error.reason !== 'invalid_json') {
-      snapshotFailure('snapshot_capacity');
-    }
-    snapshotFailure('invalid_snapshot');
   }
 }
 
@@ -385,6 +456,17 @@ export function getAutonomousPersonalClaimIndexGraphV4(
   if (!Object.isFrozen(graph)) throw invalidRequest();
   root.check();
   return graph;
+}
+
+/**
+ * Recognizes only tokens in this module's own index WeakMap, by identity. Returns undefined
+ * for any other value (raw GraphData path). Guard failures of a known index propagate.
+ */
+export function getRegisteredAutonomousPersonalClaimIndexGraphV4(
+  value: unknown,
+): GraphData | undefined {
+  if (value === null || typeof value !== 'object' || !indices.has(value)) return undefined;
+  return getAutonomousPersonalClaimIndexGraphV4(value as AutonomousPersonalClaimIndexV4);
 }
 
 /**
@@ -505,7 +587,10 @@ function invalid(
 }
 
 function uncommitted(root: OwnedIndexRoot): AutonomousPersonalQualifiedClaimResultV4 {
-  return resultData(root, { status: 'uncommitted', reason: 'capture_not_committed' });
+  return resultData(root, {
+    status: 'uncommitted',
+    reason: 'capture_not_committed',
+  });
 }
 
 function capacity(root: OwnedIndexRoot): AutonomousPersonalQualifiedClaimResultV4 {
@@ -553,7 +638,10 @@ function getSourceEvidence(
   }
   root.check();
   try {
-    const stored = reconstructAutonomousPersonalStoredSourceIdentityV4({ source, descriptor });
+    const stored = reconstructAutonomousPersonalStoredSourceIdentityV4({
+      source,
+      descriptor,
+    });
     if (!AutonomousPersonalStoredSourceIdentityV4OwnedDataSchema.safeParse(stored).success) {
       root.check();
       root.sourceEvidence.set(source.uuid, { kind: 'invalid' });
@@ -1026,7 +1114,10 @@ export function qualifyAutonomousPersonalClaimCreatorV4(
   if (request.storeHash !== proof.storeHash)
     return resultData(root, { status: 'inactive', reason: 'store_mismatch' });
   if (request.namespace !== proof.namespace)
-    return resultData(root, { status: 'inactive', reason: 'namespace_mismatch' });
+    return resultData(root, {
+      status: 'inactive',
+      reason: 'namespace_mismatch',
+    });
   const edgeRows = root.edges.get(proof.claimId) ?? [];
   const sourceRows = root.episodes.get(proof.sourceId) ?? [];
   const opRows = root.operationsById.get(proof.operationId) ?? [];
@@ -1047,7 +1138,10 @@ export function qualifyAutonomousPersonalClaimCreatorV4(
       binding: operation.data.identity.binding,
     })
   ) {
-    return resultData(root, { status: 'inactive', reason: 'authority_inactive' });
+    return resultData(root, {
+      status: 'inactive',
+      reason: 'authority_inactive',
+    });
   }
   if (
     source.review_status !== 'accepted' ||
@@ -1081,4 +1175,577 @@ export function qualifyAutonomousPersonalClaimCreatorV4(
   }
   root.check();
   return resultData(root, { status: 'qualified', proof });
+}
+
+// Record integrity V4 (co-located so it can index its own parse privately;
+// re-exported unchanged from ../storage/AutonomousPersonalRecordIntegrityV4).
+
+const CLAIM_ATTRIBUTE = 'engram_claim_v1';
+const VALUE_MARKER_ATTRIBUTE = 'engram_literal_v1';
+const PERSONAL_VALUE_TYPE = 'autonomous_personal_value';
+const PERSONAL_FAMILY = 'autonomous-personal-v1';
+
+type CommittedOperationV4 = Extract<AutonomousPersonalOperationV4, { state: 'committed' }>;
+type OccurrenceReceiptV4 = Extract<
+  CommittedOperationV4['terminalReceipt'],
+  { selection: { kind: 'occurrences' } }
+>;
+type OccurrenceItemV4 = OccurrenceReceiptV4['selection']['items'][number];
+
+type PositiveOccurrenceV4 = Readonly<{
+  operation: CommittedOperationV4;
+  item: OccurrenceItemV4;
+}>;
+
+type Footprints = {
+  readonly edgeIds: Set<string>;
+  readonly valueIds: Set<string>;
+  readonly positiveOccurrences: PositiveOccurrenceV4[];
+};
+
+type TrustedCheck = {
+  readonly check: () => void;
+  readonly rethrowFailure: () => void;
+};
+
+export class AutonomousPersonalRecordIntegrityV4Error extends Error {
+  readonly reason: AutonomousPersonalRecordIntegrityV4FailureReason;
+
+  constructor(reason: AutonomousPersonalRecordIntegrityV4FailureReason) {
+    const parsedReason = AutonomousPersonalRecordIntegrityV4FailureReasonSchema.safeParse(reason);
+    super('Engram autonomous personal record integrity failed');
+    this.name = 'AutonomousPersonalRecordIntegrityV4Error';
+    this.reason = parsedReason.success ? parsedReason.data : 'invalid_snapshot';
+    Object.freeze(this);
+  }
+}
+
+function fail(reason: AutonomousPersonalRecordIntegrityV4FailureReason): never {
+  throw new AutonomousPersonalRecordIntegrityV4Error(reason);
+}
+
+function stickyTrustedCheck(callback: () => void): TrustedCheck {
+  let failed = false;
+  let failure: unknown;
+  const check = () => {
+    if (failed) throw failure;
+    try {
+      callback();
+    } catch (error) {
+      failed = true;
+      failure = error;
+      throw error;
+    }
+  };
+  return {
+    check,
+    rethrowFailure: () => {
+      if (failed) throw failure;
+    },
+  };
+}
+
+function stickyWorkCheck(work: unknown, trusted: TrustedCheck): TrustedCheck {
+  const supplied = readWorkContext(work);
+  const abortedGetter = nativeAbortSignalAbortedGetter;
+  if (abortedGetter === undefined) throw new AutonomousPersonalTypedSyntaxFailureV1('internal');
+  let failed = false;
+  let failure: unknown;
+  const latch = (error: unknown): never => {
+    if (!failed) {
+      failed = true;
+      failure = error;
+    }
+    throw failure;
+  };
+  const checkWork = () => {
+    try {
+      if (abortedGetter.call(supplied.signal)) {
+        throw new AutonomousPersonalTypedSyntaxFailureV1('cancelled');
+      }
+      const now = performance.now();
+      if (!Number.isFinite(now)) throw new AutonomousPersonalTypedSyntaxFailureV1('internal');
+      if (now >= supplied.deadline) throw new AutonomousPersonalTypedSyntaxFailureV1('deadline');
+    } catch (error) {
+      if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
+      throw new AutonomousPersonalTypedSyntaxFailureV1('internal');
+    }
+  };
+  const check = () => {
+    if (failed) throw failure;
+    try {
+      checkWork();
+      trusted.check();
+      checkWork();
+    } catch (error) {
+      latch(error);
+    }
+  };
+  return {
+    check,
+    rethrowFailure: () => {
+      if (failed) throw failure;
+      trusted.rethrowFailure();
+    },
+  };
+}
+
+function isFamilyFourTag(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (typeof record.version === 'number' && record.version >= 3) || record.family === PERSONAL_FAMILY
+  );
+}
+
+function collectFootprints(graph: GraphData, check: () => void): Footprints {
+  const edgeIds = new Set<string>();
+  const valueIds = new Set<string>();
+  const positiveOccurrences: PositiveOccurrenceV4[] = [];
+
+  check();
+  for (const edge of graph.edges) {
+    check();
+    if (isFamilyFourTag(edge.attributes[CLAIM_ATTRIBUTE])) edgeIds.add(edge.uuid);
+  }
+  check();
+
+  for (const entity of graph.entities) {
+    check();
+    if (
+      isFamilyFourTag(entity.attributes[VALUE_MARKER_ATTRIBUTE]) ||
+      entity.entity_type === PERSONAL_VALUE_TYPE
+    ) {
+      valueIds.add(entity.uuid);
+    }
+  }
+  check();
+
+  for (const storedOperation of graph.automatic_operations_v1?.operations ?? []) {
+    check();
+    if (storedOperation.version !== 4 || storedOperation.state !== 'committed') continue;
+    const operation = storedOperation;
+    const receipt = operation.terminalReceipt;
+    if (receipt.kind !== 'human_autonomous_capture_committed') continue;
+    if (receipt.selection.kind !== 'occurrences') continue;
+    for (const item of receipt.selection.items) {
+      check();
+      if (item.effect === 'created' || item.effect === 'reference') {
+        positiveOccurrences.push({ operation, item });
+      }
+    }
+  }
+  check();
+
+  return { edgeIds, valueIds, positiveOccurrences };
+}
+
+function mapOwnershipFailure(error: unknown): never {
+  if (error instanceof BoundedAutomaticCaptureJsonError && error.reason !== 'invalid_json') {
+    fail('snapshot_capacity');
+  }
+  fail('invalid_snapshot');
+}
+
+function mapIndexFailure(error: unknown): never {
+  if (error instanceof AutonomousPersonalClaimIndexV4Error) {
+    fail(error.reason === 'snapshot_capacity' ? 'snapshot_capacity' : 'invalid_snapshot');
+  }
+  if (error instanceof BoundedAutomaticCaptureJsonError && error.reason !== 'invalid_json') {
+    fail('snapshot_capacity');
+  }
+  if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
+  fail('inspection_incomplete');
+}
+
+function equalData(left: unknown, right: unknown): boolean {
+  return canonicalAutomaticCaptureV2(left) === canonicalAutomaticCaptureV2(right);
+}
+
+function required<T>(
+  value: T | null | undefined,
+  reason: AutonomousPersonalRecordIntegrityV4FailureReason,
+  check: () => void,
+): T {
+  if (value === null || value === undefined) {
+    check();
+    fail(reason);
+  }
+  return value;
+}
+
+function inspectFailureReason(
+  result: Exclude<
+    ReturnType<typeof inspectAutonomousPersonalClaimCreatorV4>,
+    { status: 'structural' }
+  >,
+): AutonomousPersonalRecordIntegrityV4FailureReason {
+  if (result.status === 'capacity') {
+    return result.reason === 'snapshot_capacity' ? 'snapshot_capacity' : 'inspection_incomplete';
+  }
+  if (result.status === 'uncommitted') return 'orphan_record';
+  if (result.status !== 'invalid') return 'inspection_incomplete';
+  if (result.reason === 'missing_record') return 'orphan_record';
+  if (
+    result.reason === 'invalid_operation' ||
+    result.reason === 'invalid_creator' ||
+    result.reason === 'unsupported_generation' ||
+    result.reason === 'ambiguous_record'
+  ) {
+    return 'invalid_creator';
+  }
+  return 'invalid_pair';
+}
+
+function validatePositiveOccurrences(
+  occurrences: readonly PositiveOccurrenceV4[],
+  proofs: ReadonlyMap<string, AutonomousPersonalQualifiedClaimProofV4>,
+  check: () => void,
+): void {
+  const creatorsByClaim = new Map<string, PositiveOccurrenceV4[]>();
+  for (const occurrence of occurrences) {
+    check();
+    const claimId = required(occurrence.item.claimId, 'invalid_creator', check);
+    if (occurrence.item.effect !== 'created') continue;
+    const rows = creatorsByClaim.get(claimId) ?? [];
+    rows.push(occurrence);
+    creatorsByClaim.set(claimId, rows);
+  }
+  check();
+
+  for (const [claimId, creators] of creatorsByClaim) {
+    check();
+    if (creators.length !== 1) {
+      check();
+      fail('invalid_creator');
+    }
+    const proof = required(proofs.get(claimId), 'orphan_record', check);
+    const creator = creators[0]!;
+    const receipt = creator.operation.terminalReceipt;
+    const item = creator.item;
+    if (
+      proof.operationId !== creator.operation.operationId ||
+      proof.operationId !== receipt.operationId ||
+      proof.sourceId !== creator.operation.identity.sourceId ||
+      proof.sourceId !== receipt.sourceId ||
+      proof.claimId !== claimId ||
+      proof.kind !== item.kind ||
+      proof.evidenceHash !== item.evidenceHash ||
+      proof.meaningHash !== item.meaningHash ||
+      !equalData(proof.dependencies, item.dependencies)
+    ) {
+      check();
+      fail('invalid_creator');
+    }
+  }
+  check();
+
+  for (const occurrence of occurrences) {
+    check();
+    const item = occurrence.item;
+    const claimId = required(item.claimId, 'invalid_creator', check);
+    const proof = required(proofs.get(claimId), 'orphan_record', check);
+    const identityMatches =
+      proof.storeHash === occurrence.operation.identity.storeHash &&
+      proof.namespace === occurrence.operation.identity.namespace &&
+      proof.subjectId === occurrence.operation.identity.binding.subjectId;
+    if (!identityMatches) {
+      check();
+      fail(item.effect === 'reference' ? 'invalid_pair' : 'invalid_creator');
+    }
+    if (
+      proof.claimId !== claimId ||
+      proof.kind !== item.kind ||
+      proof.meaningHash !== item.meaningHash
+    ) {
+      check();
+      fail(item.effect === 'created' ? 'invalid_creator' : 'invalid_pair');
+    }
+  }
+  check();
+}
+
+function validateFootprints(
+  graph: GraphData,
+  footprints: Footprints,
+  index: AutonomousPersonalClaimIndexV4,
+  check: () => void,
+): void {
+  const edgeRowsById = new Map<string, (typeof graph.edges)[number]>();
+  check();
+  for (const edge of graph.edges) {
+    check();
+    edgeRowsById.set(edge.uuid, edge);
+  }
+  check();
+  const candidateEdgeIds = new Set<string>(footprints.edgeIds);
+  const creatorCounts = new Map<string, number>();
+  for (const occurrence of footprints.positiveOccurrences) {
+    check();
+    const claimId = required(occurrence.item.claimId, 'invalid_creator', check);
+    candidateEdgeIds.add(claimId);
+    if (occurrence.item.effect === 'created') {
+      creatorCounts.set(claimId, (creatorCounts.get(claimId) ?? 0) + 1);
+    }
+  }
+  check();
+
+  for (const count of creatorCounts.values()) {
+    check();
+    if (count !== 1) {
+      check();
+      fail('invalid_creator');
+    }
+  }
+  check();
+
+  const proofs = new Map<string, AutonomousPersonalQualifiedClaimProofV4>();
+  for (const claimId of candidateEdgeIds) {
+    check();
+    if (!edgeRowsById.has(claimId)) {
+      check();
+      fail('orphan_record');
+    }
+    let result: ReturnType<typeof inspectAutonomousPersonalClaimCreatorV4>;
+    try {
+      result = inspectAutonomousPersonalClaimCreatorV4(index, claimId);
+    } catch (error) {
+      if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
+      check();
+      fail('inspection_incomplete');
+    }
+    check();
+    if (result.status !== 'structural') {
+      check();
+      fail(inspectFailureReason(result));
+    }
+    proofs.set(claimId, result.proof);
+  }
+  check();
+
+  for (const edgeId of footprints.edgeIds) {
+    check();
+    const proof = proofs.get(edgeId);
+    if (!proof || proof.claimId !== edgeId) {
+      check();
+      fail('orphan_record');
+    }
+  }
+  check();
+
+  for (const valueId of footprints.valueIds) {
+    check();
+    let matchingProofCount = 0;
+    for (const proof of proofs.values()) {
+      check();
+      if (proof.valueId === valueId) matchingProofCount += 1;
+    }
+    if (matchingProofCount === 0) {
+      check();
+      fail('orphan_record');
+    }
+    if (matchingProofCount !== 1) {
+      check();
+      fail('invalid_pair');
+    }
+  }
+  check();
+
+  validatePositiveOccurrences(footprints.positiveOccurrences, proofs, check);
+  check();
+}
+
+function checkAutonomousPersonalRecordIntegrityV4(
+  graphValue: unknown,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  codeOwnedCheck: () => void,
+  requireIndex: boolean,
+): AutonomousPersonalClaimIndexV4 | undefined {
+  return checkOwnedAutonomousPersonalRecordIntegrityV4(
+    graphValue,
+    typedSyntaxWork,
+    codeOwnedCheck,
+    requireIndex,
+  ).index;
+}
+
+// `owned` is this frame's fresh parser output, set only when the parse path ran.
+function checkOwnedAutonomousPersonalRecordIntegrityV4(
+  graphValue: unknown,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  codeOwnedCheck: () => void,
+  requireIndex: boolean,
+): { index: AutonomousPersonalClaimIndexV4 | undefined; owned?: GraphData } {
+  const trusted = stickyTrustedCheck(codeOwnedCheck);
+  trusted.check();
+
+  // Known index: read its frozen graph outside ownership-failure mapping.
+  const registered = getRegisteredAutonomousPersonalClaimIndexGraphV4(graphValue);
+  if (registered) {
+    trusted.check();
+    return {
+      index: checkParsedAutonomousPersonalRecordIntegrityV4(
+        registered,
+        typedSyntaxWork,
+        trusted,
+        requireIndex,
+      ),
+    };
+  }
+
+  let graph: GraphData | undefined;
+  let ownershipFailure: unknown;
+  try {
+    // Owned immutable DATA reuses its one full parse; every footprint/index check reruns.
+    graph =
+      getOwnedImmutableGraphData(graphValue) ?? parseLosslessAutomaticCaptureGraph(graphValue);
+  } catch (error) {
+    ownershipFailure = error;
+  }
+  trusted.check();
+  if (ownershipFailure !== undefined) {
+    trusted.rethrowFailure();
+    mapOwnershipFailure(ownershipFailure);
+  }
+  if (!graph) fail('invalid_snapshot');
+  const index = checkParsedAutonomousPersonalRecordIntegrityV4(
+    graph,
+    typedSyntaxWork,
+    trusted,
+    requireIndex,
+  );
+  // With an index the graph is retained by it; only the unindexed parse is owned.
+  return requireIndex ? { index } : { index, owned: graph };
+}
+
+// `graph` must be a fresh parser result owned by the calling frame.
+function checkParsedAutonomousPersonalRecordIntegrityV4(
+  graph: GraphData,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  trusted: TrustedCheck,
+  requireIndex: boolean,
+): AutonomousPersonalClaimIndexV4 | undefined {
+  const footprints = collectFootprints(graph, trusted.check);
+  trusted.check();
+  if (
+    footprints.edgeIds.size === 0 &&
+    footprints.valueIds.size === 0 &&
+    footprints.positiveOccurrences.length === 0
+  ) {
+    trusted.check();
+    if (!requireIndex) return undefined;
+  }
+
+  const workCheck = stickyWorkCheck(typedSyntaxWork, trusted);
+  let index: AutonomousPersonalClaimIndexV4;
+  let indexedGraph = graph;
+  try {
+    workCheck.check();
+    // Single parse: index the local parser output above instead of re-parsing.
+    // An unfrozen graph is safe only on the assert path: the index stays local.
+    index = indexParsedGraphV4(graph, typedSyntaxWork, workCheck.check, requireIndex);
+    workCheck.check();
+    if (requireIndex) {
+      indexedGraph = getAutonomousPersonalClaimIndexGraphV4(index);
+      workCheck.check();
+    }
+  } catch (error) {
+    workCheck.rethrowFailure();
+    if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
+    mapIndexFailure(error);
+  }
+
+  try {
+    validateFootprints(requireIndex ? indexedGraph : graph, footprints, index!, workCheck.check);
+    workCheck.check();
+  } catch (error) {
+    workCheck.rethrowFailure();
+    if (error instanceof AutonomousPersonalTypedSyntaxFailureV1) throw error;
+    if (error instanceof AutonomousPersonalRecordIntegrityV4Error) throw error;
+    mapIndexFailure(error);
+  }
+  workCheck.check();
+  return requireIndex ? index! : undefined;
+}
+
+/**
+ * Validates historical Autonomous Personal Claim3/Marker3 pairs in one complete
+ * lossless DATA snapshot. This is structural DATA validation only; it does not
+ * establish native origin, current authority, or write permission.
+ */
+export function assertAutonomousPersonalRecordIntegrityV4(
+  graphValue: unknown,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  codeOwnedCheck: () => void,
+): void {
+  checkAutonomousPersonalRecordIntegrityV4(graphValue, typedSyntaxWork, codeOwnedCheck, false);
+}
+
+/**
+ * Same checks as assertAutonomousPersonalRecordIntegrityV4. Additionally returns
+ * the private parser output those checks ran on, or undefined when the input was
+ * a registered index graph (no fresh parse occurred). The caller owns the result.
+ */
+export function validateOwnedAutonomousPersonalRecordGraphV4(
+  graphValue: unknown,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  codeOwnedCheck: () => void,
+): GraphData | undefined {
+  return checkOwnedAutonomousPersonalRecordIntegrityV4(
+    graphValue,
+    typedSyntaxWork,
+    codeOwnedCheck,
+    false,
+  ).owned;
+}
+
+/** Builds the one fully checked full-root index for internal reader DATA access. */
+export function createIntegrityCheckedAutonomousPersonalClaimIndexV4(
+  graphValue: unknown,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  codeOwnedCheck: () => void,
+): AutonomousPersonalClaimIndexV4 {
+  const index = checkAutonomousPersonalRecordIntegrityV4(
+    graphValue,
+    typedSyntaxWork,
+    codeOwnedCheck,
+    true,
+  );
+  if (!index) fail('invalid_snapshot');
+  return index;
+}
+
+function meteredV4<T>(
+  operation: () => T,
+  work: unknown = currentAutonomousPersonalExecutionScopeWorkV1(),
+): T {
+  return work === undefined
+    ? operation()
+    : runCurrentAutonomousPersonalExecutionScopeSyntaxSpanV1(work, operation);
+}
+
+/**
+ * Parses untrusted graph DATA once, then runs ledger source integrity and record
+ * integrity on that private parse. Returns the graph only after every check passed.
+ * Parse failures propagate unchanged. Structural DATA validation only, as above.
+ */
+export function parseIntegrityCheckedAutonomousPersonalGraphV4(
+  graphValue: unknown,
+  typedSyntaxWork: AutonomousPersonalTypedSyntaxWorkV1,
+  codeOwnedCheck: () => void,
+): GraphData {
+  const graph = meteredV4(() => parseLosslessAutomaticCaptureGraph(graphValue));
+  meteredV4(() => {
+    codeOwnedCheck();
+    assertAutomaticLedgerSourceIntegrity(graph);
+    codeOwnedCheck();
+    meteredV4(() => {
+      const trusted = stickyTrustedCheck(codeOwnedCheck);
+      trusted.check();
+      trusted.check();
+      checkParsedAutonomousPersonalRecordIntegrityV4(graph, typedSyntaxWork, trusted, false);
+    });
+    codeOwnedCheck();
+  }, typedSyntaxWork);
+  return graph;
 }

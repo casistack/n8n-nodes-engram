@@ -549,7 +549,14 @@ function suite(name: string, create: (path: string) => IGraphStorage) {
         episodes: [missingSource],
       });
       const snapshot = await storage.readExtractionSnapshot!(group);
-      const backup = exportQueueBackup(snapshot);
+      // Entity/edge query order is unspecified. Reverse the backup deliberately, and
+      // detach expectations so aliased in-memory rows cannot hide a field mutation.
+      const expected = structuredClone(snapshot);
+      const backup = exportQueueBackup({
+        ...snapshot,
+        entities: [...snapshot.entities].reverse(),
+        edges: [...snapshot.edges].reverse(),
+      });
       expect(backup.warnings!.missing_fact_source_references).toBe(1);
       const foreign = structuredClone(snapshot);
       foreign.entities[0].group_id = 'foreign';
@@ -560,8 +567,11 @@ function suite(name: string, create: (path: string) => IGraphStorage) {
       await storage.clearGroup(group);
       await storage.importExtractionBackup!(backup);
       const restored = await storage.readExtractionSnapshot!(group);
-      expect(restored.entities).toEqual(snapshot.entities);
-      expect(restored.edges).toEqual(snapshot.edges);
+      const byUuid = (left: { uuid: string }, right: { uuid: string }) =>
+        left.uuid.localeCompare(right.uuid);
+      expect([...restored.entities].sort(byUuid)).toEqual([...expected.entities].sort(byUuid));
+      expect([...restored.edges].sort(byUuid)).toEqual([...expected.edges].sort(byUuid));
+      expect(restored.episodes).toEqual(expected.episodes);
     });
 
     it('rejects relocated owner payloads and inconsistent member hashes before import', async () => {

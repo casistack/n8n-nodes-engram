@@ -15,7 +15,11 @@ providerPreflightBackendContract('embedded actual-source provider preflight', as
     await storage.initialize();
     stores.push(storage);
     readers.push(
-      jest.spyOn(storage as unknown as { runMutation: () => Promise<unknown> }, 'runMutation'),
+      // Count the actual locked snapshot read, independent of read/write frame selection.
+      jest.spyOn(
+        storage as unknown as { readAndMigratePersistedDataUnderLock: () => Promise<unknown> },
+        'readAndMigratePersistedDataUnderLock',
+      ),
     );
     return storage;
   }

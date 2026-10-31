@@ -74,6 +74,8 @@ async function createFixture(
   options: {
     readonly applicationWrapper?: boolean;
     readonly includePriorAcceptedFact?: boolean;
+    readonly contextWindow?: number;
+    readonly historyFiller?: boolean;
     readonly currentQuery?: string;
     readonly retrievalAt?: string;
   } = {},
@@ -199,6 +201,18 @@ async function createFixture(
       });
     }
 
+    if (options.historyFiller) {
+      await producer.addEpisode({
+        group_id: seed.request.namespace,
+        role: 'ai',
+        content: 'Synthetic unrelated recent reply.',
+        episode_kind: 'assistant_reply',
+        trust_level: 'standard',
+        review_status: 'accepted',
+        reference_time: new Date().toISOString(),
+      });
+    }
+
     const completed = await completeNativeAutonomousPersonalCaptureV4(captureContext, producer);
     if (completed.kind !== 'original_turn')
       throw new Error(`Expected original C2 turn, got ${completed.kind}`);
@@ -287,7 +301,7 @@ async function createFixture(
         extractionExecution: 'synchronous',
         retrievalMode: 'current',
         graphEvidenceBudgets: { durable: 4096, historical: 2048 },
-        contextWindow: 8,
+        contextWindow: options.contextWindow ?? 8,
         maxFactsPerQuery: 10,
         minRelevanceScore: 0,
         acceptedOnlyRetrieval: true,
@@ -340,6 +354,8 @@ describe('native personal Memory V4 integration', () => {
     options: {
       readonly applicationWrapper?: boolean;
       readonly includePriorAcceptedFact?: boolean;
+      readonly contextWindow?: number;
+      readonly historyFiller?: boolean;
       readonly currentQuery?: string;
       readonly retrievalAt?: string;
     } = {},
@@ -397,6 +413,34 @@ describe('native personal Memory V4 integration', () => {
     expect(loaded.diagnostics.retrieval.query_available).toBe(true);
     expect(loaded.diagnostics.retrieval.fact_messages).toBe(1);
     expect(graphFacts).toHaveLength(1);
+  });
+
+  it('retrieves the accepted prior preference from graph when its source is outside recent history', async () => {
+    const fixture = await addFixture({
+      includePriorAcceptedFact: true,
+      currentQuery: 'French',
+      contextWindow: 1,
+      historyFiller: true,
+    });
+    const loaded = await fixture.memory!.loadMemoryVariablesWithDiagnostics({});
+    const messages = loaded.variables.chat_history as BaseMessage[];
+    const conversation = messages.filter((message) => !(message instanceof SystemMessage));
+    expect(conversation).toHaveLength(1);
+    expect(String(conversation[0]!.content)).toBe('Synthetic unrelated recent reply.');
+    expect(
+      conversation.every((message) => !String(message.content).includes(PRIOR_ACCEPTED_SOURCE)),
+    ).toBe(true);
+    const facts = messages.filter(
+      (message) =>
+        message instanceof SystemMessage &&
+        !String(message.content).includes('Engram creation summary'),
+    );
+    expect(loaded.diagnostics.retrieval.fact_messages).toBe(1);
+    expect(facts).toHaveLength(1);
+    expect(String(facts[0]!.content)).toContain('French');
+    expect(String(facts[0]!.content)).toContain('Canadian');
+    expect(String(facts[0]!.content)).toContain('practical');
+    expect(String(facts[0]!.content)).toContain('before');
   });
 
   it('uses one native final writer for saveContext and accepts the configured-query replay without resubmission', async () => {
