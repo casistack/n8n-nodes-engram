@@ -30,6 +30,10 @@ describe('native personal Memory handoff V4 foundation', () => {
   let seed: AutonomousPersonalCaptureSeed;
 
   beforeEach(async () => {
+    // Handoff tests exercise a real committed origin with provider failure, not DNS.
+    jest
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new TypeError('synthetic_provider_unavailable'));
     directory = fs.mkdtempSync(join(tmpdir(), 'engram-native-memory-handoff-'));
     file = join(directory, 'store.json');
     store = new GraphologyStorage(file);
@@ -66,6 +70,7 @@ describe('native personal Memory handoff V4 foundation', () => {
   async function prepareRealBridge(turn: string) {
     const ctx = contextFor(turn);
     const completed = await nativeCompletion.completeNativeAutonomousPersonalCaptureV4(ctx, store);
+    expect(globalThis.fetch).toHaveBeenCalled();
     if (completed.kind !== 'original_turn') {
       throw new Error(`Expected a real C2 original-turn bridge, got ${completed.kind}`);
     }

@@ -138,50 +138,60 @@ function rewriteSameSizeAndMtime(file: string): void {
 }
 
 describe('plan037 owned read DATA', () => {
-  it('gives real native begin/provider/readback callbacks registered DATA with no reparse', async () => {
-    const { store, seed } = await enrolledStore();
-    const parse = jest.spyOn(LosslessGraph, 'parseLosslessAutomaticCaptureGraph');
-    const observed: Array<{ operation: string; owned: boolean; parses: number }> = [];
-    jest.spyOn(proto, 'readOwnedSnapshotV4').mockImplementation(function (
-      this: unknown,
-      read,
-      options,
-    ) {
-      return realReadOwned.call(
-        this,
-        (graph) => {
-          const before = parse.mock.calls.length;
-          const result = read(graph);
-          observed.push({
-            operation: options.operation,
-            owned: getOwnedImmutableGraphData(graph) === graph,
-            parses: parse.mock.calls.length - before,
-          });
-          return result;
-        },
+  describe('native callbacks on an enrolled store', () => {
+    let fixture: Awaited<ReturnType<typeof enrolledStore>>;
+
+    beforeEach(async () => {
+      // Enrollment is a separate native capture, not part of the read-path contract.
+      // Both setup and the exercised turn retain Jest's default five-second limit.
+      fixture = await enrolledStore();
+    });
+
+    it('gives real native begin/provider/readback callbacks registered DATA with no reparse', async () => {
+      const { store, seed } = fixture;
+      const parse = jest.spyOn(LosslessGraph, 'parseLosslessAutomaticCaptureGraph');
+      const observed: Array<{ operation: string; owned: boolean; parses: number }> = [];
+      jest.spyOn(proto, 'readOwnedSnapshotV4').mockImplementation(function (
+        this: unknown,
+        read,
         options,
-      );
-    });
+      ) {
+        return realReadOwned.call(
+          this,
+          (graph) => {
+            const before = parse.mock.calls.length;
+            const result = read(graph);
+            observed.push({
+              operation: options.operation,
+              owned: getOwnedImmutableGraphData(graph) === graph,
+              parses: parse.mock.calls.length - before,
+            });
+            return result;
+          },
+          options,
+        );
+      });
 
-    expect(await nativeTurn(store, seed, 'plan037-second', 'I prefer tea over coffee.')).toEqual({
-      kind: 'matched',
-    });
+      expect(await nativeTurn(store, seed, 'plan037-second', 'I prefer tea over coffee.')).toEqual({
+        kind: 'matched',
+      });
 
-    expect(observed.length).toBeGreaterThanOrEqual(3);
-    expect(observed.every((entry) => entry.owned)).toBe(true);
-    const preflight = observed.find(
-      (entry) => entry.operation === 'autonomous_personal_preflight_v4',
-    );
-    expect(preflight).toEqual(expect.objectContaining({ owned: true, parses: 0 }));
-    // Native begin readback and provider preflight must really execute; no conditional pass.
-    for (const operation of [
-      'autonomous_personal_readback_v4',
-      'autonomous_personal_provider_preflight_v4',
-    ]) {
-      expect(observed.find((entry) => entry.operation === operation)).toEqual(
-        expect.objectContaining({ owned: true }),
+      expect(observed.length).toBeGreaterThanOrEqual(3);
+      expect(observed.every((entry) => entry.owned)).toBe(true);
+      const preflight = observed.find(
+        (entry) => entry.operation === 'autonomous_personal_preflight_v4',
       );
-    }
+      expect(preflight).toEqual(expect.objectContaining({ owned: true, parses: 0 }));
+      // Native begin readback and provider preflight must really execute; no conditional pass.
+      for (const operation of [
+        'autonomous_personal_readback_v4',
+        'autonomous_personal_provider_preflight_v4',
+      ]) {
+        expect(observed.find((entry) => entry.operation === operation)).toEqual(
+          expect.objectContaining({ owned: true }),
+        );
+      }
+    });
   });
 
   it('hits on exact bytes, reruns integrity, and keeps Core data mutable and unaliased', async () => {
