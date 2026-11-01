@@ -29,7 +29,7 @@ import {
   compileAutonomousPersonalDescriptorV4,
   hashAutonomousPersonalDescriptorV4,
 } from '../schemas/AutonomousPersonalDescriptorV4.schema';
-import { CompositionalRetrievalSnapshotV3Schema } from '../schemas/CompositionalRetrievalSnapshotV3.schema';
+import { InternalImmutableCompositionalRetrievalSnapshotV3Schema as CompositionalRetrievalSnapshotV3Schema } from '../schemas/CompositionalRetrievalSnapshotV3.schema';
 import type { AutonomousPersonalTypedSyntaxWorkV1 } from '../schemas/AutonomousPersonalTypedSyntaxV1.schema';
 import type { GraphData } from '../schemas/GraphData.schema';
 import type {

@@ -184,6 +184,8 @@ describeNeo('actual Neo4j autonomous personal record protection', () => {
   });
 
   it('charges the initial registered marker and reuses one guard across validation retries', async () => {
+    // Establish the registered-store precondition independently of earlier suites.
+    await createCommittedPair();
     const retryStore = new Neo4jStorage(uri!, username, password, database);
     const internals = retryStore as unknown as { getSession: () => Session };
     const originalGetSession = internals.getSession.bind(retryStore);
