@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &middot;
-  <a href="#upgrading-to-v082">Upgrade</a> &middot;
+  <a href="#upgrading-to-v083">Upgrade</a> &middot;
   <a href="#node-reference">Nodes</a> &middot;
   <a href="#storage-backends">Storage</a> &middot;
   <a href="#knowledge-extraction">Extraction</a> &middot;
@@ -98,6 +98,21 @@ Engram provides dedicated n8n nodes for AI memory, graph exploration, administra
 cd ~/.n8n
 npm install n8n-nodes-engram
 ```
+
+---
+
+## Upgrading to v0.8.3
+
+This patch reduces repeated processing during autonomous personal-memory reads. Existing node versions, saved defaults, namespaces, bindings and memory policies are preserved. No new setting or node-version upgrade is required for this patch.
+
+1. Take fresh, consistent workflow and backend-native backups. Preserve complete embedded files or the Neo4j database, producer workflow mapping, storage paths, logical store identity, namespaces, bindings and aliases. Include queue-aware recovery data where durable jobs already exist.
+2. Install `n8n-nodes-engram@0.8.3`, restart n8n and refresh the editor. Begin with an inactive workflow copy and a separately restored store with its logical ownership mapping preserved. Moving an enrolled store to another producer path is not an activation step.
+3. Keep the current model, route, temperature, source mappings and stable event IDs. Verify cold startup, recent conversation, accepted graph-only recall, capture receipts, duplicate events and multiple tool calls. Confirm that tool audits remain separate and final turns are saved once.
+4. Expand only after the selected workflow passes. Review passive writers separately. When enabling Autonomous Personal Memory for the first time, follow the existing [v0.8.0 profile setup](#upgrading-to-v080) and [v0.8.1 configured-budget instructions](#upgrading-to-v081).
+
+Provider-request latency and capture/write processing remain separate contributors to response time. This patch does not guarantee a particular response time.
+
+No reset, purge, re-enrollment or bulk re-extraction is required. Prefer reverting explicit workflow/policy settings on the supported binary while preserving newly appended memory. Existing downgrade and mixed-version writer/worker restrictions remain in force. Never restore an old snapshot over newer conversations as routine rollback.
 
 ---
 

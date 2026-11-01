@@ -5,9 +5,15 @@ import {
 } from '../storage/BoundedAutomaticCaptureJson';
 import { parseLosslessAutomaticCaptureGraph } from '../storage/LosslessAutomaticCaptureGraph';
 import type { GraphData } from './GraphData.schema';
+import {
+  parseImmutableGraphData,
+  getOwnedImmutableGraphData,
+  cloneOwnedImmutableGraphData,
+} from '../storage/ImmutableGraphSnapshot';
 
 const invalidSnapshot = { status: 'invalid', reason: 'invalid_snapshot' } as const;
 const validGraphs = new WeakSet<object>();
+const immutableValidGraphs = new WeakSet<object>();
 const resourceIssueMessages = new Set([
   'resource_exhausted',
   'Ledger-bearing graph snapshot exceeds 100,000 graph records',
@@ -183,7 +189,48 @@ const resultBodySchema = z.discriminatedUnion('status', [
   invalidResultSchema,
 ]);
 
-function ownResultBeforeZod(value: unknown): unknown {
+const immutableUnscopedGraphBodySchema = z.custom<Omit<GraphData, 'group_id'>>(
+  (value): value is Omit<GraphData, 'group_id'> =>
+    value !== null && typeof value === 'object' && immutableValidGraphs.has(value),
+);
+const immutableResultBodySchema = z.discriminatedUnion('status', [
+  snapshotResultSchema.extend({ graph: immutableUnscopedGraphBodySchema }),
+  deferredResultSchema,
+  unavailableResultSchema,
+  invalidResultSchema,
+]);
+function parseImmutableUnscopedGraph(value: unknown): CompositionalUnscopedGraphDataV3 {
+  let graph: GraphData;
+  try {
+    if (value !== null && typeof value === 'object' && immutableValidGraphs.has(value)) {
+      graph = value as GraphData;
+    } else {
+      const generallyOwned = getOwnedImmutableGraphData(value);
+      graph = parseImmutableGraphData(
+        generallyOwned ? cloneOwnedImmutableGraphData(generallyOwned) : value,
+      );
+    }
+  } catch (error) {
+    throw fixedSchemaError(
+      resourceBoundedGraphFailure(error) ? 'resource_exhausted' : 'invalid_snapshot',
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(graph, 'group_id'))
+    throw fixedSchemaError('invalid_snapshot');
+  immutableValidGraphs.add(graph);
+  return immutableUnscopedGraphBodySchema.parse(graph);
+}
+const immutableUnscopedEntry = Object.freeze({
+  safeParse(value: unknown): SafeParseResult<CompositionalUnscopedGraphDataV3> {
+    try {
+      return { success: true, data: parseImmutableUnscopedGraph(value) };
+    } catch (error) {
+      return { success: false, error: asSchemaError(error) };
+    }
+  },
+});
+
+function ownResultBeforeZod(value: unknown, immutable = false): unknown {
   const status = ownData(value, 'status');
   if (status === 'snapshot') {
     const record = exactOwnDataRecord(value, ['status', 'graph', 'backendNow']);
@@ -203,7 +250,9 @@ function ownResultBeforeZod(value: unknown): unknown {
     );
     if (!parsedTime.success) return invalidSnapshot;
 
-    const parsedGraph = CompositionalUnscopedGraphDataV3Schema.safeParse(record.graph);
+    const parsedGraph = (
+      immutable ? immutableUnscopedEntry : CompositionalUnscopedGraphDataV3Schema
+    ).safeParse(record.graph);
     if (!parsedGraph.success) {
       return parsedGraph.error.issues.some((issue) => issue.message === 'resource_exhausted')
         ? { status: 'deferred', reason: 'resource_exhausted' }
@@ -239,6 +288,23 @@ export const CompositionalRetrievalSnapshotV3Schema = Object.freeze({
   safeParse(value: unknown): SafeParseResult<CompositionalRetrievalSnapshotResultV3> {
     try {
       return { success: true, data: parseRetrievalSnapshot(value) };
+    } catch (error) {
+      return { success: false, error: asSchemaError(error) };
+    }
+  },
+});
+
+/** Internal DATA ownership only; never freshness, binding or write authority. */
+export const InternalImmutableCompositionalRetrievalSnapshotV3Schema = Object.freeze({
+  parse(value: unknown): CompositionalRetrievalSnapshotResultV3 {
+    return immutableResultBodySchema.parse(ownResultBeforeZod(value, true));
+  },
+  safeParse(value: unknown): SafeParseResult<CompositionalRetrievalSnapshotResultV3> {
+    try {
+      return {
+        success: true,
+        data: immutableResultBodySchema.parse(ownResultBeforeZod(value, true)),
+      };
     } catch (error) {
       return { success: false, error: asSchemaError(error) };
     }
