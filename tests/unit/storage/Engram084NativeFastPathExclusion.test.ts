@@ -120,20 +120,28 @@ describe('ordinary rollback optimization excludes actual native and capture fact
     }
   });
 
-  it('keeps real compositional capture-read capabilities on the export-based path of an enrolled store', async () => {
-    await autonomous();
-    const seeded = await seedAutomaticCaptureSubject(store, 'synthetic-compositional-exclusion');
-    const request = CompositionalAutomaticCaptureBeginRequestV3Schema.parse({
-      ...seeded.request,
-      version: 3,
-      preferenceInterpreter: 'compositionalV2',
-      source: { ...seeded.request.source, content: 'What games are on today?' },
+  describe('with an independently enrolled store', () => {
+    let request: ReturnType<typeof CompositionalAutomaticCaptureBeginRequestV3Schema.parse>;
+
+    beforeEach(async () => {
+      const enrollment = await autonomous();
+      expect(enrollment).toMatchObject({ status: 'captured', should_process: true });
+      const seeded = await seedAutomaticCaptureSubject(store, 'synthetic-compositional-exclusion');
+      request = CompositionalAutomaticCaptureBeginRequestV3Schema.parse({
+        ...seeded.request,
+        version: 3,
+        preferenceInterpreter: 'compositionalV2',
+        source: { ...seeded.request.source, content: 'What games are on today?' },
+      });
     });
-    const observed = observe();
-    const result = await captureCompositionalHumanMemoryV3(store, request);
-    expect(result).toMatchObject({ status: 'first_capture_committed', should_process: true });
-    expect(observed.mutations.some((row) => row.capture)).toBe(true);
-    expect(observed.refreshes.length).toBeGreaterThan(0);
-    expect(observed.refreshes.every((row) => row.retained === undefined)).toBe(true);
+
+    it('keeps real compositional capture-read capabilities on the export-based path of an enrolled store', async () => {
+      const observed = observe();
+      const result = await captureCompositionalHumanMemoryV3(store, request);
+      expect(result).toMatchObject({ status: 'first_capture_committed', should_process: true });
+      expect(observed.mutations.some((row) => row.capture)).toBe(true);
+      expect(observed.refreshes.length).toBeGreaterThan(0);
+      expect(observed.refreshes.every((row) => row.retained === undefined)).toBe(true);
+    });
   });
 });
