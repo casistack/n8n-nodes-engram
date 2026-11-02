@@ -1,4 +1,5 @@
 import { readNativeAutonomousPersonalExecutionBudgetV1 } from '../../utils/autonomousPersonalExecutionBudget';
+import { readNativeAutonomousPersonalStatementContextV1 } from '../../utils/autonomousPersonalStatementContext';
 import { runAutonomousPersonalMemoryPreparationV1 } from '../../utils/AutonomousPersonalMemoryExecutionEntryV1';
 import { currentAutonomousPersonalExecutionScopeWorkV1 } from '../../storage/AutonomousPersonalExecutionScopeV1';
 import { advancedExtractionProperties, readExtractionPolicy } from '../../utils/advancedExtraction';
@@ -687,8 +688,10 @@ function nativeMemoryContinuationSettingsHashV4(
         };
 
   const executionBudget = readNativeAutonomousPersonalExecutionBudgetV1(node.parameters, get);
+  const statementContext = readNativeAutonomousPersonalStatementContextV1(node.parameters);
   const projection = {
     ...(executionBudget === undefined ? {} : { executionBudget }),
+    ...(statementContext === undefined ? {} : { statementContext }),
     nativeCaptureHash,
     nativeConfigurationHash,
     storageBinding,

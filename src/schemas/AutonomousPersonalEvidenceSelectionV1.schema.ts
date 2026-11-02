@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { cloneBoundedAutomaticCaptureJson } from '../storage/BoundedAutomaticCaptureJson';
+import { statementQualificationSchema } from './AutonomousPersonalClaimV3.schema';
 import { AutonomousPersonalSourceCoverageV4OwnedDataSchema } from './AutonomousPersonalOperationV4.schema';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -101,10 +102,13 @@ const occurrenceSchema = z
       .max(32),
     rawSpan: span,
     mappedSpan: span,
+    // Absent for legacy occurrences; only a source statement may carry it.
+    qualification: statementQualificationSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
     if (
+      (value.qualification !== undefined && value.kind !== 'source_statement_record') ||
       value.rawSpan.end - value.rawSpan.start !== value.mappedSpan.end - value.mappedSpan.start ||
       (value.kind === 'typed_preference' && value.category !== 'preference') ||
       (value.kind === 'source_statement_record' && value.dependencies.length !== 1) ||

@@ -350,6 +350,12 @@ interface MutationOptions<T> {
   shouldWriteSnapshot?: (result: T) => boolean;
   captureRecords?: 'lossless';
   requireExistingSnapshot?: boolean;
+  /**
+   * Set only by the public ordinary append entry points, after their unowned-input
+   * validation. It adds no authority: it lets an ordinary unscoped enrolled write use the
+   * refresh's own private verified parse as its rollback root, and nothing else.
+   */
+  ordinaryUnownedAppend?: boolean;
   captureRead?: {
     scope: AutomaticClaimReadScope;
     check: () => void;
@@ -3921,6 +3927,9 @@ export class GraphologyStorage implements IGraphStorage {
       {
         operation: inputs.length === 1 ? 'append_episode' : 'append_episodes',
         itemCount: inputs.length,
+        // Public entry points only: assertAutomaticEpisodeTrustedPath(…, false) above already
+        // refused every owned/enrolled source attribute, and the queue attribute is refused.
+        ordinaryUnownedAppend: !allowTrustedAutomatic,
         shouldWriteSnapshot: (results) => results.some((result) => result.created),
       },
     );
@@ -5057,12 +5066,21 @@ export class GraphologyStorage implements IGraphStorage {
     options: MutationOptions<T> = {},
   ): Promise<T> {
     this.assertRecoveryReady();
-    const structuralGuardContext = options.autonomousPersonalCompletionV4
-      ? {
-          typedSyntaxWork: options.autonomousPersonalCompletionV4.typedSyntaxWork,
-          check: options.autonomousPersonalCompletionV4.check,
-        }
-      : ordinaryAutonomousPersonalStructuralGuardContextV4();
+    // Ordinary: no configured scope, no native completion, no capture read/records. Only
+    // this shape re-arms its budget after the lock and may root rollback in the verified parse.
+    const ordinaryUnscoped =
+      options.autonomousPersonalCompletionV4 === undefined &&
+      options.captureRead === undefined &&
+      options.captureRecords === undefined &&
+      options.requireExistingSnapshot !== true &&
+      currentAutonomousPersonalExecutionScopeWorkV1() === undefined;
+    let structuralGuardContext: AutonomousPersonalStructuralGuardContextV4 =
+      options.autonomousPersonalCompletionV4
+        ? {
+            typedSyntaxWork: options.autonomousPersonalCompletionV4.typedSyntaxWork,
+            check: options.autonomousPersonalCompletionV4.check,
+          }
+        : ordinaryAutonomousPersonalStructuralGuardContextV4();
     // Check before publishing a new queue tail. A rejected entry must not release
     // a queue slot that a later mutation could use while the prior one is active.
     options.captureRead?.check();
@@ -5081,6 +5099,7 @@ export class GraphologyStorage implements IGraphStorage {
 
     let releaseFileLock: () => Promise<void> = async () => {};
     let rollbackData: GraphData | null = null;
+    let verifiedRollbackRoot: GraphData | undefined;
     let lockWaitMs = 0;
     let diskRefreshMs = 0;
     let rollbackExportMs = 0;
@@ -5113,19 +5132,26 @@ export class GraphologyStorage implements IGraphStorage {
         } finally {
           lockWaitMs = performance.now() - lockStarted;
         }
+        // Queue and lock wait are not processing: arm the ordinary budget once the lock is held.
+        if (ordinaryUnscoped) {
+          structuralGuardContext = ordinaryAutonomousPersonalStructuralGuardContextV4();
+        }
         options.captureRead?.check();
         const refreshStarted = performance.now();
         refreshAttempted = true;
         try {
-          await this.refreshFromDiskUnderLock(
+          verifiedRollbackRoot = await this.refreshFromDiskUnderLock(
             options.captureRecords,
             options.requireExistingSnapshot,
             options.captureRead,
             structuralGuardContext,
+            ordinaryUnscoped && options.ordinaryUnownedAppend === true,
           );
         } finally {
           diskRefreshMs = performance.now() - refreshStarted;
         }
+      } else if (ordinaryUnscoped) {
+        structuralGuardContext = ordinaryAutonomousPersonalStructuralGuardContextV4();
       }
 
       // A still-failed load (for example the file went missing after a failure) must
@@ -5134,8 +5160,16 @@ export class GraphologyStorage implements IGraphStorage {
 
       const rollbackExportStarted = performance.now();
       try {
-        rollbackData = await this.exportGraph();
-        if (rollbackData.group_id === undefined) delete rollbackData.group_id;
+        if (verifiedRollbackRoot !== undefined) {
+          // The refresh in this call just parsed the exact file bytes into this private,
+          // detached, ledger- and record-verified graph and installed the same data in Core.
+          // Nothing else holds it, so it is the pre-state without exporting live aliases.
+          this.assertRecoveryReady();
+          rollbackData = verifiedRollbackRoot;
+        } else {
+          rollbackData = await this.exportGraph();
+          if (rollbackData.group_id === undefined) delete rollbackData.group_id;
+        }
       } finally {
         rollbackExportMs = performance.now() - rollbackExportStarted;
       }
@@ -5146,14 +5180,22 @@ export class GraphologyStorage implements IGraphStorage {
           (operation) => operation.version === 4,
         ) ??
           false);
-      if (protectsAutonomousSources)
-        autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(rollbackData!));
-      if (autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(rollbackData!))) {
-        assertAutonomousPersonalRecordIntegrityV4(
-          rollbackData,
-          structuralGuardContext.typedSyntaxWork,
-          structuralGuardContext.check,
-        );
+      if (verifiedRollbackRoot !== undefined) {
+        // Ledger and record integrity already ran on this exact graph during the refresh.
+        structuralGuardContext.check();
+      } else {
+        if (protectsAutonomousSources) {
+          autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(rollbackData!));
+        }
+        if (
+          autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(rollbackData!))
+        ) {
+          assertAutonomousPersonalRecordIntegrityV4(
+            rollbackData,
+            structuralGuardContext.typedSyntaxWork,
+            structuralGuardContext.check,
+          );
+        }
       }
       options.autonomousPersonalCompletionV4?.check();
 
@@ -5262,6 +5304,7 @@ export class GraphologyStorage implements IGraphStorage {
         if (this.persistPath && snapshotAttempted && snapshotReplaced) {
           // A directory fsync can fail after rename made the new snapshot visible.
           // Restore the exact pre-mutation graph while still holding the file lock.
+          // Ordinary appends retain the verified file parse, including its root metadata and export time.
           // Preserve the original write error if the recovery write also fails.
           try {
             const rollbackDurable =
@@ -5393,23 +5436,28 @@ export class GraphologyStorage implements IGraphStorage {
       verifyStableSnapshot?: boolean;
     },
     structuralGuardContext: AutonomousPersonalStructuralGuardContextV4 = ordinaryAutonomousPersonalStructuralGuardContextV4(),
-  ): Promise<void> {
+    retainVerifiedPrivate = false,
+  ): Promise<GraphData | undefined> {
     // A missing file (thrown or skipped) never keeps a previous read entry.
     if (!this.persistPath || !fs.existsSync(this.persistPath))
       this.immutableReadCacheV4 = undefined;
     this.assertQueueFilePresent();
     if (!this.persistPath || (!requireExisting && !fs.existsSync(this.persistPath))) return;
 
-    const { data } = await this.readAndMigratePersistedDataUnderLock(
+    const { data, verifiedPrivate } = await this.readAndMigratePersistedDataUnderLock(
       captureRecords,
       captureRead,
       structuralGuardContext,
+      false,
+      retainVerifiedPrivate,
     );
     captureRead?.check();
     this.replaceGraphData(data);
     // Data from a verified read replaced the in-memory graph: a corrected file recovers.
     this.loadFailure = null;
     captureRead?.check();
+    // Handed back only after Core holds the data; never cached, never reachable from Core.
+    return verifiedPrivate;
   }
 
   private assertQueueFilePresent(): void {
@@ -5511,7 +5559,15 @@ export class GraphologyStorage implements IGraphStorage {
     // Private, set only by readOwnedSnapshotV4: also return registered immutable DATA for
     // a current enrolled file. DATA shape only; grants and skips no check.
     ownedReadData = false,
-  ): Promise<{ data: GraphData; integrityVerified: boolean; immutable?: GraphData }> {
+    // Private, set only by an ordinary unscoped append refresh: also return the detached,
+    // mutable, ledger- and record-verified parse of these exact bytes. Never cached.
+    retainVerifiedPrivate = false,
+  ): Promise<{
+    data: GraphData;
+    integrityVerified: boolean;
+    immutable?: GraphData;
+    verifiedPrivate?: GraphData;
+  }> {
     if (!this.persistPath) throw new Error('Embedded persistence path is not configured');
     // Taken locally and cleared before any await: any failure below leaves no entry, and
     // only a fully checked stable read installs one.
@@ -5760,8 +5816,25 @@ export class GraphologyStorage implements IGraphStorage {
         path: existingBackup ? backupPath : null,
       },
     };
-    if (ownedDigest === undefined || currentReport === undefined || !losslessRawGraph)
-      return { data: migration.data, integrityVerified };
+    if (ownedDigest === undefined || currentReport === undefined || !losslessRawGraph) {
+      // `currentReport` exists only for an enrolled current file whose lossless parse proved
+      // it equals `decoded` (Core's rows) and normalized nothing, so with `ownedReadData` off
+      // that parse is the checked private copy. A store-level group_id is exported differently
+      // by Core, so such a file keeps the export-based path.
+      const verifiedPrivate =
+        retainVerifiedPrivate &&
+        !ownedReadData &&
+        currentReport !== undefined &&
+        losslessRawGraph !== undefined &&
+        !Object.prototype.hasOwnProperty.call(losslessRawGraph, 'group_id')
+          ? losslessRawGraph
+          : undefined;
+      return {
+        data: migration.data,
+        integrityVerified,
+        ...(verifiedPrivate ? { verifiedPrivate } : {}),
+      };
+    }
     // Current enrolled file, nothing migrated: the immutable root is the full parse of the
     // exact bytes Core's `data` was decoded from. Install it only if the file is unchanged.
     // A failed stat only skips installation; it adds no new failure to this read.

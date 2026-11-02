@@ -296,6 +296,53 @@ function reportComplement(words: readonly string[], first: number | null): boole
   });
 }
 
+/** Read-only views of the V1 tables for the opt-in selection recognizer; framing output is unchanged. */
+export const AUTONOMOUS_PERSONAL_FRAMING_CONTEXT_MARKERS_V1: readonly string[] = [
+  'when',
+  'whenever',
+];
+export const AUTONOMOUS_PERSONAL_FRAMING_EPISTEMIC_PHRASES_V1: readonly (readonly string[])[] =
+  uncertainty.filter(
+    (phrase) =>
+      !(phrase.length === 1 && AUTONOMOUS_PERSONAL_FRAMING_CONTEXT_MARKERS_V1.includes(phrase[0])),
+  );
+export function autonomousPersonalFramingHasPhraseV1(
+  words: readonly string[],
+  alternatives: readonly (readonly string[])[],
+): boolean {
+  return includes(words, alternatives);
+}
+export function autonomousPersonalFramingReportComplementV1(
+  words: readonly string[],
+  first: number,
+): boolean {
+  return reportComplement(words, first);
+}
+export function autonomousPersonalFramingInstructionAtV1(
+  words: readonly string[],
+  first: number,
+): boolean {
+  return (
+    words[first] === 'i' &&
+    ['want', 'need', 'ask', 'tell', 'instruct', 'request'].includes(words[first + 1]) &&
+    at(words, ['you', 'to'], first + 2)
+  );
+}
+export function autonomousPersonalFramingHeadWordV1(word: string | undefined): boolean {
+  return word !== undefined && heads.has(word);
+}
+export function autonomousPersonalFramingIncompleteHeadV1(
+  words: readonly string[],
+  first: number,
+): boolean {
+  const remaining = words.slice(first + 1);
+  return (
+    !remaining.length ||
+    (words[first] === 'i' && remaining[0] === 'to') ||
+    (remaining.length === 1 && incomplete.has(remaining[0]))
+  );
+}
+
 function headerEnd(words: readonly string[]): number | null {
   const fixed = headerPhrases.find((phrase) => at(words, phrase));
   if (fixed) return fixed.length - 1;

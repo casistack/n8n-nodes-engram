@@ -775,6 +775,9 @@ function sourceCandidateOccurrences(
         sourceEventTime: sourceTime,
         completeLiteral: literal,
         semantics: 'source_attributed_statement',
+        ...(occurrence.qualification === undefined
+          ? {}
+          : { qualification: occurrence.qualification }),
       };
       representation = {
         category: occurrence.category,
@@ -782,6 +785,9 @@ function sourceCandidateOccurrences(
         headForm: 'first_person_i_main_clause',
         semantics: 'source_attributed_statement',
         typedProjection: null,
+        ...(occurrence.qualification === undefined
+          ? {}
+          : { qualification: occurrence.qualification }),
       };
     }
 
@@ -807,10 +813,16 @@ function sourceCandidateOccurrences(
       rawSpan: occurrence.rawSpan,
       mappedSpan: occurrence.mappedSpan,
       bundle,
+      ...(occurrence.qualification === undefined
+        ? {}
+        : { qualification: occurrence.qualification }),
     });
     check();
     if (result.kind === 'candidate') {
       if (
+        (result.claim.kind === 'source_statement_record'
+          ? result.claim.qualification
+          : undefined) !== occurrence.qualification ||
         result.reference.key !== occurrence.key ||
         result.reference.kind !== occurrence.kind ||
         result.reference.category !== occurrence.category ||
@@ -836,6 +848,9 @@ function sourceCandidateOccurrences(
               sourceEventTime: result.claim.sourceEventTime,
               completeLiteral: result.claim.evidence.literal,
               semantics: 'source_attributed_statement',
+              ...(result.claim.qualification === undefined
+                ? {}
+                : { qualification: result.claim.qualification }),
             };
     } else {
       output.push({
@@ -1063,6 +1078,9 @@ function groupExistingReference(
             sourceEventTime: match.claim.sourceEventTime,
             completeLiteral: match.claim.evidence.literal,
             semantics: 'source_attributed_statement',
+            ...(match.claim.qualification === undefined
+              ? {}
+              : { qualification: match.claim.qualification }),
           },
       first.logicalIdentity,
     )

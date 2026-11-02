@@ -47,6 +47,12 @@ const knownProviderCategorySchema = z.enum([
 
 const downgradeSchema = z.array(z.never()).length(0);
 
+/** Versioned marker: the literal is a user-stated conditional whose antecedent is not asserted. */
+export const AUTONOMOUS_PERSONAL_STATEMENT_QUALIFICATION_V1 = 'context_conditional_v1' as const;
+export const statementQualificationSchema = z.literal(
+  AUTONOMOUS_PERSONAL_STATEMENT_QUALIFICATION_V1,
+);
+
 function isWellFormedUnicode(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -148,6 +154,8 @@ const statementClaimBranchSchema = commonClaimSchema
     headForm: z.literal('first_person_i_main_clause'),
     semantics: z.literal('source_attributed_statement'),
     typedProjection: z.null(),
+    // Absent for every legacy record; present only for an opted-in context-qualified statement.
+    qualification: statementQualificationSchema.optional(),
   })
   .strict();
 
@@ -174,6 +182,7 @@ const keyInputBodySchema = z
         sourceEventTime: sourceEventTimeSchema,
         completeLiteral: literalSchema,
         semantics: z.literal('source_attributed_statement'),
+        qualification: statementQualificationSchema.optional(),
       })
       .strict(),
   ])
@@ -346,6 +355,7 @@ function keyFromInput(input: AutonomousPersonalClaimV3KeyInput): string {
       canonicalSourceEventTime: input.sourceEventTime,
       completeLiteral: input.completeLiteral,
       semantics: 'source_attributed_statement',
+      ...(input.qualification === undefined ? {} : { qualification: input.qualification }),
     },
   });
 }
@@ -364,6 +374,7 @@ function meaningHashFromInput(input: AutonomousPersonalClaimV3KeyInput): string 
               sourceEventTime: input.sourceEventTime,
               completeLiteral: input.completeLiteral,
               semantics: 'source_attributed_statement',
+              ...(input.qualification === undefined ? {} : { qualification: input.qualification }),
             }
           : null,
     },
@@ -388,6 +399,7 @@ function keylessInputFromClaim(
     sourceEventTime: claim.sourceEventTime,
     completeLiteral: claim.evidence.literal,
     semantics: 'source_attributed_statement',
+    ...(claim.qualification === undefined ? {} : { qualification: claim.qualification }),
   };
 }
 

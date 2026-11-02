@@ -101,6 +101,24 @@ npm install n8n-nodes-engram
 
 ---
 
+## Upgrading to v0.8.4
+
+This patch reduces repeated validation during ordinary conversation writes to an autonomous-enrolled embedded store. Ordinary queue and file-lock waiting no longer consumes that write's structural validation budget. Native capture and configured execution budgets keep their existing behaviour. This does not guarantee a particular chat response time.
+
+Existing node versions, models, namespaces, bindings, memory policies and saved defaults are preserved. No reset, re-enrollment or bulk re-extraction is required.
+
+1. Take fresh, consistent workflow and backend-native backups: complete embedded files or a Neo4j database backup. Preserve producer/storage mapping, logical store identity, namespaces, bindings, aliases and any existing durable-job recovery data.
+2. Install `n8n-nodes-engram@0.8.4`, restart n8n and refresh the editor. Start with an inactive workflow copy and a separately restored store whose logical ownership mapping is preserved.
+3. Verify normal and tool-assisted turns, accepted graph-only recall, capture receipts and duplicate-event handling. For a shared store, also verify an Existing / Custom writer in an unbound namespace after autonomous capture. Confirm that prior memory remains intact and final turns are saved once.
+4. Optional: on Memory/Admin v3 using Autonomous Personal Memory, deliberately select **Context-Qualified Statements (V1) → Keep Literal When/Whenever Statements (V1)** on both Capture and Memory. The default is **Off (Existing Behaviour)**. This supports eligible first-person statements with one `when` or `whenever` clause; it retains the complete literal condition, qualifiers and ordering as an attributed statement, rather than asserting that the condition is true or current. It does not require a save command. Uncertain, quoted, reported, sensitive or unsupported statements remain subject to the existing safeguards. It does not convert the statement into a structured preference or enable another model or worker.
+5. Use a fresh legitimate event for a changed policy. Reusing an existing event with a different policy conflicts rather than rewriting its source. Verify the persisted accepted claim and its qualified graph context with the source absent from recent history, then expand only after the canary passes. Review passive writers separately.
+
+For first-time autonomous activation, follow the [v0.8.0 profile setup](#upgrading-to-v080) and [v0.8.1 configured-budget instructions](#upgrading-to-v081).
+
+Rollback: turn off the optional context policy on the supported new binary while retaining newly written memory. After the optional context policy has written flagged sources or qualified records, the store is forward-only: keep readers and writers on 0.8.4 or a newer compatible version. A 0.8.3 binary fails closed on these descriptors and claims and refuses writes to that store. No data-preserving downgrade to 0.8.3 is supported; an older binary requires a separate compatible store that never received these records. Do not mix unsupported writer versions, reset memory or restore an old snapshot over newer conversations. Capture/provider work can still dominate response time; increasing a deadline is not a speed improvement.
+
+---
+
 ## Upgrading to v0.8.3
 
 This patch reduces repeated processing during autonomous personal-memory reads. Existing node versions, saved defaults, namespaces, bindings and memory policies are preserved. No new setting or node-version upgrade is required for this patch.
