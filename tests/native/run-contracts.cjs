@@ -20,6 +20,7 @@ for (const [test, ...args] of [
   ['normal'],
   ['normal', 'autonomous'],
   ['normal', 'autonomous', 'configured'],
+  ['normal', 'autonomous', 'configured', 'contextual'],
   ['tool'],
   ['tool', 'autonomous'],
   ['tool', 'autonomous', 'configured'],

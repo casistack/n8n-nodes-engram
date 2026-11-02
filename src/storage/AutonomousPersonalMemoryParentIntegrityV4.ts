@@ -168,6 +168,9 @@ export function assertAutonomousPersonalMemoryCurrentParentGraphV4(
         ...(config.executionBudget === undefined
           ? {}
           : { executionBudget: config.executionBudget }),
+        ...(config.statementContext === undefined
+          ? {}
+          : { statementContext: config.statementContext }),
         providerReference: config.providerReference,
       });
     } catch {

@@ -572,4 +572,63 @@ describeNeo('native autonomous personal coordinator V4 on Neo4j', () => {
     expect(committedOperations(graph)).toHaveLength(0);
     expect(claimEdges(graph, seed.request.namespace)).toHaveLength(0);
   });
+  it('persists a context-qualified literal and refuses a same-event policy switch on actual Neo4j', async () => {
+    installProvider('success');
+    const literal =
+      'Whenever I review a pull request, I prefer a short summary before the detailed diff.';
+    const turn = 'neo-context-qualified';
+    const make = (enabled: boolean, execution: string) => {
+      const ctx = contextFor(turn, 'enabled', execution);
+      overrideParameter(ctx, 'automaticInput', literal);
+      const node = ctx.getNode();
+      ctx.getNode = () => ({
+        ...node,
+        parameters: {
+          ...node.parameters,
+          automaticStatementContextMode: enabled ? 'contextQualifiedV1' : 'off',
+        },
+      });
+      return ctx;
+    };
+    const result = await completeNativeAutonomousPersonalCaptureV4(
+      make(true, 'execution:qualified'),
+      store,
+    );
+    const token = requireOriginalTurn(result);
+    expect(consumeAutonomousPersonalOriginalTurnV4(store, token)).not.toBeNull();
+    const before = await store.exportGraph(seed.request.namespace);
+    const claims = claimEdges(before, seed.request.namespace);
+    expect(claims).toHaveLength(1);
+    const claim = claims[0]!.attributes.engram_claim_v1 as {
+      qualification?: string;
+      evidence: { literal: string };
+    };
+    expect(claim.qualification).toBe('context_conditional_v1');
+    expect(claim.evidence.literal).toBe(literal);
+    expect(claims[0]!.fact).toBe(literal);
+    const calls = providerBodies.length;
+    const switched = await completeNativeAutonomousPersonalCaptureV4(
+      make(false, 'execution:policy-switch'),
+      store,
+    );
+    expect(switched.kind).not.toBe('original_turn');
+    expect(providerBodies).toHaveLength(calls);
+    const after = await store.exportGraph(seed.request.namespace);
+    expect(sortedRows(after.entities)).toEqual(sortedRows(before.entities));
+    expect(sortedRows(after.edges)).toEqual(sortedRows(before.edges));
+    expect(sortedRows(after.episodes)).toEqual(sortedRows(before.episodes));
+    expect(
+      committedOperations(after).map((op) => ('terminalReceipt' in op ? op.terminalReceipt : null)),
+    ).toEqual(
+      committedOperations(before).map((op) =>
+        'terminalReceipt' in op ? op.terminalReceipt : null,
+      ),
+    );
+    const reopened = createStore();
+    openStores.push(reopened);
+    await reopened.initialize();
+    expect(sortedRows((await reopened.exportGraph(seed.request.namespace)).edges)).toEqual(
+      sortedRows(before.edges),
+    );
+  });
 });

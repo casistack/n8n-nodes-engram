@@ -950,6 +950,10 @@ function recompileStoredDescriptor(descriptor: AutonomousPersonalDescriptorV4) {
     ...(descriptor.executionBudget === undefined
       ? {}
       : { executionBudget: descriptor.executionBudget }),
+    // Same exact-omission rule: a legacy descriptor never gains a statementContext key.
+    ...(descriptor.statementContext === undefined
+      ? {}
+      : { statementContext: descriptor.statementContext }),
   });
 }
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CompositionalAutomaticClaimMeaningV2Schema } from './CompositionalAutomaticMemory.schema';
+import { statementQualificationSchema } from './AutonomousPersonalClaimV3.schema';
 import { EntityEdgeSchema } from './EntityEdge.schema';
 import { EntityNodeSchema } from './EntityNode.schema';
 import { EpisodicNodeSchema } from './EpisodicNode.schema';
@@ -67,6 +68,7 @@ export const AutonomousPersonalRuntimeDisplayV4OwnedDataSchema = z.discriminated
       kind: z.literal('source_statement_record'),
       statementLiteral: z.string().min(1).max(4096),
       sourceEventTime,
+      qualification: statementQualificationSchema.optional(),
       confidence,
       source: AutonomousPersonalRuntimeSearchSourceV4OwnedDataSchema,
     })

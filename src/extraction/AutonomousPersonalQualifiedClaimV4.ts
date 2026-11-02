@@ -27,6 +27,9 @@ import {
   compileAutonomousPersonalSourceScanV1,
   type AutonomousPersonalSourceScanV1,
 } from '../schemas/AutonomousPersonalSourceScanV1.schema';
+import { compileAutonomousPersonalFramingV1 } from '../schemas/AutonomousPersonalFramingV1.schema';
+import { tokenizeMappedBody } from './AutonomousSourceLexerV1';
+import { isAutonomousPersonalContextQualifiedUnitShapeV1 } from './AutonomousPersonalEvidenceSelectionV1';
 import {
   compileAutonomousSourceGeometryV3,
   type AutonomousSourceGeometryCompilationV3,
@@ -101,6 +104,8 @@ type CommittedPersonalOperationV4 = Extract<AutonomousPersonalOperationV4, { sta
 
 type ReadySourceEvidence = Readonly<{
   geometry: AutonomousSourceGeometryCompilationV3;
+  /** Unit ids whose shape recomputes as context-qualified; always empty unless the descriptor opted in. */
+  contextQualifiedUnitIds: ReadonlySet<string>;
   unitsById: ReadonlyMap<
     string,
     {
@@ -688,6 +693,14 @@ function getSourceEvidence(
       return null;
     }
     const completeScan = scan as CompleteSourceScan;
+    const contextQualifiedUnitIds = new Set<string>();
+    const contextOptedIn = stored.descriptor.statementContext?.mode === 'literal_context_qualified';
+    const framing = contextOptedIn ? compileAutonomousPersonalFramingV1(input) : null;
+    const tokens = framing ? tokenizeMappedBody(geometry.mappedHumanBody) : null;
+    if (contextOptedIn && (!framing || !tokens || tokens.length !== scan.tokenCount)) {
+      root.sourceEvidence.set(source.uuid, { kind: 'invalid' });
+      return null;
+    }
     const unitsById = new Map<
       string,
       {
@@ -715,8 +728,24 @@ function getSourceEvidence(
         return null;
       }
       unitsById.set(unitId, { unit, syntaxUnit });
+      const framingUnit = framing?.units[unit.index];
+      if (
+        framing &&
+        tokens &&
+        syntaxUnit.kind !== 'typed' &&
+        framingUnit &&
+        isAutonomousPersonalContextQualifiedUnitShapeV1({
+          body: geometry.mappedHumanBody,
+          tokens,
+          unit,
+          framingUnit,
+          unitCount: completeScan.units.length,
+        })
+      ) {
+        contextQualifiedUnitIds.add(unitId);
+      }
     }
-    const ready: ReadySourceEvidence = { geometry, unitsById };
+    const ready: ReadySourceEvidence = { geometry, contextQualifiedUnitIds, unitsById };
     root.check();
     root.sourceEvidence.set(source.uuid, { kind: 'ready', value: ready });
     return ready;
@@ -1030,6 +1059,16 @@ function inspectOwnedEdge(
   ) {
     return invalid(root, 'invalid_claim');
   }
+  // The stored marker is never self-authorizing: it must equal the deterministic recomputation
+  // from the immutable source under an opted-in descriptor (rejects forged and stripped markers).
+  const expectedQualification =
+    claim.kind === 'source_statement_record' &&
+    evidence.contextQualifiedUnitIds.has(claim.evidence.unitId)
+      ? ('context_conditional_v1' as const)
+      : undefined;
+  const storedQualification =
+    claim.kind === 'source_statement_record' ? claim.qualification : undefined;
+  if (storedQualification !== expectedQualification) return invalid(root, 'invalid_claim');
   const candidateResult = buildAutonomousPersonalClaimCandidateV1({
     sourceId: stored.tuple.owner.sourceId,
     contentHash: stored.tuple.owner.contentHash,
@@ -1047,6 +1086,7 @@ function inspectOwnedEdge(
     rawSpan: claim.evidence.rawSpan,
     mappedSpan: claim.evidence.mappedSpan,
     bundle,
+    ...(expectedQualification === undefined ? {} : { qualification: expectedQualification }),
   });
   root.check();
   if (candidateResult.kind !== 'candidate') return capacity(root);

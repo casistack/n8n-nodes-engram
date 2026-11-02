@@ -517,6 +517,9 @@ export function governAutonomousPersonalRuntimeEdgesV4(
             kind: candidate.kind,
             statementLiteral: candidate.statementLiteral,
             sourceEventTime: candidate.sourceEventTime,
+            ...(candidate.qualification === undefined
+              ? {}
+              : { qualification: candidate.qualification }),
             confidence: candidate.confidence,
             source: candidate.source,
           };
@@ -629,9 +632,14 @@ export function getAutonomousPersonalRuntimeLexicalHintV4(hit: unknown): string 
   const registration = readRegisteredDisplay(hit);
   if (!registration || !hit || typeof hit !== 'object') return null;
   const fact = (hit as AutonomousPersonalRuntimeGovernedHitV4).edge.fact;
-  return live(registration.owner, registration.parent, registration.compatibilityReader)
-    ? registration.display.kind === 'typed_preference'
-      ? `${fact} preference preferences preferred`
-      : fact
-    : null;
+  if (!live(registration.owner, registration.parent, registration.compatibilityReader)) return null;
+  const display = registration.display;
+  // Qualified statements are not preferences by kind or label; only an explicit whole-word
+  // preference term in the revalidated fact joins the typed matching family.
+  const preferenceFamily =
+    display.kind === 'typed_preference' ||
+    (display.kind === 'source_statement_record' &&
+      display.qualification !== undefined &&
+      /\b(?:prefer|preference|preferences|preferred)\b/iu.test(fact));
+  return preferenceFamily ? `${fact} preference preferences preferred` : fact;
 }

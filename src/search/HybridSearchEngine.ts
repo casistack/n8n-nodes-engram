@@ -852,12 +852,19 @@ export class HybridSearchEngine {
     let line =
       display.kind === 'typed_preference'
         ? '- ' + name + ' preference (structured): ' + JSON.stringify(display.meaning)
-        : '- Source statement dated ' +
-          display.sourceEventTime +
-          ' by ' +
-          name +
-          ': ' +
-          display.statementLiteral;
+        : display.qualification === undefined
+          ? '- Source statement dated ' +
+            display.sourceEventTime +
+            ' by ' +
+            name +
+            ': ' +
+            display.statementLiteral
+          : '- Source statement dated ' +
+            display.sourceEventTime +
+            ' by ' +
+            name +
+            ' (context-qualified; the stated condition is not asserted as true or current): ' +
+            display.statementLiteral;
     if (includeProvenance) {
       const source = display.source;
       line +=

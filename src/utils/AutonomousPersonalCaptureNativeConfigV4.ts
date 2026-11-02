@@ -11,6 +11,7 @@ import {
 } from '../schemas/AutonomousPersonalDescriptorV4.schema';
 import { readAutomaticRuntime } from './automaticMemory';
 import { readNativeAutonomousPersonalExecutionBudgetV1 } from './autonomousPersonalExecutionBudget';
+import { readNativeAutonomousPersonalStatementContextV1 } from './autonomousPersonalStatementContext';
 import { normalizeHttpBaseUrl } from './url';
 import { AutonomousPersonalCaptureNativeContextV4OwnedDataSchema } from '../schemas/AutonomousPersonalCaptureBeginV4.schema';
 
@@ -296,6 +297,7 @@ async function readNativeAutonomousPersonalCaptureConfigInternalV4(
     const providerReference = await getProviderReference(ctx, 0, allowMissingApiKey);
     const invocationDeadlineMs = get('extractionDeadlineMs', 30_000);
     const executionBudget = readNativeAutonomousPersonalExecutionBudgetV1(node.parameters, get);
+    const statementContext = readNativeAutonomousPersonalStatementContextV1(node.parameters);
     const requestSettings = AutonomousPersonalDescriptorV4InputOwnedDataSchema.parse({
       profileId: runtime.profileId,
       requestedTrustLevel: 'standard',
@@ -303,9 +305,12 @@ async function readNativeAutonomousPersonalCaptureConfigInternalV4(
       invocationDeadlineMs,
       providerReference,
       ...(executionBudget === undefined ? {} : { executionBudget }),
+      ...(statementContext === undefined ? {} : { statementContext }),
     });
     // Legacy path stays unchanged; configured settings must also compile (reserve vs allowance).
-    if (executionBudget !== undefined) compileAutonomousPersonalDescriptorV4(requestSettings);
+    if (executionBudget !== undefined || statementContext !== undefined) {
+      compileAutonomousPersonalDescriptorV4(requestSettings);
+    }
 
     const mapping = wrapperEnabled
       ? {

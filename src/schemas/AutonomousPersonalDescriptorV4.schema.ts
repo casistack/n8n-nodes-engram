@@ -49,6 +49,14 @@ const StrictExtractionTemperatureSchema = z.discriminatedUnion('mode', [
   ExtractionTemperatureSchema.options[2].strict(),
 ]);
 
+/** Explicit, versioned opt-in. Never defaulted: legacy descriptors must not contain this key. */
+export const AutonomousPersonalStatementContextV1Schema = z
+  .object({ version: z.literal(1), mode: z.literal('literal_context_qualified') })
+  .strict();
+export type AutonomousPersonalStatementContextV1 = z.infer<
+  typeof AutonomousPersonalStatementContextV1Schema
+>;
+
 const OutputTokenLimitSchema = z.object({ mode: z.literal('omit') }).strict();
 
 const ProviderReferenceSchema = z
@@ -75,6 +83,8 @@ const DescriptorInputSchema = z
     providerReference: ProviderReferenceSchema,
     // Absence means legacy; the public bounded entry rejects explicit undefined.
     executionBudget: AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema.optional(),
+    // Absence means legacy statement handling; the key exists only when explicitly opted in.
+    statementContext: AutonomousPersonalStatementContextV1Schema.optional(),
   })
   .strict();
 /** Strict Zod shape for descriptor request DATA after the caller has owned its outer input. */
@@ -112,6 +122,7 @@ const descriptorBodySchema = z
     finalizationReserveMs: z.number().int().min(20).max(5000),
     assistantWriteAuthority: z.null(),
     executionBudget: AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema.optional(),
+    statementContext: AutonomousPersonalStatementContextV1Schema.optional(),
   })
   .strict();
 
@@ -349,6 +360,9 @@ export function compileAutonomousPersonalDescriptorV4(
       ...(checked.executionBudget === undefined
         ? {}
         : { executionBudget: checked.executionBudget }),
+      ...(checked.statementContext === undefined
+        ? {}
+        : { statementContext: checked.statementContext }),
     });
     const settingsHash = hashAutomaticCaptureV2({
       domain: 'engram-autonomous-settings-v1',

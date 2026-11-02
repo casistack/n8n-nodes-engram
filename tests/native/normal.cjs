@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 const { spawn, execFileSync } = require('child_process');
 const assert = require('assert/strict');
+const { isDeepStrictEqual } = require('util');
 const { randomUUID, createHash } = require('crypto');
 const { readExecutionData } = require('./execution-data.cjs');
 const { getNativeRuntimeIdentity } = require('./runtime.cjs');
@@ -25,9 +26,16 @@ const group = 'synthetic-native-memory';
 const workflowId = 'engram017Memory';
 const autonomous = process.argv[2] === 'autonomous';
 const configuredBudget = process.argv[3] === 'configured';
+const contextual = process.argv[4] === 'contextual';
+assert.ok(
+  !contextual || (autonomous && configuredBudget),
+  'Context policy requires configured autonomous case',
+);
 assert.ok(!configuredBudget || autonomous, 'Configured budgets require autonomous mode');
 const content = autonomous
-  ? 'I prefer explanations in plain British English, with one practical example before any technical terminology.'
+  ? contextual
+    ? 'When you explain technical things to me, I prefer plain British English and one practical example before the technical terminology.'
+    : 'I prefer explanations in plain British English, with one practical example before any technical terminology.'
   : 'I prefer concise explanations.';
 const displayPrefix = '[Synthetic speaker]\n';
 const displaySuffix = '\n[End of human message]';
@@ -78,6 +86,7 @@ let requestContainsGraph = false;
 let acceptedClaimsBeforeAgent = 0;
 let lastAgentMessages = [];
 let graphOnlyRecall = false;
+let fallbackCompatibilityVerified = false;
 let n8nProcess;
 let n8nLog;
 async function freePort() {
@@ -232,7 +241,12 @@ const server = http.createServer(async (req, res) => {
   });
   const automatic = {
     ...(autonomous ? { automaticPreferenceInterpreter: 'autonomousPersonalV1' } : {}),
-    ...(configuredBudget ? { automaticExecutionBudgetMode: 'configuredV1' } : {}),
+    ...(configuredBudget
+      ? {
+          automaticExecutionBudgetMode: 'configuredV1',
+        }
+      : {}),
+    ...(contextual ? { automaticStatementContextMode: 'contextQualifiedV1' } : {}),
     automaticCaptureLifecycle: 'replaySafeV2',
     automaticMemoryProfile: 'conservative',
     automaticIssuer: 'synthetic-app',
@@ -567,17 +581,31 @@ const server = http.createServer(async (req, res) => {
     assert.equal(counts.model, 2);
     assert.equal(counts.outbound, 2);
     const claim = firstGraph.edges.find((edge) => edge.attributes?.engram_claim_v1?.version === 3);
-    const meaning = claim.attributes.engram_claim_v1.meaning;
-    assert.ok(meaning, 'The compound preference must retain verified structured meaning');
-    const graphMessages = lastAgentMessages.filter(
-      (message) =>
-        message.role === 'system' &&
-        String(message.content).includes('Relevant knowledge from memory:'),
-    );
-    assert.ok(
-      graphMessages.some((message) => String(message.content).includes(JSON.stringify(meaning))),
-      'Graph-only context must contain the complete persisted preference meaning',
-    );
+    if (!contextual) {
+      const meaning = claim.attributes.engram_claim_v1.meaning;
+      assert.ok(meaning, 'The compound preference must retain verified structured meaning');
+      const graphMessages = lastAgentMessages.filter(
+        (message) =>
+          message.role === 'system' &&
+          String(message.content).includes('Relevant knowledge from memory:'),
+      );
+      assert.ok(
+        graphMessages.some((message) => String(message.content).includes(JSON.stringify(meaning))),
+        'Graph-only context must contain the complete persisted preference meaning',
+      );
+    } else {
+      assert.equal(claim.attributes.engram_claim_v1.kind, 'source_statement_record');
+      assert.equal(claim.attributes.engram_claim_v1.qualification, 'context_conditional_v1');
+      assert.ok(
+        lastAgentMessages.some(
+          (message) =>
+            message.role === 'system' &&
+            String(message.content).includes('context-qualified') &&
+            String(message.content).includes(content),
+        ),
+        'Graph-only recall must preserve qualified literal',
+      );
+    }
     for (const message of lastAgentMessages.filter((entry) => entry.role !== 'system')) {
       assert.ok(
         !String(message.content).includes('British English'),
@@ -599,6 +627,123 @@ const server = http.createServer(async (req, res) => {
     assert.equal(recalledGraph.episodes.filter((episode) => episode.role === 'human').length, 2);
     assert.equal(recalledGraph.episodes.filter((episode) => episode.role === 'ai').length, 2);
     graphOnlyRecall = true;
+    if (configuredBudget) {
+      // Ordinary Existing/Custom v3 writer: no Capture branch or captured-source ownership.
+      const fallbackGroup = 'synthetic-native-fallback';
+      const fallbackText = 'Hello';
+      const fallbackNodes = workflow.nodes
+        .filter((entry) => ['Start', 'Agent', 'Model', 'Memory'].includes(entry.name))
+        .map((entry) => {
+          const copy = { ...entry, parameters: { ...entry.parameters }, id: randomUUID() };
+          if (entry.name === 'Agent')
+            copy.parameters = { promptType: 'define', text: fallbackText, options: {} };
+          if (entry.name === 'Memory') {
+            copy.parameters = {
+              backend: 'embedded',
+              customStoragePath: storeDir,
+              sessionIdType: 'customKey',
+              sessionKey: fallbackGroup,
+              automaticMemoryProfile: 'existing',
+              automaticCaptureLifecycle: 'legacy',
+              enableExtraction: 'disabled',
+              enableEmbeddings: 'disabled',
+              extractAi: 'disabled',
+              extractSystemTool: 'disabled',
+              historyFilter: 'provenance',
+              messageWritePolicy: 'finalTurns',
+              storeToolAudit: 'enabled',
+              currentHumanQuery: fallbackText,
+              contextWindowLength: 10,
+            };
+          }
+          return copy;
+        });
+      assert.equal(fallbackNodes.length, 4);
+      assert.equal(fallbackNodes.find((entry) => entry.name === 'Agent').typeVersion, 3.1);
+      const fallbackConnections = {
+        Start: { main: [[connect('Agent')]] },
+        Model: { ai_languageModel: [[connect('Agent', 'ai_languageModel')]] },
+        Memory: { ai_memory: [[connect('Agent', 'ai_memory')]] },
+      };
+      const fallbackChanged = await fetch(`${app}/rest/workflows/${workflowId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({
+          name: workflow.name,
+          nodes: fallbackNodes,
+          connections: fallbackConnections,
+          settings: workflow.settings,
+        }),
+      });
+      assert.equal(fallbackChanged.ok, true, 'Synthetic fallback workflow update must succeed');
+      const before = JSON.parse(fs.readFileSync(storeFile));
+      const countsBefore = { ...counts };
+      const fallback = await execute('fallback-agent');
+      assert.equal(fallback.data.status, 'success');
+      const fallbackRuns = readExecutionData(fallback, runtime).resultData.runData;
+      assert.ok(fallbackRuns.Agent?.[0], 'Fallback AI Agent must run');
+      assert.ok(fallbackRuns.Model?.[0], 'Fallback chat model must run');
+      assert.equal(fallbackRuns.Capture, undefined, 'Fallback must not invoke Capture');
+      assert.equal(counts.model, countsBefore.model + 1);
+      assert.equal(counts.extraction, countsBefore.extraction);
+      assert.equal(counts.outbound, countsBefore.outbound);
+      assert.equal(counts.stopped, countsBefore.stopped);
+      assert.ok(
+        lastAgentMessages.some((message) => String(message.content).includes(fallbackText)),
+        'Fallback agent must receive the current message',
+      );
+      const after = JSON.parse(fs.readFileSync(storeFile));
+      const containsRow = (rows, row) =>
+        rows.some((candidate) => isDeepStrictEqual(candidate, row));
+      for (const field of ['entities', 'edges', 'episodes']) {
+        for (const row of before[field]) {
+          assert.ok(containsRow(after[field], row), `Original ${field} row changed`);
+        }
+      }
+      assert.deepEqual(
+        after.automatic_operations_v1,
+        before.automatic_operations_v1,
+        'Ledger unchanged',
+      );
+      assert.deepEqual(after.metadata, before.metadata, 'Storage epoch unchanged');
+      assert.equal(after.version, before.version, 'Storage version unchanged');
+      assert.ok(
+        lastAgentMessages.every((message) => !String(message.content).includes('British')),
+        'Other namespace memory must remain inaccessible',
+      );
+      const inGroup = (rows, id) => rows.filter((row) => row.group_id === id);
+      assert.deepEqual(inGroup(after.entities, group), inGroup(before.entities, group));
+      assert.deepEqual(inGroup(after.edges, group), inGroup(before.edges, group));
+      assert.deepEqual(inGroup(after.episodes, group), inGroup(before.episodes, group));
+      const fallbackEpisodes = inGroup(after.episodes, fallbackGroup);
+      assert.equal(fallbackEpisodes.filter((episode) => episode.role === 'human').length, 1);
+      assert.equal(fallbackEpisodes.filter((episode) => episode.role === 'ai').length, 1);
+      assert.equal(fallbackEpisodes.length, 2);
+      assert.ok(
+        fallbackEpisodes.some((episode) => String(episode.content).includes(fallbackText)),
+        'Fallback human turn must be saved',
+      );
+      assert.ok(
+        fallbackEpisodes.some((episode) =>
+          String(episode.content).includes('Synthetic final response.'),
+        ),
+        'Fallback final answer must be saved',
+      );
+      const acceptedClaims = (graph) =>
+        graph.edges.filter(
+          (edge) =>
+            edge.attributes?.engram_claim_v1 &&
+            edge.attributes?.engram_extraction?.review_status === 'accepted',
+        );
+      assert.equal(acceptedClaims(after).length, acceptedClaims(before).length);
+      assert.ok(containsRow(after.edges, claim), 'Original accepted claim must remain');
+      const humanOperations = (graph) =>
+        graph.automatic_operations_v1.operations.filter(
+          (operation) => operation.version === 4 && operation.identity.role === 'human',
+        );
+      assert.equal(humanOperations(after).length, humanOperations(before).length);
+      fallbackCompatibilityVerified = true;
+    }
   }
   const proof = {
     ...runtimeIdentity,
@@ -606,10 +751,12 @@ const server = http.createServer(async (req, res) => {
     agentVersion: 3.1,
     interpreter: autonomous ? 'autonomousPersonalV1' : 'literalV1',
     configuredBudget,
+    contextual,
     counts,
     requestContainsGraph,
     acceptedClaimsBeforeAgent,
     graphOnlyRecall,
+    fallbackCompatibilityVerified,
     crossExecutionStopped: true,
     originalRecordsUnchangedAfterRedelivery: true,
     storeSha256BeforeRedelivery: createHash('sha256').update(firstBytes).digest('hex'),

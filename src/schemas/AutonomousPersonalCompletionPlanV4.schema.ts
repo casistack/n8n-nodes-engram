@@ -236,6 +236,7 @@ function validatePlanned(plan: z.infer<typeof planned>, context: z.RefinementCtx
               sourceEventTime: claim.sourceEventTime,
               completeLiteral: claim.evidence.literal,
               semantics: 'source_attributed_statement' as const,
+              ...(claim.qualification === undefined ? {} : { qualification: claim.qualification }),
             };
     const expectedKey = logicalIdentity ? hashAutonomousPersonalClaimKeyV3(logicalIdentity) : null;
     const expectedMeaningHash = logicalIdentity

@@ -16,6 +16,7 @@ import { AutonomousPersonalMemoryHandoffLocatorV4OwnedDataSchema } from '../sche
 import { buildAutonomousPersonalProviderReferenceV4 } from './AutonomousPersonalCaptureNativeConfigV4';
 import { readAutomaticRuntime } from './automaticMemory';
 import { readNativeAutonomousPersonalExecutionBudgetV1 } from './autonomousPersonalExecutionBudget';
+import { readNativeAutonomousPersonalStatementContextV1 } from './autonomousPersonalStatementContext';
 import { readExtractionPolicy } from './advancedExtraction';
 import {
   readReplaySafeMemoryNativeContext,
@@ -214,6 +215,9 @@ export async function readAutonomousPersonalNativeMemoryConfigV4(
       ctx.getNode().parameters,
       get,
     );
+    const statementContext = readNativeAutonomousPersonalStatementContextV1(
+      ctx.getNode().parameters,
+    );
     const native = {
       instance: ctx.getInstanceId(),
       workflow: ctx.getWorkflow().id ?? null,
@@ -237,6 +241,7 @@ export async function readAutonomousPersonalNativeMemoryConfigV4(
       invocationDeadlineMs: policy.deadline_ms,
       providerReference,
       ...(executionBudget === undefined ? {} : { executionBudget }),
+      ...(statementContext === undefined ? {} : { statementContext }),
     };
     const config = deepCloneAndParse(candidate);
 
@@ -247,6 +252,9 @@ export async function readAutonomousPersonalNativeMemoryConfigV4(
       invocationDeadlineMs: config.invocationDeadlineMs,
       providerReference: config.providerReference,
       ...(config.executionBudget === undefined ? {} : { executionBudget: config.executionBudget }),
+      ...(config.statementContext === undefined
+        ? {}
+        : { statementContext: config.statementContext }),
     });
     return config;
   } catch (error) {

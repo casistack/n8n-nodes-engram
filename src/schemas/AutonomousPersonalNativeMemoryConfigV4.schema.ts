@@ -62,6 +62,8 @@ export const AutonomousPersonalNativeMemoryConfigV4OwnedDataSchema = z
     providerReference: AutonomousPersonalDescriptorV4InputOwnedDataSchema.shape.providerReference,
     // Absence means legacy; the key is only present for a configured body.
     executionBudget: AutonomousPersonalExecutionBudgetConfiguredV1OwnedDataSchema.optional(),
+    // Absent unless explicitly opted in; never defaulted.
+    statementContext: AutonomousPersonalDescriptorV4InputOwnedDataSchema.shape.statementContext,
   })
   .strict();
 

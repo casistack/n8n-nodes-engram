@@ -4,6 +4,7 @@ import {
   hashAutonomousPersonalClaimKeyV3,
   hashAutonomousPersonalClaimMeaningV3,
   hashAutonomousPersonalPredicateDependencyV1,
+  statementQualificationSchema,
 } from './AutonomousPersonalClaimV3.schema';
 import { CompositionalPreferenceV2BundleSchema } from './CompositionalPreferenceV2.schema';
 import { AutonomousPersonalPolicyV3OwnedDataSchema } from './AutonomousPersonalPolicyV3.schema';
@@ -135,6 +136,7 @@ const statementInputSchema = z
     ...inputCommon,
     kind: z.literal('source_statement_record'),
     bundle: z.null(),
+    qualification: statementQualificationSchema.optional(),
   })
   .strict()
   .superRefine(refineLiteralSpanWidths);
@@ -167,10 +169,12 @@ const referenceSchema = z
     dependencies: z.array(dependencyReference).min(1).max(32),
     rawSpan: span,
     mappedSpan: span,
+    qualification: statementQualificationSchema.optional(),
   })
   .strict()
   .superRefine((reference, context) => {
     if (
+      (reference.qualification !== undefined && reference.kind !== 'source_statement_record') ||
       reference.rawSpan.end - reference.rawSpan.start !==
         reference.mappedSpan.end - reference.mappedSpan.start ||
       reference.dependencies.some((dependency, index) => dependency.index !== index) ||
@@ -204,7 +208,11 @@ const candidateResult = z
       candidate.reference.rawSpan.end !== candidate.claim.evidence.rawSpan.end ||
       candidate.reference.mappedSpan.start !== candidate.claim.evidence.mappedSpan.start ||
       candidate.reference.mappedSpan.end !== candidate.claim.evidence.mappedSpan.end ||
-      candidate.dependencyCount !== candidate.reference.dependencies.length
+      candidate.dependencyCount !== candidate.reference.dependencies.length ||
+      candidate.reference.qualification !==
+        (candidate.claim.kind === 'source_statement_record'
+          ? candidate.claim.qualification
+          : undefined)
     ) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: 'Candidate DATA fields disagree' });
       return;
@@ -225,6 +233,9 @@ const candidateResult = z
             sourceEventTime: candidate.claim.sourceEventTime,
             completeLiteral: candidate.claim.evidence.literal,
             semantics: 'source_attributed_statement' as const,
+            ...(candidate.claim.qualification === undefined
+              ? {}
+              : { qualification: candidate.claim.qualification }),
           };
     try {
       const meaningHash = hashAutonomousPersonalClaimMeaningV3(logicalInput);

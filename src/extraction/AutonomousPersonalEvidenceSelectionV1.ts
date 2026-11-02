@@ -46,6 +46,7 @@ import {
 } from './AutonomousPersonalTypedSyntaxV1';
 import { buildAutonomousPersonalClaimCandidateV1 } from './AutonomousPersonalClaimCandidateV1';
 import { tokenizeMappedBody } from './AutonomousSourceLexerV1';
+import { recognizeContextQualifiedStatementV1 } from './AutonomousPersonalContextQualifiedShapeV1';
 import type { AutonomousSourceLexicalTokenV1 } from '../schemas/AutonomousSourceLexicalTokenV1.schema';
 import {
   cloneBoundedAutomaticCaptureJson,
@@ -586,9 +587,20 @@ function buildCandidateForUnit(input: {
   provider: AutonomousPersonalProviderUnitV1;
   unitId: string;
   statementSupported: boolean;
+  contextQualified: boolean;
 }): CandidateBuild[] {
-  const { stored, descriptor, geometry, scan, syntax, unit, provider, unitId, statementSupported } =
-    input;
+  const {
+    stored,
+    descriptor,
+    geometry,
+    scan,
+    syntax,
+    unit,
+    provider,
+    unitId,
+    statementSupported,
+    contextQualified,
+  } = input;
   const typeRow = syntax.units[unit.index];
   if (!typeRow || typeRow.unitIndex !== unit.index) {
     fail('invalid_autonomous_evidence_selection_data');
@@ -680,8 +692,36 @@ function buildCandidateForUnit(input: {
       rawSpan,
       mappedSpan,
       bundle: null,
+      ...(contextQualified ? { qualification: 'context_conditional_v1' as const } : {}),
     }),
   ];
+}
+
+/**
+ * Shared deterministic shape test behind the `context_conditional_v1` marker. Callers must already
+ * have checked that the descriptor opted in (`literal_context_qualified`). Selection and the
+ * creator reconstruction both use it so the marker is recomputed, never trusted from storage.
+ */
+export function isAutonomousPersonalContextQualifiedUnitShapeV1(input: {
+  body: string;
+  tokens: readonly AutonomousSourceLexicalTokenV1[];
+  unit: AutonomousPersonalSourceScanV1['units'][number];
+  framingUnit: AutonomousPersonalFramingV1['units'][number];
+  unitCount: number;
+}): boolean {
+  const { body, tokens, unit, framingUnit, unitCount } = input;
+  if (!framingUnit.observationCodes.includes('conditional_uncertainty_token')) return false;
+  const headSupported = statementHeadIsSupported(body, tokens, unit, framingUnit, unitCount);
+  return recognizeContextQualifiedStatementV1({
+    body,
+    tokens,
+    tokenSpan: unit.tokenSpan,
+    headSupported,
+    prefixHead:
+      framingUnit.headCode === 'remember_prefix_i' ||
+      framingUnit.headCode === 'remember_prefix_i_am' ||
+      framingUnit.headCode === 'remember_prefix_i_have',
+  });
 }
 
 function rememberPrefixExceedsBound(
@@ -868,6 +908,21 @@ export function compileAutonomousPersonalEvidenceSelectionV1(
   if (!tokens || tokens.length !== scan.tokenCount) {
     fail('invalid_autonomous_evidence_selection_data');
   }
+  // Absent for every legacy descriptor: then no branch below differs from the V1 behavior.
+  const statementContextQualified =
+    stored.descriptor.statementContext?.mode === 'literal_context_qualified';
+  const contextQualifiedShape = (
+    unit: AutonomousPersonalSourceScanV1['units'][number],
+    framingUnit: AutonomousPersonalFramingV1['units'][number],
+  ): boolean =>
+    statementContextQualified &&
+    isAutonomousPersonalContextQualifiedUnitShapeV1({
+      body,
+      tokens,
+      unit,
+      framingUnit,
+      unitCount: scan.units.length,
+    });
   for (const unit of scan.units) {
     const typeRow = typedSyntax.units[unit.index];
     const framingUnit = framing.units[unit.index];
@@ -884,7 +939,8 @@ export function compileAutonomousPersonalEvidenceSelectionV1(
       framingUnit.observationCodes.includes('question_terminal') ||
       framingUnit.observationCodes.includes('instruction_memory_pattern') ||
       framingUnit.sensitivityCodes.length > 0 ||
-      framingUnit.observationCodes.includes('conditional_uncertainty_token');
+      (framingUnit.observationCodes.includes('conditional_uncertainty_token') &&
+        !contextQualifiedShape(unit, framingUnit));
     if (
       !sharedVeto &&
       statementHeadIsSupported(body, tokens, unit, framingUnit, scan.units.length) &&
@@ -1071,14 +1127,11 @@ export function compileAutonomousPersonalEvidenceSelectionV1(
 
       const typedPositive = typeRow.kind === 'typed';
       const conditionVeto = framingUnit.observationCodes.includes('conditional_uncertainty_token');
-      const statementSupported = statementHeadIsSupported(
-        body,
-        tokens,
-        unit,
-        framingUnit,
-        scan.units.length,
-      );
-      if (!typedPositive && conditionVeto) {
+      const contextQualified = !typedPositive && contextQualifiedShape(unit, framingUnit);
+      const statementSupported =
+        contextQualified ||
+        statementHeadIsSupported(body, tokens, unit, framingUnit, scan.units.length);
+      if (!typedPositive && conditionVeto && !contextQualified) {
         units.push({
           ...baseUnit,
           outcome: 'withheld',
@@ -1121,6 +1174,7 @@ export function compileAutonomousPersonalEvidenceSelectionV1(
           provider,
           unitId: unitIds[index]!,
           statementSupported,
+          contextQualified,
         });
       } catch (error) {
         if (error instanceof CandidateCapacity) {
