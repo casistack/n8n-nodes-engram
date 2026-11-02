@@ -322,6 +322,9 @@ function compileCurrentDescriptor(config: AutonomousPersonalNativeMemoryConfigV4
       intentSetting: config.explicitIntent,
       invocationDeadlineMs: config.invocationDeadlineMs,
       ...(config.executionBudget === undefined ? {} : { executionBudget: config.executionBudget }),
+      ...(config.statementContext === undefined
+        ? {}
+        : { statementContext: config.statementContext }),
       providerReference: config.providerReference,
     });
   } catch {
@@ -852,6 +855,7 @@ export function readAutonomousPersonalMemoryParentQualifiedClaimCandidateV4(
               kind: claim.kind,
               statementLiteral: claim.evidence.literal,
               sourceEventTime: claim.sourceEventTime,
+              ...(claim.qualification === undefined ? {} : { qualification: claim.qualification }),
             };
 
       // Serialized once: this exact length is the per-candidate and aggregate charge.

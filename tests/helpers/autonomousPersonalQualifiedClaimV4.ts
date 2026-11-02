@@ -37,6 +37,10 @@ export async function autonomousPersonalQualifiedClaimFixtureV4(
     prefix?: string;
     profile?: 'conservative' | 'explicit' | 'reviewFirst';
     referenceTime?: string;
+    /** Real native opt-in parameter; absent keeps every legacy byte. */
+    statementContextMode?: 'contextQualifiedV1';
+    /** Test-only adversarial graph construction; never sent to a native write method. */
+    candidateQualificationOverride?: 'omit' | 'context_conditional_v1';
   } = {},
 ) {
   const directory = fs.mkdtempSync(join(tmpdir(), 'engram-qualified-creator-'));
@@ -47,16 +51,27 @@ export async function autonomousPersonalQualifiedClaimFixtureV4(
     const human = options.content ?? 'I prefer concise explanations.';
     const prefix = options.prefix ?? '';
     const profile = options.profile ?? 'conservative';
-    const admitted = await dispatchNativeAutonomousPersonalCaptureV4(
-      nativeAutonomousPersonalCaptureContext(seed, {
-        content: prefix + human,
-        extraParameters: {
-          automaticMemoryProfile: profile,
-          automaticIntent: profile === 'explicit' ? 'enabled' : 'disabled',
+    const nativeContext = nativeAutonomousPersonalCaptureContext(seed, {
+      content: prefix + human,
+      extraParameters: {
+        automaticMemoryProfile: profile,
+        automaticIntent: profile === 'explicit' ? 'enabled' : 'disabled',
+        ...(options.statementContextMode === undefined
+          ? {}
+          : { automaticStatementContextMode: options.statementContextMode }),
+      },
+    });
+    if (options.statementContextMode !== undefined) {
+      const node = nativeContext.getNode();
+      nativeContext.getNode = () => ({
+        ...node,
+        parameters: {
+          ...node.parameters,
+          automaticStatementContextMode: options.statementContextMode!,
         },
-      }),
-      store,
-    );
+      });
+    }
+    const admitted = await dispatchNativeAutonomousPersonalCaptureV4(nativeContext, store);
     if (admitted.kind !== 'claimed') throw new Error('Expected synthetic initial source');
     const graph = JSON.parse(JSON.stringify(await store.exportGraph())) as GraphData;
     if (graph.group_id === undefined) delete graph.group_id;
@@ -151,6 +166,10 @@ export async function autonomousPersonalQualifiedClaimFixtureV4(
     if (selection.status !== 'complete' || selection.occurrences.length !== 1)
       throw new Error('Expected one source candidate');
     const reference = selection.occurrences[0]!;
+    const qualification =
+      options.candidateQualificationOverride === 'omit'
+        ? undefined
+        : (options.candidateQualificationOverride ?? reference.qualification);
     const candidate = buildAutonomousPersonalClaimCandidateV1({
       sourceId: owner.sourceId,
       contentHash: owner.contentHash,
@@ -168,8 +187,11 @@ export async function autonomousPersonalQualifiedClaimFixtureV4(
       rawSpan: reference.rawSpan,
       mappedSpan: reference.mappedSpan,
       bundle,
+      ...(qualification === undefined ? {} : { qualification }),
     });
     if (candidate.kind !== 'candidate') throw new Error('Expected complete Claim3 DATA');
+    const creatorReference =
+      options.candidateQualificationOverride === undefined ? reference : candidate.reference;
     const ids = deriveAutonomousPersonalRecordIdsV1({
       namespace: owner.namespace,
       subjectId: owner.binding.subjectId,
@@ -246,9 +268,9 @@ export async function autonomousPersonalQualifiedClaimFixtureV4(
           {
             occurrenceIndex: 0,
             kind,
-            evidenceHash: reference.evidenceHash,
-            meaningHash: reference.meaningHash,
-            dependencies: reference.dependencies,
+            evidenceHash: creatorReference.evidenceHash,
+            meaningHash: creatorReference.meaningHash,
+            dependencies: creatorReference.dependencies,
             state,
             effect: 'created',
             claimId: edge.uuid,

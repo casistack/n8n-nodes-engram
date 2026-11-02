@@ -34,6 +34,7 @@ import type { EdgeSearchResult, IGraphStorage } from '../../src/storage/IGraphSt
 import { completeNativeAutonomousPersonalCaptureV4 } from '../../src/storage/AutonomousPersonalNativeCompletionV4';
 import { HybridSearchEngine } from '../../src/search/HybridSearchEngine';
 import { RetrievalGovernance } from '../../src/search/RetrievalGovernance';
+import { governedContext } from '../../src/search/GovernedContext';
 import {
   nativeAutonomousPersonalCaptureContext,
   seedAutonomousPersonalCaptureSubject,
@@ -45,7 +46,12 @@ import {
 import { readAutonomousPersonalNativeMemoryConfigV4 } from '../../src/utils/AutonomousPersonalNativeMemoryConfigV4';
 
 type CommittedOperation = Extract<AutonomousPersonalOperationV4, { state: 'committed' }>;
-type PriorCapture = { readonly content: string; readonly category: 'preference' | 'work_role' };
+type PriorCapture = {
+  readonly content: string;
+  readonly category: 'preference' | 'work_role';
+  // Opt-in to the same native context-qualified statement mode the native contextual gate uses.
+  readonly contextQualified?: boolean;
+};
 type Capture = {
   readonly operation: CommittedOperation;
   readonly sourceId: string;
@@ -87,6 +93,7 @@ async function createFixture(priorCaptures: readonly PriorCapture[]): Promise<Fi
       content: string,
       category: 'preference' | 'work_role' | null,
       profileId: 'conservative' | 'explicit',
+      contextQualified = false,
     ): Promise<Capture> => {
       const turn = `runtime-search-turn-${randomUUID()}`;
       const native = {
@@ -146,8 +153,19 @@ async function createFixture(priorCaptures: readonly PriorCapture[]): Promise<Fi
             automaticInput: content,
             automaticWrapper: 'disabled',
             queueTemperatureMode: 'providerDefault',
+            ...(contextQualified ? { automaticStatementContextMode: 'contextQualifiedV1' } : {}),
           },
         });
+        if (contextQualified) {
+          const originalNode = context.getNode();
+          context.getNode = () => ({
+            ...originalNode,
+            parameters: {
+              ...originalNode.parameters,
+              automaticStatementContextMode: 'contextQualifiedV1',
+            },
+          });
+        }
         completed = await completeNativeAutonomousPersonalCaptureV4(context, producer!);
         if (completed.kind !== 'original_turn') {
           let persistedSummary: unknown = { available: false };
@@ -227,7 +245,9 @@ async function createFixture(priorCaptures: readonly PriorCapture[]): Promise<Fi
     };
 
     for (const prior of priorCaptures)
-      captures.push(await capture(prior.content, prior.category, 'conservative'));
+      captures.push(
+        await capture(prior.content, prior.category, 'conservative', prior.contextQualified),
+      );
     const current = await capture('What games are on today?', null, 'explicit');
     captures.push(current);
 
@@ -739,6 +759,125 @@ describe('Claim3-only Autonomous Personal runtime search V4', () => {
       await closeFixture(fixture);
     }
   }, 30_000);
+
+  describe('qualified statement preference-family relevance', () => {
+    const preferenceSuffix = ' preference preferences preferred';
+    const routes = new WeakMap<
+      Fixture,
+      NonNullable<ReturnType<typeof HybridSearchEngine.forAutonomousPersonalMemoryV4>>
+    >();
+    const recall = (fixture: Fixture, query: string) => {
+      let route = routes.get(fixture);
+      if (!route) {
+        const bound = HybridSearchEngine.forAutonomousPersonalMemoryV4(
+          fixture.owner,
+          fixture.parent,
+          fixture.compatibility,
+        );
+        if (!bound) throw new Error('Expected genuine native search route');
+        route = bound;
+        routes.set(fixture, route);
+      }
+      return governedContext(route.storage, route.engine, query, fixture.namespace, {
+        mode: 'current',
+        limit: 20,
+        minScore: 0,
+        traversal: false,
+        hops: 1,
+        acceptedOnly: true,
+        filters: {},
+        compositionalReader: fixture.compatibility,
+      });
+    };
+    const governOnly = async (fixture: Fixture, query: string) => {
+      const ids = createdClaimIds(fixture.captures[0]!);
+      expect(ids).toHaveLength(1);
+      const hits = await actualRankedHits(fixture, query, ids);
+      expect(hits).toHaveLength(1);
+      const governed = runGovernance(fixture, hits);
+      expect(governed.results).toHaveLength(1);
+      return governed.results[0]!;
+    };
+
+    it('recalls a qualified explicit-preference statement for a broad preferences question', async () => {
+      const literal =
+        'When you explain technical things to me, I prefer plain British English and one practical example before the technical terminology.';
+      const fixture = await createFixture([
+        { content: literal, category: 'preference', contextQualified: true },
+      ]);
+      try {
+        const hit = await governOnly(fixture, 'prefer');
+        const display = getAutonomousPersonalRuntimeDisplayV4(hit);
+        expect(display).toMatchObject({
+          kind: 'source_statement_record',
+          qualification: 'context_conditional_v1',
+          statementLiteral: literal,
+        });
+        expect(getAutonomousPersonalRuntimeLexicalHintV4(hit)).toBe(
+          `${hit.edge.fact}${preferenceSuffix}`,
+        );
+
+        const recalled = await recall(fixture, 'What are my preferences?');
+        expect(recalled.audit.returned).toBe(1);
+        expect(recalled.audit.irrelevant).toBe(0);
+        expect(recalled.context).toContain('context-qualified');
+        expect(recalled.context).toContain(literal);
+        expect(recalled.context).not.toContain(preferenceSuffix.trim());
+
+        const unrelated = await recall(fixture, 'What is my favourite colour?');
+        expect(unrelated.audit.returned).toBe(0);
+        expect(unrelated.context).not.toContain(literal);
+
+        // Revalidation is unchanged: closing the live reader removes the hint and the recall.
+        parentReaderApi.closeAutonomousPersonalMemoryParentReaderV4(fixture.owner, fixture.parent);
+        expect(getAutonomousPersonalRuntimeLexicalHintV4(hit)).toBeNull();
+        const afterClose = await recall(fixture, 'What are my preferences?');
+        expect(afterClose.context).not.toContain(literal);
+      } finally {
+        await closeFixture(fixture);
+      }
+    }, 30_000);
+
+    it('does not give a qualified non-preference statement the preference family', async () => {
+      const literal = 'When I start work, I review pull requests first thing.';
+      const fixture = await createFixture([
+        { content: literal, category: 'work_role', contextQualified: true },
+      ]);
+      try {
+        const hit = await governOnly(fixture, 'review');
+        const display = getAutonomousPersonalRuntimeDisplayV4(hit);
+        expect(display).toMatchObject({
+          kind: 'source_statement_record',
+          qualification: 'context_conditional_v1',
+        });
+        expect(getAutonomousPersonalRuntimeLexicalHintV4(hit)).toBe(hit.edge.fact);
+        expect(getAutonomousPersonalRuntimeLexicalHintV4(hit)).not.toContain(preferenceSuffix);
+
+        const recalled = await recall(fixture, 'What are my preferences?');
+        expect(recalled.audit.returned).toBe(0);
+        expect(recalled.context).not.toContain(literal);
+      } finally {
+        await closeFixture(fixture);
+      }
+    }, 30_000);
+
+    it('leaves an unmarked statement containing prefer unchanged', async () => {
+      const fixture = await createFixture([
+        { content: 'I prefer to work as a ceramicist.', category: 'work_role' },
+      ]);
+      try {
+        const hit = await governOnly(fixture, 'ceramicist');
+        const display = getAutonomousPersonalRuntimeDisplayV4(hit);
+        expect(display?.kind).toBe('source_statement_record');
+        if (display?.kind !== 'source_statement_record')
+          throw new Error('Expected statement display');
+        expect(display.qualification).toBeUndefined();
+        expect(getAutonomousPersonalRuntimeLexicalHintV4(hit)).toBe(hit.edge.fact);
+      } finally {
+        await closeFixture(fixture);
+      }
+    }, 30_000);
+  });
 
   it('rejects wrong bindings, changed row preimages and unknown metadata without ordinary fallback', async () => {
     const fixture = await createFixture([

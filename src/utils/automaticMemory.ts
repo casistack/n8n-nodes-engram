@@ -132,9 +132,27 @@ export const automaticExecutionBudgetProperties: INodeProperties[] = [
   },
 ];
 
+export const automaticStatementContextProperties: INodeProperties[] = [
+  {
+    displayName: 'Context-Qualified Statements (V1)',
+    name: 'automaticStatementContextMode',
+    type: 'options',
+    noDataExpression: true,
+    default: 'off',
+    options: [
+      { name: 'Off (Existing Behaviour)', value: 'off' },
+      { name: 'Keep Literal When/Whenever Statements (V1)', value: 'contextQualifiedV1' },
+    ],
+    displayOptions: { show: autonomousBudgetShow },
+    description:
+      'Off preserves saved behaviour. On also keeps a first-person statement that has one when/whenever clause as an attributed literal record marked context-qualified; the condition is never asserted as true, and if/might/maybe style statements stay withheld. Set the same policy on Capture and Memory; existing events retain their original policy and a different policy conflicts instead of rewriting them.',
+  },
+];
+
 export const automaticMemoryProperties: INodeProperties[] = [
   automaticProfileProperty,
   ...automaticExecutionBudgetProperties,
+  ...automaticStatementContextProperties,
   {
     displayName: 'Automatic Memory Interpretation',
     name: 'automaticPreferenceInterpreter',

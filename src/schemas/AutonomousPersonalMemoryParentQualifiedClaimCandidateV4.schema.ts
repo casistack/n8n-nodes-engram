@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { EpisodicNodeSchema } from './EpisodicNode.schema';
+import { statementQualificationSchema } from './AutonomousPersonalClaimV3.schema';
 import { AutonomousPersonalQualifiedClaimProofV4OwnedDataSchema } from './AutonomousPersonalQualifiedClaimV4.schema';
 import { CompositionalAutomaticClaimMeaningV2Schema } from './CompositionalAutomaticMemory.schema';
 
@@ -54,6 +55,7 @@ export const AutonomousPersonalMemoryParentQualifiedClaimCandidateV4OwnedDataSch
               Buffer.byteLength(value, 'utf8') <= 4096,
           ),
         sourceEventTime: proof.innerType().shape.sourceEventTime,
+        qualification: statementQualificationSchema.optional(),
       })
       .strict(),
   ])

@@ -111,6 +111,7 @@ function buildOwnedCandidate(
         sourceEventTime: string;
         completeLiteral: string;
         semantics: 'source_attributed_statement';
+        qualification?: 'context_conditional_v1';
       };
   let claimKindInput:
     | { bundle: CompositionalPreferenceV2Bundle; meaning: CompositionalAutomaticClaimMeaningV2 }
@@ -120,6 +121,7 @@ function buildOwnedCandidate(
         headForm: 'first_person_i_main_clause';
         semantics: 'source_attributed_statement';
         typedProjection: null;
+        qualification?: 'context_conditional_v1';
       };
   let rootPaths: string[];
 
@@ -142,6 +144,8 @@ function buildOwnedCandidate(
     rootPaths = [...meaning.bundles[0]!.rootPaths];
     claimKindInput = { bundle: input.bundle, meaning };
   } else {
+    const qualified =
+      input.qualification === undefined ? {} : { qualification: input.qualification };
     logicalInput = {
       kind: 'source_statement_record',
       namespace,
@@ -149,6 +153,7 @@ function buildOwnedCandidate(
       sourceEventTime,
       completeLiteral: literal,
       semantics: 'source_attributed_statement',
+      ...qualified,
     };
     rootPaths = ['record'];
     claimKindInput = {
@@ -157,6 +162,7 @@ function buildOwnedCandidate(
       headForm: 'first_person_i_main_clause',
       semantics: 'source_attributed_statement',
       typedProjection: null,
+      ...qualified,
     };
   }
 
@@ -223,6 +229,9 @@ function buildOwnedCandidate(
         dependencies,
         rawSpan,
         mappedSpan,
+        ...(input.kind === 'source_statement_record' && input.qualification !== undefined
+          ? { qualification: input.qualification }
+          : {}),
       },
       dependencyCount: dependencies.length,
     }),
