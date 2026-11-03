@@ -1,3 +1,4 @@
+import { currentNativeRequestObserver } from '../utils/NativeMemoryObservability';
 import { performance } from 'perf_hooks';
 import { z } from 'zod';
 import type { IExecuteFunctions } from 'n8n-workflow';
@@ -1222,7 +1223,7 @@ export async function prepareNativeAutonomousPersonalCaptureProviderV4(
           timeoutMs: requestTimeoutMs,
           temperature: preflight.descriptor.provider.temperature,
         },
-        undefined,
+        currentNativeRequestObserver(),
         'entities',
         budget,
       );

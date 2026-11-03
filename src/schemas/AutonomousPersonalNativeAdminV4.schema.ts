@@ -1,3 +1,4 @@
+import { NativeMemoryObservabilityV1Schema } from './NativeMemoryObservabilityV1.schema';
 import { z } from 'zod';
 import { AutonomousPersonalCaptureReceiptSummaryV4Schema } from './AutonomousPersonalCaptureReceiptSummaryV4.schema';
 import { AutonomousPersonalExecutionDiagnosticsV1Schema } from './AutonomousPersonalExecutionDiagnosticsV1.schema';
@@ -11,6 +12,7 @@ export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
       status: z.literal('captured'),
       sourceId: z.string().uuid(),
       creationSummary: AutonomousPersonalCaptureReceiptSummaryV4Schema,
+      native_diagnostics_v1: NativeMemoryObservabilityV1Schema.optional(),
       execution_diagnostics: AutonomousPersonalExecutionDiagnosticsV1Schema.optional(),
     })
     .strict()
@@ -26,6 +28,7 @@ export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
       status: z.literal('replay'),
       sourceId: z.string().uuid(),
       creationSummary: AutonomousPersonalCaptureReceiptSummaryV4Schema,
+      native_diagnostics_v1: NativeMemoryObservabilityV1Schema.optional(),
       execution_diagnostics: AutonomousPersonalExecutionDiagnosticsV1Schema.optional(),
     })
     .strict()
@@ -57,6 +60,7 @@ export const AutonomousPersonalNativeAdminV4OutputSchema = z.union([
         'lease_expired',
         'inspection_incomplete',
       ]),
+      native_diagnostics_v1: NativeMemoryObservabilityV1Schema.optional(),
       execution_diagnostics: AutonomousPersonalExecutionDiagnosticsV1Schema.optional(),
     })
     .strict(),

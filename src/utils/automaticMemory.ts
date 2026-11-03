@@ -1,3 +1,4 @@
+import { nativeDiagnosticsProperty } from './NativeMemoryObservability';
 import type { INodeProperties } from 'n8n-workflow';
 import { AutomaticRuntimeSchema } from '../schemas/AutomaticRuntime.schema';
 import { compileAutomaticPolicy } from '../extraction/AutomaticEvidence';
@@ -151,6 +152,7 @@ export const automaticStatementContextProperties: INodeProperties[] = [
 
 export const automaticMemoryProperties: INodeProperties[] = [
   automaticProfileProperty,
+  nativeDiagnosticsProperty,
   ...automaticExecutionBudgetProperties,
   ...automaticStatementContextProperties,
   {

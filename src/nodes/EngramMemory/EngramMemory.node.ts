@@ -1,3 +1,4 @@
+import { readNativeDiagnosticsEnabled } from '../../utils/NativeMemoryObservability';
 import { readNativeAutonomousPersonalExecutionBudgetV1 } from '../../utils/autonomousPersonalExecutionBudget';
 import { readNativeAutonomousPersonalStatementContextV1 } from '../../utils/autonomousPersonalStatementContext';
 import { runAutonomousPersonalMemoryPreparationV1 } from '../../utils/AutonomousPersonalMemoryExecutionEntryV1';
@@ -2154,6 +2155,7 @@ async function supplyMemoryDataWithinPreparationV1(
 
     const memory = new EngramChatMemory(
       {
+        nativeDiagnostics: autonomousPersonal && readNativeDiagnosticsEnabled(this),
         ...nativeCapture,
         automaticMemory:
           nativeCapture && nativeAutomatic

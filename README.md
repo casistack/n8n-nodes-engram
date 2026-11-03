@@ -48,13 +48,13 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 
 ### Highlights
 
-| | Feature | Description |
-| --- | --- | --- |
-| **4** | n8n Nodes | Memory, Explorer, Admin, Trigger |
-| **2** | Storage Backends | Embedded (zero-setup) or Neo4j (production) |
-| **5** | Extraction Stages | Entity, dedup, relationships, contradictions, embeddings |
-| **3** | Search Modes | Full-text, vector, hybrid RRF fusion |
-| **350** | Tests | Unit + integration across 35 test suites |
+|         | Feature           | Description                                              |
+| ------- | ----------------- | -------------------------------------------------------- |
+| **4**   | n8n Nodes         | Memory, Explorer, Admin, Trigger                         |
+| **2**   | Storage Backends  | Embedded (zero-setup) or Neo4j (production)              |
+| **5**   | Extraction Stages | Entity, dedup, relationships, contradictions, embeddings |
+| **3**   | Search Modes      | Full-text, vector, hybrid RRF fusion                     |
+| **350** | Tests             | Unit + integration across 35 test suites                 |
 
 ---
 
@@ -70,16 +70,16 @@ Every conversation is stored as an episode. An optional LLM extraction pipeline 
 
 Engram provides dedicated n8n nodes for AI memory, graph exploration, administration, diagnostics, and event-driven workflows.
 
-| Installed nodes | AI Memory node |
-| --- | --- |
+| Installed nodes                                                                            | AI Memory node                                                                       |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | <img src="docs/images/engram-node-picker.png" alt="Engram nodes in the n8n node picker" /> | <img src="docs/images/engram-memory-node.png" alt="Engram Memory node parameters" /> |
 
-| Explorer actions | Admin operations |
-| --- | --- |
+| Explorer actions                                                                           | Admin operations                                                                                            |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | <img src="docs/images/engram-explorer-actions.png" alt="Engram Explorer actions in n8n" /> | <img src="docs/images/engram-admin-actions.png" alt="Engram Admin monitoring and hygiene actions in n8n" /> |
 
-| Admin diagnostics output | Graph event trigger |
-| --- | --- |
+| Admin diagnostics output                                                                            | Graph event trigger                                                                  |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | <img src="docs/images/engram-admin-diagnostics-output.png" alt="Engram Admin diagnostics output" /> | <img src="docs/images/engram-trigger-node.png" alt="Engram Trigger events in n8n" /> |
 
 ---
@@ -98,6 +98,23 @@ Engram provides dedicated n8n nodes for AI memory, graph exploration, administra
 cd ~/.n8n
 npm install n8n-nodes-engram
 ```
+
+---
+
+## Upgrading to v0.8.5
+
+This patch adds optional native memory diagnostics. It does not change models, memory acceptance, retrieval policies, namespaces or saved defaults, and does not promise faster replies.
+
+1. Take fresh, consistent workflow and backend-native backups: complete embedded files or a Neo4j database backup. Preserve storage/producer mapping, namespaces, bindings, aliases and existing queue recovery data.
+2. Install `n8n-nodes-engram@0.8.5`, restart n8n and refresh the editor. Begin with an inactive workflow copy and a separately restored store whose logical ownership mapping is preserved.
+3. On Admin **Capture Human Memory** and Memory v3 using **Autonomous Personal Memory**, optionally enable **Native Memory Diagnostics**. It defaults to **Disabled** and can be enabled independently on the operations you want to inspect. No reset, re-enrollment or re-extraction is required.
+4. Inspect `native_diagnostics_v1` in Capture output and Memory load/save diagnostic output. Verify normal and tool-assisted turns, graph recall with the source outside recent history, capture receipts and duplicate handling before expanding the rollout. Diagnostics do not authorize another agent run or message delivery.
+
+The sidecar reports native interpretation request counts, available token usage, client request-to-headers and headers-to-completion envelopes, operation elapsed time and available coarse storage totals. Elapsed time covers the native operation body; earlier setup/initialization and the diagnostic history preview performed after a save are excluded. Missing usage remains unknown (`null`), and request completion does not mean that a graph claim was accepted or persisted. It reports no price or billing estimate. Memory query embeddings and unrelated model/tool calls are not included in native interpretation totals.
+
+Storage observations cover supported callbacks only; unavailable measurements remain `null`. They do not separately measure cold initialization, parsing, indexing, filesystem sync or cache hits. The body envelope includes response reading and local decoding/validation. Nested request/storage totals must not be added to elapsed time or used to infer provider compute time. Observer errors or an unavailable sidecar are not evidence of zero work. The existing `execution_diagnostics` format remains unchanged.
+
+Rollback: disable **Native Memory Diagnostics** while keeping the supported binary and all newly written conversations. This option does not introduce a new memory format; existing downgrade and mixed-version restrictions still apply, including those for context-qualified records and durable queues. Never restore an old snapshot over newer legitimate messages. No model switch, worker activation, automatic historical rewrite or memory purge is part of this upgrade.
 
 ---
 
@@ -321,17 +338,17 @@ For rollback, first stop producers and workers and take a fresh queue-aware back
 
 Start with one backed-up direct-conversation workflow, then validate before updating the remaining Memory nodes. If it still uses Memory v1, use n8n's node upgrade action in an inactive workflow copy to adopt **Memory v2**. Preserve its intended storage and canonical session key; do not replace session keys or use display-name changes as an identity migration.
 
-| Setting | Initial activation |
-| --- | --- |
-| Extraction Temperature Mode | Select **Provider Default** when the extraction model rejects temperature `0`; this truly omits the request field. Otherwise retain a mode supported by that model. |
-| History Filter | Select **Provenance** to exclude known tool-output, monitor-summary, and audit episodes from context. |
-| Message Write Policy | Select **Final Turns** to apply storage/extraction controls to both normal saves and native bulk tool-assisted saves. |
-| Store Tool Audit | Keep **Disabled** initially. Enable only if audit retention is needed; retained audits stay outside conversation context under Final Turns. |
-| Current Human Query | Map to the same current-human-message expression used by the agent prompt. The default accepts string `chatInput`, then string `input`; a different webhook shape needs an explicit mapping. |
-| Store Human / AI Episodes | Review the intended retention; both default to Enabled in v2. |
-| Extract from Human / AI / System and Tool Content | Human extraction defaults Enabled; AI and System/Tool extraction default Disabled. Review these when upgrading a v1 node. |
-| Human Episode Kind | Keep **Active Human** for direct conversations; use **Passive Human** for observed/curated human ingestion. |
-| Source Message ID / Idempotency Key | Use a stable **per-message/per-turn** identity for retry deduplication. A static session key or phone number is not a turn identity and can collapse distinct messages. |
+| Setting                                           | Initial activation                                                                                                                                                                           |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Extraction Temperature Mode                       | Select **Provider Default** when the extraction model rejects temperature `0`; this truly omits the request field. Otherwise retain a mode supported by that model.                          |
+| History Filter                                    | Select **Provenance** to exclude known tool-output, monitor-summary, and audit episodes from context.                                                                                        |
+| Message Write Policy                              | Select **Final Turns** to apply storage/extraction controls to both normal saves and native bulk tool-assisted saves.                                                                        |
+| Store Tool Audit                                  | Keep **Disabled** initially. Enable only if audit retention is needed; retained audits stay outside conversation context under Final Turns.                                                  |
+| Current Human Query                               | Map to the same current-human-message expression used by the agent prompt. The default accepts string `chatInput`, then string `input`; a different webhook shape needs an explicit mapping. |
+| Store Human / AI Episodes                         | Review the intended retention; both default to Enabled in v2.                                                                                                                                |
+| Extract from Human / AI / System and Tool Content | Human extraction defaults Enabled; AI and System/Tool extraction default Disabled. Review these when upgrading a v1 node.                                                                    |
+| Human Episode Kind                                | Keep **Active Human** for direct conversations; use **Passive Human** for observed/curated human ingestion.                                                                                  |
+| Source Message ID / Idempotency Key               | Use a stable **per-message/per-turn** identity for retry deduplication. A static session key or phone number is not a turn identity and can collapse distinct messages.                      |
 
 The context window counts messages/episodes, not user turns or days. With filtering enabled, older eligible messages refill that window within **Maximum History Scan** (default 1000, maximum 10000). Load diagnostics distinguish snapshot overflow from scan-budget truncation. n8n subnode expressions can have different item-resolution behavior from regular nodes; validate mappings for independent conversations rather than assuming a batch resolves each item separately.
 
@@ -442,22 +459,22 @@ On each conversation turn, Engram Memory:
 - **Loads** relevant facts from the knowledge graph as system context, plus recent chat history
 - **Saves** messages as episodes, optionally running the full extraction pipeline
 
-| Setting | Description | Default |
-| --- | --- | --- |
-| Storage Backend | Embedded (Graphology) or Neo4j | Embedded |
-| Knowledge Extraction | LLM-powered entity extraction | Disabled |
-| Extraction Temperature Mode | Legacy (0), Provider Default (omit), or Custom | Legacy (0) |
-| Store Human Episodes | Persist human messages as episodes (v2) | Enabled |
-| Human Episode Kind | Classify human input as active or passive provenance (v2) | Active Human |
-| Store AI Episodes | Persist assistant replies as episodes (v2) | Enabled |
-| Extract from Human Messages | Allow human content to produce facts (v2) | Enabled |
-| Extract from AI Messages | Allow assistant content to produce facts (v2) | Disabled |
-| Semantic Search | Vector embeddings for hybrid search | Disabled |
-| Graph Traversal | BFS enrichment from matched entities | Disabled |
-| Context Window | Recent messages/episodes to include | 10 |
-| Max Facts per Query | Facts injected as context | 10 |
-| Min Relevance Score | Threshold for inclusion (0&ndash;1) | 0.5 |
-| Retention Policy | Episode lifecycle management | Forever |
+| Setting                     | Description                                               | Default      |
+| --------------------------- | --------------------------------------------------------- | ------------ |
+| Storage Backend             | Embedded (Graphology) or Neo4j                            | Embedded     |
+| Knowledge Extraction        | LLM-powered entity extraction                             | Disabled     |
+| Extraction Temperature Mode | Legacy (0), Provider Default (omit), or Custom            | Legacy (0)   |
+| Store Human Episodes        | Persist human messages as episodes (v2)                   | Enabled      |
+| Human Episode Kind          | Classify human input as active or passive provenance (v2) | Active Human |
+| Store AI Episodes           | Persist assistant replies as episodes (v2)                | Enabled      |
+| Extract from Human Messages | Allow human content to produce facts (v2)                 | Enabled      |
+| Extract from AI Messages    | Allow assistant content to produce facts (v2)             | Disabled     |
+| Semantic Search             | Vector embeddings for hybrid search                       | Disabled     |
+| Graph Traversal             | BFS enrichment from matched entities                      | Disabled     |
+| Context Window              | Recent messages/episodes to include                       | 10           |
+| Max Facts per Query         | Facts injected as context                                 | 10           |
+| Min Relevance Score         | Threshold for inclusion (0&ndash;1)                       | 0.5          |
+| Retention Policy            | Episode lifecycle management                              | Forever      |
 
 Existing saved Engram Memory nodes retain their original node version and behavior when the package is upgraded. Use n8n's node upgrade action on a workflow copy to adopt v2 controls. Passive ingestion workflows should select **Human Episode Kind > Passive Human**, while direct agent conversations should keep the default **Active Human** classification.
 
@@ -485,24 +502,24 @@ The expression is resolved in n8n's subnode item context when memory is supplied
 
 > Regular node&mdash;CRUD operations on the knowledge graph.
 
-| Resource | Operations |
-| --- | --- |
-| **Entity** | Create, Get, Get by Name, List, Search, Update, Delete |
+| Resource         | Operations                                                                              |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| **Entity**       | Create, Get, Get by Name, List, Search, Update, Delete                                  |
 | **Relationship** | Create, Get, Get Between, Get for Entity, Search, Review, Update, Delete, Get Changelog |
-| **Episode** | Get, Get Recent, Get by Date Range, Get Count, List, Update, Delete |
-| **Traversal** | BFS from Entity, BFS from Episodes |
+| **Episode**      | Get, Get Recent, Get by Date Range, Get Count, List, Update, Delete                     |
+| **Traversal**    | BFS from Entity, BFS from Episodes                                                      |
 
 ### Engram Admin
 
 > Regular node&mdash;administration and analysis.
 
-| Resource | Operations |
-| --- | --- |
-| **Monitoring** | Stats, List Groups, Group Stats, Embedding Coverage, Diagnostics |
-| **Lifecycle** | Apply Retention, Purge Episodes, Migrate Storage Schema, Clear Group, Bulk Clear Groups, Clear All |
-| **Hygiene** | Orphaned Entities, Duplicate Entities, Expire Stale Edges, Rebuild Search Index, Backfill Embeddings |
-| **Portability** | Export, Import |
-| **Analysis** | Detect Communities |
+| Resource        | Operations                                                                                           |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| **Monitoring**  | Stats, List Groups, Group Stats, Embedding Coverage, Diagnostics                                     |
+| **Lifecycle**   | Apply Retention, Purge Episodes, Migrate Storage Schema, Clear Group, Bulk Clear Groups, Clear All   |
+| **Hygiene**     | Orphaned Entities, Duplicate Entities, Expire Stale Edges, Rebuild Search Index, Backfill Embeddings |
+| **Portability** | Export, Import                                                                                       |
+| **Analysis**    | Detect Communities                                                                                   |
 
 ### Engram Trigger
 
@@ -536,13 +553,13 @@ For production Neo4j deployments, see [`docs/production-neo4j.md`](docs/producti
 
 ## Storage Backends
 
-| | Embedded (Graphology) | Neo4j |
-| --- | --- | --- |
-| **Setup** | Zero configuration | Requires Neo4j instance |
-| **Persistence** | JSON file on disk | Neo4j database |
+|                   | Embedded (Graphology)         | Neo4j                         |
+| ----------------- | ----------------------------- | ----------------------------- |
+| **Setup**         | Zero configuration            | Requires Neo4j instance       |
+| **Persistence**   | JSON file on disk             | Neo4j database                |
 | **Vector search** | Brute-force cosine similarity | Brute-force cosine similarity |
-| **Best for** | Development, single-instance | Production, multi-instance |
-| **Scaling** | Single n8n instance | Independent of n8n lifecycle |
+| **Best for**      | Development, single-instance  | Production, multi-instance    |
+| **Scaling**       | Single n8n instance           | Independent of n8n lifecycle  |
 
 Both backends implement the same `IGraphStorage` interface. All features work identically on either backend.
 
@@ -586,13 +603,13 @@ Upgrading the package alone retains Legacy (0). To resolve an unsupported-temper
 
 In an execution, open the Engram Memory save output and inspect `extraction`. Conversation history saves before extraction, so an overall successful conversation can still have a failed extraction outcome.
 
-| Status | Meaning |
-| --- | --- |
-| `disabled` | Knowledge extraction is disabled. |
-| `skipped` | No eligible, nonempty source messages were selected. |
-| `succeeded` | Attempted stages completed; finding zero entities is also successful. |
-| `partial` | An optional stage failed, malformed records were excluded, or a required stage failed after some graph changes succeeded. |
-| `failed` | A required stage failed before any graph changes succeeded, or extraction configuration is missing. |
+| Status      | Meaning                                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `disabled`  | Knowledge extraction is disabled.                                                                                         |
+| `skipped`   | No eligible, nonempty source messages were selected.                                                                      |
+| `succeeded` | Attempted stages completed; finding zero entities is also successful.                                                     |
+| `partial`   | An optional stage failed, malformed records were excluded, or a required stage failed after some graph changes succeeded. |
+| `failed`    | A required stage failed before any graph changes succeeded, or extraction configuration is missing.                       |
 
 Outcomes include duration, stage status, confirmed mutation counts, filtered/malformed record counts, and bounded error classifications such as `unsupported_parameter`, `authentication`, `rate_limit`, and `timeout`. Update counts include metadata-only updates; edge expirations are counted separately. Partial extraction does not roll back completed graph changes. Provider error bodies and message content are excluded from extraction error diagnostics; normal n8n conversation previews still contain message content.
 
@@ -602,10 +619,10 @@ Extraction outcomes belong to their execution's save output. Engram Admin storag
 
 ## Search
 
-| Mode | Description | Requirements |
-| --- | --- | --- |
-| **Full-text** | Keyword search on names, summaries, and facts | None |
-| **Vector** | Cosine similarity on embedding vectors | Embeddings enabled |
+| Mode           | Description                                    | Requirements       |
+| -------------- | ---------------------------------------------- | ------------------ |
+| **Full-text**  | Keyword search on names, summaries, and facts  | None               |
+| **Vector**     | Cosine similarity on embedding vectors         | Embeddings enabled |
 | **Hybrid RRF** | Reciprocal Rank Fusion combining text + vector | Embeddings enabled |
 
 Hybrid search automatically activates when both text and vector search are available.
@@ -618,11 +635,11 @@ All search operations support optional **temporal filters** (`valid_after`, `val
 
 Engram tracks when facts are valid (`valid_at`, `invalid_at`) and when they were superseded (`expired_at`). You can query the graph by time:
 
-| Operation | Node | Description |
-| --- | --- | --- |
-| **Get by Date Range** | Explorer > Episode | Retrieve episodes within a time window by `reference_time` |
-| **Get Changelog** | Explorer > Relationship | Get recently created, expired, or invalidated relationships since a given date |
-| **Search with date filters** | Explorer > Entity/Relationship Search | Filter search results by `valid_after`, `valid_before`, or `created_after` |
+| Operation                    | Node                                  | Description                                                                    |
+| ---------------------------- | ------------------------------------- | ------------------------------------------------------------------------------ |
+| **Get by Date Range**        | Explorer > Episode                    | Retrieve episodes within a time window by `reference_time`                     |
+| **Get Changelog**            | Explorer > Relationship               | Get recently created, expired, or invalidated relationships since a given date |
+| **Search with date filters** | Explorer > Entity/Relationship Search | Filter search results by `valid_after`, `valid_before`, or `created_after`     |
 
 Date parameters use ISO 8601 format (e.g. `2026-01-15T00:00:00.000Z`). The LLM agent can convert natural language like "last week" into concrete dates before calling these operations.
 
@@ -680,21 +697,21 @@ Engram stores conversation data and extracted knowledge. You should understand w
 
 ### Engram Extraction LLM
 
-| Field | Description |
-| --- | --- |
+| Field    | Description                    |
+| -------- | ------------------------------ |
 | Base URL | OpenAI-compatible API base URL |
-| API Key | API key for the LLM provider |
+| API Key  | API key for the LLM provider   |
 
 Used for entity extraction, community summaries, and embedding generation.
 
 ### Engram Neo4j Connection
 
-| Field | Description |
-| --- | --- |
-| URI | Neo4j connection URI (e.g. `bolt://localhost:7687`) |
-| Username | Neo4j username |
-| Password | Neo4j password |
-| Database | Database name (default: `neo4j`) |
+| Field    | Description                                         |
+| -------- | --------------------------------------------------- |
+| URI      | Neo4j connection URI (e.g. `bolt://localhost:7687`) |
+| Username | Neo4j username                                      |
+| Password | Neo4j password                                      |
+| Database | Database name (default: `neo4j`)                    |
 
 Required only with the Neo4j storage backend.
 
@@ -717,22 +734,22 @@ npm install
 
 ### Commands
 
-| Command | Description |
-| --- | --- |
-| `npm run build` | TypeScript compilation + icon build |
-| `npm run lint` | ESLint |
-| `npm run format` | Prettier (write) |
-| `npm run format:check` | Prettier (check) |
-| `npm run type-check` | TypeScript type checking |
-| `npm test` | Run all tests |
-| `npm run test:coverage` | Coverage report |
+| Command                 | Description                         |
+| ----------------------- | ----------------------------------- |
+| `npm run build`         | TypeScript compilation + icon build |
+| `npm run lint`          | ESLint                              |
+| `npm run format`        | Prettier (write)                    |
+| `npm run format:check`  | Prettier (check)                    |
+| `npm run type-check`    | TypeScript type checking            |
+| `npm test`              | Run all tests                       |
+| `npm run test:coverage` | Coverage report                     |
 
 ### Git Hooks (Husky)
 
-| Hook | Checks |
-| --- | --- |
+| Hook         | Checks                                  |
+| ------------ | --------------------------------------- |
 | `pre-commit` | ESLint, Prettier, TypeScript type-check |
-| `pre-push` | Build, full test suite |
+| `pre-push`   | Build, full test suite                  |
 
 ### CI/CD
 
