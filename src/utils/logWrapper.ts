@@ -161,6 +161,9 @@ export function logWrapper(
                       chatHistory: result.variables.chat_history ?? result.variables,
                       history: result.diagnostics.history,
                       retrieval: result.diagnostics.retrieval,
+                      ...(result.diagnostics.native_diagnostics_v1
+                        ? { native_diagnostics_v1: result.diagnostics.native_diagnostics_v1 }
+                        : {}),
                     },
                   },
                 ],

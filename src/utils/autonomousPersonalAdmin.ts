@@ -1,3 +1,4 @@
+import { observeNativeOperation, readNativeDiagnosticsEnabled } from './NativeMemoryObservability';
 import type { IExecuteFunctions } from 'n8n-workflow';
 import type { IGraphStorage } from '../storage/IGraphStorage';
 import { completeNativeAutonomousPersonalCaptureV4 } from '../storage/AutonomousPersonalNativeCompletionV4';
@@ -22,7 +23,17 @@ export async function executeAutonomousPersonalAdminV4(
   ctx: IExecuteFunctions,
   storage: IGraphStorage,
 ): Promise<AutonomousPersonalNativeAdminV4Output> {
-  return runWithAutonomousPersonalExecutionEntryV1(ctx, () => dispatchWithinEntryV4(ctx, storage));
+  return runWithAutonomousPersonalExecutionEntryV1(ctx, async () => {
+    const observed = await observeNativeOperation(
+      readNativeDiagnosticsEnabled(ctx),
+      'capture',
+      storage,
+      () => dispatchWithinEntryV4(ctx, storage),
+    );
+    return observed.diagnostics
+      ? { ...observed.value, native_diagnostics_v1: observed.diagnostics }
+      : observed.value;
+  });
 }
 
 async function dispatchWithinEntryV4(

@@ -26,6 +26,8 @@ const group = 'synthetic-native-memory';
 const workflowId = 'engram017Memory';
 const autonomous = process.argv[2] === 'autonomous';
 const configuredBudget = process.argv[3] === 'configured';
+const nativeDiagnostics = process.argv.includes('--diagnostics');
+assert.ok(!nativeDiagnostics || autonomous, 'Diagnostics case requires autonomous mode');
 const contextual = process.argv[4] === 'contextual';
 assert.ok(
   !contextual || (autonomous && configuredBudget),
@@ -240,6 +242,7 @@ const server = http.createServer(async (req, res) => {
     mode: 0o600,
   });
   const automatic = {
+    ...(nativeDiagnostics ? { nativeDiagnostics: 'enabled' } : {}),
     ...(autonomous ? { automaticPreferenceInterpreter: 'autonomousPersonalV1' } : {}),
     ...(configuredBudget
       ? {
@@ -486,6 +489,13 @@ const server = http.createServer(async (req, res) => {
   }
   const first = await execute('first-execution');
   assert.equal(first.data.status, 'success');
+  if (autonomous)
+    require('./native-diagnostics.cjs')({
+      runData: readExecutionData(first, runtime).resultData.runData,
+      enabled: nativeDiagnostics,
+      root,
+      content,
+    });
   assert.equal(counts.outbound, 1);
   assert.equal(counts.extraction, autonomous ? 1 : 0);
   assert.equal(acceptedClaimsBeforeAgent, 1);

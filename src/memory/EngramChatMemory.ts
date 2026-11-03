@@ -1,3 +1,4 @@
+import { observeNativeOperation } from '../utils/NativeMemoryObservability';
 import { runAutonomousPersonalMemoryOperationV1 } from '../utils/AutonomousPersonalMemoryExecutionEntryV1';
 import { StorageAccumulator } from '../storage/StorageDiagnostics';
 import { governedContext } from '../search/GovernedContext';
@@ -398,6 +399,8 @@ function nativeCreationSummaryMessageV4(
 }
 
 export interface EngramChatMemoryInput extends BaseChatMemoryInput {
+  /** Optional diagnostic DATA, excluded from native authority and persisted settings. */
+  nativeDiagnostics?: boolean;
   automaticPreferenceInterpreter?: 'literalV1' | 'compositionalV2';
   /** Trusted native/application processing identity, independently derived from the current execution. */
   expectedHumanProcessingAttemptHash?: string;
@@ -1223,10 +1226,26 @@ export class EngramChatMemory extends BaseChatMemory {
   async loadMemoryVariablesWithDiagnostics(
     values: InputValues,
   ): Promise<{ variables: MemoryVariables; diagnostics: MemoryLoadDiagnostics }> {
-    if (this.nativeAdapterMode)
-      return this.runNativeMemoryOperationV1('memoryRead', () =>
-        this.loadNativeMemoryVariablesV4(values),
+    if (this.nativeAdapterMode) {
+      const observed = await observeNativeOperation(
+        this.fields.nativeDiagnostics === true,
+        'load',
+        this.storage,
+        () =>
+          this.runNativeMemoryOperationV1('memoryRead', () =>
+            this.loadNativeMemoryVariablesV4(values),
+          ),
       );
+      return observed.diagnostics
+        ? {
+            ...observed.value,
+            diagnostics: {
+              ...observed.value.diagnostics,
+              native_diagnostics_v1: observed.diagnostics,
+            },
+          }
+        : observed.value;
+    }
     if (this.compositionalMode) return this.loadCompositionalMemoryVariables(values);
     if (
       this.captureLifecycle === 'replaySafeV2' &&
@@ -1499,10 +1518,20 @@ export class EngramChatMemory extends BaseChatMemory {
     messages: BaseMessage[],
     nativeAdminGuard?: NativeAdminLegacyCaptureGuard,
   ): Promise<MemoryDeliveryOutcome> {
-    if (this.nativeAdapterMode)
-      return this.runNativeMemoryOperationV1('memorySave', () =>
-        this.saveNativeReplaySafeMessagesV4(messages, nativeAdminGuard),
+    if (this.nativeAdapterMode) {
+      const observed = await observeNativeOperation(
+        this.fields.nativeDiagnostics === true,
+        'save',
+        this.storage,
+        () =>
+          this.runNativeMemoryOperationV1('memorySave', () =>
+            this.saveNativeReplaySafeMessagesV4(messages, nativeAdminGuard),
+          ),
       );
+      return observed.diagnostics
+        ? { ...observed.value, native_diagnostics_v1: observed.diagnostics }
+        : observed.value;
+    }
     if (this.captureLifecycle === 'replaySafeV2') {
       if (nativeAdminGuard) throw new Error('Engram replay-safe memory: unsupported_configuration');
       try {

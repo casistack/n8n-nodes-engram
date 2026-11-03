@@ -32,6 +32,8 @@ export interface LlmResponse {
   };
 }
 
+export type LlmRequestObserver = Pick<ExtractionDiagnostics, 'beginRequest'>;
+
 export class LlmClient {
   private apiKey: string;
   private baseUrl: string;
@@ -41,7 +43,7 @@ export class LlmClient {
 
   constructor(
     config: LlmClientConfig,
-    private diagnostics?: ExtractionDiagnostics,
+    private diagnostics?: LlmRequestObserver,
     private stage: ExtractionStage = 'entities',
     private budget?: RequestBudget,
   ) {

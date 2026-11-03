@@ -87,7 +87,13 @@ export const automaticAdminProperties: INodeProperties[] = [
   },
   ...automaticMemoryProperties.map((property) => ({
     ...property,
-    displayOptions: { show: { ...property.displayOptions?.show, resource: ['automaticMemory'] } },
+    displayOptions: {
+      show: {
+        ...property.displayOptions?.show,
+        resource: ['automaticMemory'],
+        ...(property.name === 'nativeDiagnostics' ? { operation: ['captureHuman'] } : {}),
+      },
+    },
   })),
   {
     displayName: 'Formatted Human Input',

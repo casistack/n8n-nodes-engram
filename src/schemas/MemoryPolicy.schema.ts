@@ -1,3 +1,4 @@
+import { NativeMemoryObservabilityV1Schema } from './NativeMemoryObservabilityV1.schema';
 import { z } from 'zod';
 import { StorageTotalsSchema } from './StorageObservation.schema';
 import { QueueStatsSchema } from './ExtractionQueue.schema';
@@ -32,6 +33,7 @@ export const HistoryReadDiagnosticsSchema = z.object({
 });
 export type HistoryReadDiagnostics = z.infer<typeof HistoryReadDiagnosticsSchema>;
 export const MemoryLoadDiagnosticsSchema = z.object({
+  native_diagnostics_v1: NativeMemoryObservabilityV1Schema.optional(),
   capture: z
     .object({
       version: z.literal(3),
@@ -64,6 +66,7 @@ export const MemoryLoadDiagnosticsSchema = z.object({
 });
 export type MemoryLoadDiagnostics = z.infer<typeof MemoryLoadDiagnosticsSchema>;
 export const MemoryWriteOutcomeSchema = z.object({
+  native_diagnostics_v1: NativeMemoryObservabilityV1Schema.optional(),
   replaySafe: ReplaySafeMemoryWriteDiagnosticsSchema.optional(),
   extraction: ExtractionOutcomeSchema,
   written: z.number().int().nonnegative(),

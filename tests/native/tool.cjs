@@ -25,6 +25,8 @@ const group = 'synthetic-native-memory-tool';
 const workflowId = 'engram017MemoryTool';
 const autonomous = process.argv[2] === 'autonomous';
 const configuredBudget = process.argv[3] === 'configured';
+const nativeDiagnostics = process.argv.includes('--diagnostics');
+assert.ok(!nativeDiagnostics || autonomous, 'Diagnostics case requires autonomous mode');
 assert.ok(!configuredBudget || autonomous, 'Configured budgets require autonomous mode');
 const content = autonomous
   ? 'I prefer explanations in plain British English, with one practical example before any technical terminology.'
@@ -269,6 +271,7 @@ const server = http.createServer(async (req, res) => {
     mode: 0o600,
   });
   const automatic = {
+    ...(nativeDiagnostics ? { nativeDiagnostics: 'enabled' } : {}),
     ...(autonomous ? { automaticPreferenceInterpreter: 'autonomousPersonalV1' } : {}),
     ...(configuredBudget ? { automaticExecutionBudgetMode: 'configuredV1' } : {}),
     automaticCaptureLifecycle: 'replaySafeV2',
@@ -505,6 +508,13 @@ const server = http.createServer(async (req, res) => {
   }
   const first = await execute('first-execution');
   assert.equal(first.data.status, 'success');
+  if (autonomous)
+    require('./native-diagnostics.cjs')({
+      runData: readExecutionData(first, runtime).resultData.runData,
+      enabled: nativeDiagnostics,
+      root,
+      content,
+    });
   const memoryRuns = readExecutionData(first, runtime).resultData.runData.Memory ?? [];
   const memoryLoads = memoryRuns.flatMap((run) =>
     (run.data?.ai_memory ?? []).flatMap((items) =>
