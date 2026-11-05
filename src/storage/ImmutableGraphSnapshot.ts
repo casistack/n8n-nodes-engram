@@ -1,7 +1,11 @@
 import { types as utilTypes } from 'util';
+import { z } from 'zod';
 import type { GraphData } from '../schemas/GraphData.schema';
 import { AUTOMATIC_CAPTURE_JSON_BOUNDS } from './BoundedAutomaticCaptureJson';
-import { parseLosslessAutomaticCaptureGraph } from './LosslessAutomaticCaptureGraph';
+import {
+  parseLosslessAutomaticCaptureGraph,
+  provenIdenticalLosslessGraphData,
+} from './LosslessAutomaticCaptureGraph';
 
 /**
  * Roots this module itself fully parsed and deep-froze. Membership is DATA immutability
@@ -97,4 +101,89 @@ function cloneOwnedValue(value: unknown): unknown {
 export function cloneOwnedImmutableGraphData(root: GraphData): GraphData {
   if (!getOwnedImmutableGraphData(root)) throw new ImmutableGraphSnapshotError();
   return cloneOwnedValue(root) as GraphData;
+}
+
+const REBASE_ROOT_KEYS = new Set([
+  'version',
+  'exported_at',
+  'entities',
+  'edges',
+  'episodes',
+  'metadata',
+  'automatic_operations_v1',
+  'group_id',
+]);
+const CANONICAL_EXPORTED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const EXPORTED_AT_SCHEMA = z.string().datetime();
+
+function ownDataValue(value: object, key: string): { readonly value: unknown } | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && descriptor.enumerable && 'value' in descriptor
+    ? { value: descriptor.value }
+    : undefined;
+}
+
+/** Plain enumerable data string, canonical 24-char ISO, accepted by the schema. */
+function canonicalExportedAt(value: object): string | undefined {
+  const text = ownDataValue(value, 'exported_at')?.value;
+  return typeof text === 'string' &&
+    text.length === 24 &&
+    CANONICAL_EXPORTED_AT.test(text) &&
+    EXPORTED_AT_SCHEMA.safeParse(text).success &&
+    new Date(text).toISOString() === text
+    ? text
+    : undefined;
+}
+
+/**
+ * Data-only rebase of an owned root onto a current export that differs at most in
+ * exported_at. Returns an owned immutable root, never authority; callers must still run
+ * every semantic check. Built only from the owned root's frozen children (nothing from
+ * currentExport is referenced), then proven identical to currentExport before use.
+ * Any unsupported shape returns undefined; exceptions from check propagate.
+ */
+export function tryRebaseOwnedGraphExport(
+  root: unknown,
+  currentExport: unknown,
+  check: () => void,
+): GraphData | undefined {
+  check();
+  const owned = getOwnedImmutableGraphData(root);
+  if (
+    !owned ||
+    currentExport === null ||
+    typeof currentExport !== 'object' ||
+    Array.isArray(currentExport) ||
+    utilTypes.isProxy(currentExport)
+  )
+    return undefined;
+  const candidate: Record<string, unknown> = {};
+  try {
+    const keys = Reflect.ownKeys(owned);
+    if (keys.length > REBASE_ROOT_KEYS.size) return undefined;
+    if (Object.getPrototypeOf(owned) !== Object.prototype) return undefined;
+    const exportedAt = canonicalExportedAt(currentExport);
+    if (!canonicalExportedAt(owned) || !exportedAt) return undefined;
+    for (const key of keys) {
+      if (typeof key !== 'string' || !REBASE_ROOT_KEYS.has(key)) return undefined;
+      const entry = ownDataValue(owned, key);
+      if (!entry) return undefined;
+      Object.defineProperty(candidate, key, {
+        value: key === 'exported_at' ? exportedAt : entry.value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+    }
+  } catch {
+    return undefined;
+  }
+  check();
+  Object.freeze(candidate);
+  const rebased = candidate as unknown as GraphData;
+  if (!provenIdenticalLosslessGraphData(rebased, currentExport as GraphData, { check }))
+    return undefined;
+  check();
+  ownedRoots.add(rebased);
+  return rebased;
 }
