@@ -297,7 +297,12 @@ import {
   parseLosslessAutomaticCaptureGraph as parseLosslessAutomaticCaptureGraphUnmetered,
   provenIdenticalLosslessGraphData,
 } from './LosslessAutomaticCaptureGraph';
-import { cloneOwnedImmutableGraphData, parseImmutableGraphData } from './ImmutableGraphSnapshot';
+import {
+  cloneOwnedImmutableGraphData,
+  getOwnedImmutableGraphData,
+  parseImmutableGraphData,
+  tryRebaseOwnedGraphExport,
+} from './ImmutableGraphSnapshot';
 import {
   buildCommittedCompositionalCaptureOperationV3,
   CompositionalCaptureTerminalOperationFailureV3,
@@ -343,6 +348,19 @@ const PERSIST_LOCK_STALE_MS = 30000;
 const PERSIST_LOCK_HEARTBEAT_MS = 5000;
 const EMBEDDED_BACKUP_SUFFIX = '.pre-schema-2.0.backup.json';
 
+/** Private per-operation owned pre-state, opted into only by native begin and completion. */
+interface NativeOperationSnapshotV4 {
+  /** Registered owned root of the exact bytes this operation's locked refresh read. */
+  root?: GraphData;
+  live: boolean;
+}
+
+/** Private callback argument; never exported and never authority. */
+interface NativeOperationContextV4 {
+  /** Synchronous: a fresh export, or a proven owned rebase of it. Consumes the root. */
+  preState(): GraphData;
+}
+
 interface MutationOptions<T> {
   operation?: string;
   durable?: boolean;
@@ -356,6 +374,8 @@ interface MutationOptions<T> {
    * refresh's own private verified parse as its rollback root, and nothing else.
    */
   ordinaryUnownedAppend?: boolean;
+  /** Private. Native begin/completion only: pass the callback an owned pre-state context. */
+  nativeOperationSnapshot?: boolean;
   captureRead?: {
     scope: AutomaticClaimReadScope;
     check: () => void;
@@ -2939,9 +2959,9 @@ export class GraphologyStorage implements IGraphStorage {
     } = await (async () => {
       try {
         const result = await this.runMutation(
-          async () => {
+          async (context) => {
             check();
-            const graph = await this.exportGraph();
+            const graph = context ? context.preState() : await this.exportGraph();
             return autonomousPersonalProcessingV4(() => {
               if (graph.group_id === undefined) delete graph.group_id;
               check();
@@ -3029,6 +3049,7 @@ export class GraphologyStorage implements IGraphStorage {
             durable: true,
             captureRecords: 'lossless',
             requireExistingSnapshot: true,
+            nativeOperationSnapshot: true,
             captureRead,
             shouldWriteSnapshot: (result) => result.kind === 'write_candidate',
             autonomousPersonalCompletionV4: {
@@ -3185,9 +3206,9 @@ export class GraphologyStorage implements IGraphStorage {
       const epoch = generateUuid();
       try {
         const prepared = await this.runMutation(
-          async () => {
+          async (context) => {
             check();
-            const graph = await this.exportGraph();
+            const graph = context ? context.preState() : await this.exportGraph();
             return autonomousPersonalProcessingV4(() => {
               if (graph.group_id === undefined) delete graph.group_id;
               const candidate = prepare(graph);
@@ -3240,6 +3261,7 @@ export class GraphologyStorage implements IGraphStorage {
             durable: true,
             captureRecords: 'lossless',
             requireExistingSnapshot: true,
+            nativeOperationSnapshot: true,
             shouldWriteSnapshot: (candidate) =>
               candidate.kind === 'initial_candidate' || candidate.kind === 'audit_candidate',
           },
@@ -5062,7 +5084,7 @@ export class GraphologyStorage implements IGraphStorage {
   }
 
   private async runMutation<T>(
-    mutation: () => T | Promise<T>,
+    mutation: (context?: NativeOperationContextV4) => T | Promise<T>,
     options: MutationOptions<T> = {},
   ): Promise<T> {
     this.assertRecoveryReady();
@@ -5100,6 +5122,9 @@ export class GraphologyStorage implements IGraphStorage {
     let releaseFileLock: () => Promise<void> = async () => {};
     let rollbackData: GraphData | null = null;
     let verifiedRollbackRoot: GraphData | undefined;
+    let rollbackValidationGraph: GraphData | undefined;
+    const nativeSnapshot: NativeOperationSnapshotV4 | undefined =
+      options.nativeOperationSnapshot === true ? { live: true } : undefined;
     let lockWaitMs = 0;
     let diskRefreshMs = 0;
     let rollbackExportMs = 0;
@@ -5146,6 +5171,7 @@ export class GraphologyStorage implements IGraphStorage {
             options.captureRead,
             structuralGuardContext,
             ordinaryUnscoped && options.ordinaryUnownedAppend === true,
+            nativeSnapshot,
           );
         } finally {
           diskRefreshMs = performance.now() - refreshStarted;
@@ -5174,6 +5200,15 @@ export class GraphologyStorage implements IGraphStorage {
         rollbackExportMs = performance.now() - rollbackExportStarted;
       }
 
+      if (nativeSnapshot?.root !== undefined) {
+        // Synchronous proof that the live export equals the root this lock's refresh asserted
+        // (DATA only). Every ledger and record integrity check below still runs fresh.
+        const root = nativeSnapshot.root;
+        rollbackValidationGraph = autonomousPersonalProcessingV4(() =>
+          tryRebaseOwnedGraphExport(root, rollbackData!, structuralGuardContext.check),
+        );
+      }
+
       const protectsAutonomousSources =
         rollbackData.episodes.some(hasAutonomousSourceOwnership) ||
         (rollbackData.automatic_operations_v1?.operations.some(
@@ -5184,14 +5219,18 @@ export class GraphologyStorage implements IGraphStorage {
         // Ledger and record integrity already ran on this exact graph during the refresh.
         structuralGuardContext.check();
       } else {
+        // Only the structural parse is reused; all semantic checks rerun on equivalent DATA.
+        const validationGraph = rollbackValidationGraph ?? rollbackData!;
         if (protectsAutonomousSources) {
-          autonomousPersonalProcessingV4(() => assertAutomaticLedgerSourceIntegrity(rollbackData!));
+          autonomousPersonalProcessingV4(() =>
+            assertAutomaticLedgerSourceIntegrity(validationGraph),
+          );
         }
         if (
-          autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(rollbackData!))
+          autonomousPersonalProcessingV4(() => hasAutonomousPersonalV4Enrollment(validationGraph))
         ) {
           assertAutonomousPersonalRecordIntegrityV4(
-            rollbackData,
+            validationGraph,
             structuralGuardContext.typedSyntaxWork,
             structuralGuardContext.check,
           );
@@ -5202,9 +5241,18 @@ export class GraphologyStorage implements IGraphStorage {
       const mutationStarted = performance.now();
       const result = await (async () => {
         try {
-          return await mutation();
+          return await mutation(
+            nativeSnapshot && {
+              preState: () => this.nativePreStateV4(nativeSnapshot, structuralGuardContext.check),
+            },
+          );
         } finally {
           mutationMs = performance.now() - mutationStarted;
+          // The context is dead once the callback ends, success or error.
+          if (nativeSnapshot) {
+            nativeSnapshot.live = false;
+            nativeSnapshot.root = undefined;
+          }
         }
       })();
 
@@ -5437,6 +5485,7 @@ export class GraphologyStorage implements IGraphStorage {
     },
     structuralGuardContext: AutonomousPersonalStructuralGuardContextV4 = ordinaryAutonomousPersonalStructuralGuardContextV4(),
     retainVerifiedPrivate = false,
+    nativeSnapshot?: NativeOperationSnapshotV4,
   ): Promise<GraphData | undefined> {
     // A missing file (thrown or skipped) never keeps a previous read entry.
     if (!this.persistPath || !fs.existsSync(this.persistPath))
@@ -5444,20 +5493,41 @@ export class GraphologyStorage implements IGraphStorage {
     this.assertQueueFilePresent();
     if (!this.persistPath || (!requireExisting && !fs.existsSync(this.persistPath))) return;
 
-    const { data, verifiedPrivate } = await this.readAndMigratePersistedDataUnderLock(
-      captureRecords,
-      captureRead,
-      structuralGuardContext,
-      false,
-      retainVerifiedPrivate,
-    );
+    const { data, integrityVerified, immutable, verifiedPrivate } =
+      await this.readAndMigratePersistedDataUnderLock(
+        captureRecords,
+        captureRead,
+        structuralGuardContext,
+        nativeSnapshot !== undefined,
+        retainVerifiedPrivate,
+      );
     captureRead?.check();
     this.replaceGraphData(data);
     // Data from a verified read replaced the in-memory graph: a corrected file recovers.
     this.loadFailure = null;
     captureRead?.check();
+    // Only an enrolled, integrity-verified owned root of these exact bytes, handed out through
+    // the operation context alone: the return value stays undefined and Core never holds it.
+    if (nativeSnapshot && integrityVerified)
+      nativeSnapshot.root = getOwnedImmutableGraphData(immutable);
     // Handed back only after Core holds the data; never cached, never reachable from Core.
     return verifiedPrivate;
+  }
+
+  /**
+   * Synchronous pre-state for a native callback: a fresh export, or an owned rebase of it
+   * proven identical in content. The root is consumed; a second call, or one made after the
+   * callback ends, takes the fresh export. Never cached across an await, never authority.
+   */
+  private nativePreStateV4(state: NativeOperationSnapshotV4, check: () => void): GraphData {
+    this.assertLoaded();
+    return autonomousPersonalProcessingV4(() => {
+      const exported = this.exportGraphData();
+      if (exported.group_id === undefined) delete exported.group_id;
+      const root = state.live ? state.root : undefined;
+      state.root = undefined;
+      return (root && tryRebaseOwnedGraphExport(root, exported, check)) || exported;
+    });
   }
 
   private assertQueueFilePresent(): void {

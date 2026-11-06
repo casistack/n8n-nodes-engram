@@ -92,6 +92,7 @@ const inputSchema = z
   .object({ profileId: z.enum(['conservative', 'explicit', 'reviewFirst']) })
   .strict();
 export type AutonomousPersonalPolicyInputV3 = z.input<typeof inputSchema>;
+type ProfileId = AutonomousPersonalPolicyInputV3['profileId'];
 const reserveSchema = z
   .object({
     minMs: z.literal(20),
@@ -124,7 +125,7 @@ const bodySchema = z
   .strict();
 const fingerprint = (body: z.infer<typeof bodySchema>) =>
   hashAutomaticCaptureV2({ domain: 'engram-autonomous-policy-v1', policy: body });
-function body(profileId: AutonomousPersonalPolicyInputV3['profileId']) {
+function body(profileId: ProfileId) {
   return bodySchema.parse({
     version: 3,
     policyId: 'autonomous-personal-memory',
@@ -151,6 +152,14 @@ function body(profileId: AutonomousPersonalPolicyInputV3['profileId']) {
     },
   });
 }
+const expectedFingerprint = new Map<ProfileId, string>();
+function expectedFingerprintFor(profileId: ProfileId): string {
+  const cached = expectedFingerprint.get(profileId);
+  if (cached !== undefined) return cached;
+  const computed = fingerprint(body(profileId));
+  expectedFingerprint.set(profileId, computed);
+  return computed;
+}
 
 /** Composition schema for already-owned JSON. Raw JavaScript uses the facade below. */
 export const AutonomousPersonalPolicyV3OwnedDataSchema = bodySchema
@@ -160,7 +169,7 @@ export const AutonomousPersonalPolicyV3OwnedDataSchema = bodySchema
     const { fingerprint: actual, ...value } = policy;
     if (
       actual !== fingerprint(value) ||
-      fingerprint(value) !== fingerprint(body(policy.profileId)) ||
+      fingerprint(value) !== expectedFingerprintFor(policy.profileId) ||
       Buffer.byteLength(JSON.stringify(policy)) > L.policyBytes
     )
       context.addIssue({
@@ -169,6 +178,7 @@ export const AutonomousPersonalPolicyV3OwnedDataSchema = bodySchema
       });
   });
 export type AutonomousPersonalPolicyV3 = z.infer<typeof AutonomousPersonalPolicyV3OwnedDataSchema>;
+const compiledTemplates = new Map<ProfileId, AutonomousPersonalPolicyV3>();
 function invalid() {
   return new z.ZodError([
     { code: z.ZodIssueCode.custom, path: [], message: 'Invalid autonomous personal policy data' },
@@ -209,6 +219,10 @@ export function compileAutonomousPersonalPolicyV3(input: unknown): AutonomousPer
   } catch {
     throw invalid();
   }
+  const cached = compiledTemplates.get(profile.profileId);
+  if (cached !== undefined) return cached;
   const value = body(profile.profileId);
-  return parse({ ...value, fingerprint: fingerprint(value) });
+  const compiled = parse({ ...value, fingerprint: expectedFingerprintFor(profile.profileId) });
+  compiledTemplates.set(profile.profileId, compiled);
+  return compiled;
 }
